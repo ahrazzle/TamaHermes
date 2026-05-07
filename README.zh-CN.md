@@ -45,13 +45,13 @@ Have fun。Fork 它。孵化一点很像你的东西。
 **🤖 一句话交给 Codex 安装：把这句贴进 Codex。**
 
 ```text
-Install https://github.com/Alichua/tamacodex with Toast and Aurora.
+Install https://github.com/Alichua/TamaCodex with Toast and Aurora.
 ```
 
 **🛠 手动安装：clone，进入目录，然后安装。**
 
 ```bash
-git clone https://github.com/Alichua/tamacodex.git
+git clone https://github.com/Alichua/TamaCodex.git
 cd tamacodex
 ./install.sh --line toast --machine aurora
 ```

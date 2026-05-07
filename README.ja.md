@@ -45,13 +45,13 @@ Have fun. Fork して、自分らしい何かを孵化させてください。
 **🤖 エージェントに任せるインストール: これを Codex に貼り付けます。**
 
 ```text
-Install https://github.com/Alichua/tamacodex with Toast and Aurora.
+Install https://github.com/Alichua/TamaCodex with Toast and Aurora.
 ```
 
 **🛠 手動インストール: clone して、入って、インストールします。**
 
 ```bash
-git clone https://github.com/Alichua/tamacodex.git
+git clone https://github.com/Alichua/TamaCodex.git
 cd tamacodex
 ./install.sh --line toast --machine aurora
 ```

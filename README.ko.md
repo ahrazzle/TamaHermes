@@ -45,13 +45,13 @@ Have fun. Fork 하세요. 이상하게도 당신다운 무언가를 부화시켜
 **🤖 에이전트에게 맡기는 한 줄 설치: 이 문장을 Codex에 붙여 넣으세요.**
 
 ```text
-Install https://github.com/Alichua/tamacodex with Toast and Aurora.
+Install https://github.com/Alichua/TamaCodex with Toast and Aurora.
 ```
 
 **🛠 수동 설치: clone 하고, 폴더로 들어가서, 설치합니다.**
 
 ```bash
-git clone https://github.com/Alichua/tamacodex.git
+git clone https://github.com/Alichua/TamaCodex.git
 cd tamacodex
 ./install.sh --line toast --machine aurora
 ```

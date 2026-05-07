@@ -39,13 +39,13 @@ Have fun. Fork it. Hatch something strangely yours.
 **🤖 One-line agent install: paste this into Codex.**
 
 ```text
-Install https://github.com/Alichua/tamacodex with Toast and Aurora.
+Install https://github.com/Alichua/TamaCodex with Toast and Aurora.
 ```
 
 **🛠 Manual install: clone, enter, install.**
 
 ```bash
-git clone https://github.com/Alichua/tamacodex.git
+git clone https://github.com/Alichua/TamaCodex.git
 cd tamacodex
 ./install.sh --line toast --machine aurora
 ```
