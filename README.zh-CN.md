@@ -10,6 +10,11 @@
 </p>
 
 <p align="center">
+  <strong>目前仅支持 macOS。</strong><br>
+  Tamacodex 使用 macOS sidecar 来提供悬停状态、SFX 和受监督的后台成长。
+</p>
+
+<p align="center">
   <a href="README.md">English</a> ·
   <strong>简体中文</strong> ·
   <a href="README.ja.md">日本語</a> ·
@@ -34,6 +39,8 @@
 Have fun。Fork 它。孵化一点很像你的东西。
 
 ## 快速开始
+
+**🍎 当前支持平台：macOS。**
 
 **🤖 一句话交给 Codex 安装：把这句贴进 Codex。**
 

@@ -10,6 +10,11 @@
 </p>
 
 <p align="center">
+  <strong>현재는 macOS만 지원합니다.</strong><br>
+  Tamacodex는 hover status, SFX, supervised background growth에 macOS sidecar를 사용합니다.
+</p>
+
+<p align="center">
   <a href="README.md">English</a> ·
   <a href="README.zh-CN.md">简体中文</a> ·
   <a href="README.ja.md">日本語</a> ·
@@ -34,6 +39,8 @@
 Have fun. Fork 하세요. 이상하게도 당신다운 무언가를 부화시켜 보세요.
 
 ## 빠른 시작
+
+**🍎 현재 지원 플랫폼: macOS.**
 
 **🤖 에이전트에게 맡기는 한 줄 설치: 이 문장을 Codex에 붙여 넣으세요.**
 

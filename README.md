@@ -10,6 +10,11 @@
 </p>
 
 <p align="center">
+  <strong>Currently macOS only.</strong><br>
+  Tamacodex uses a macOS sidecar for hover status, SFX, and supervised background growth.
+</p>
+
+<p align="center">
   <a href="#quick-start">Quick Start</a> ·
   <a href="#switch-things">Switch Things</a> ·
   <a href="#hatch-your-own-tamacodex">Hatch Your Own</a> ·
@@ -28,6 +33,8 @@ Pick a companion line, pick a tamago shell, wake it in Codex, and let your real 
 Have fun. Fork it. Hatch something strangely yours.
 
 ## Quick Start
+
+**🍎 Currently supported platform: macOS.**
 
 **🤖 One-line agent install: paste this into Codex.**
 

@@ -10,6 +10,11 @@
 </p>
 
 <p align="center">
+  <strong>現在は macOS のみ対応です。</strong><br>
+  Tamacodex はホバー表示、SFX、監視付きバックグラウンド成長に macOS sidecar を使います。
+</p>
+
+<p align="center">
   <a href="README.md">English</a> ·
   <a href="README.zh-CN.md">简体中文</a> ·
   <strong>日本語</strong> ·
@@ -34,6 +39,8 @@
 Have fun. Fork して、自分らしい何かを孵化させてください。
 
 ## クイックスタート
+
+**🍎 現在の対応プラットフォーム: macOS。**
 
 **🤖 エージェントに任せるインストール: これを Codex に貼り付けます。**
 
