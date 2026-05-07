@@ -180,38 +180,9 @@ tamacodex preview --port 8765
 
 ## Languages
 
-**中文**
-Tamacodex 是一个会跟着 Codex 工作成长的桌面小宠物。选一条伙伴线，选一个 tamago 外壳，安装后在 Codex 里唤醒。提示词、成功、失败、Review、休息和 token 用量都会变成成长信号。Have fun，也欢迎孵化你自己的 Tamacodex。
-
-**🚀 中文快速安装：**
-
-```bash
-git clone https://github.com/Alichua/tamacodex.git
-cd tamacodex
-./install.sh --line toast --machine aurora
-```
-
-**日本語**
-Tamacodex は Codex の作業と一緒に育つ小さなデスクトップペットです。相棒ラインと tamago シェルを選び、Codex App で起こすだけ。成功も失敗も、少しずつ成長になります。Have fun. 自分だけの Tamacodex も孵化できます。
-
-**🚀 日本語クイックインストール:**
-
-```bash
-git clone https://github.com/Alichua/tamacodex.git
-cd tamacodex
-./install.sh --line toast --machine aurora
-```
-
-**한국어**
-Tamacodex는 Codex 작업과 함께 자라는 작은 데스크톱 펫입니다. companion line과 tamago shell을 고르고 Codex App에서 깨우면 됩니다. 성공, 실패, 리뷰, 휴식이 모두 성장 신호가 됩니다. Have fun. 나만의 Tamacodex도 부화시킬 수 있어요.
-
-**🚀 한국어 빠른 설치:**
-
-```bash
-git clone https://github.com/Alichua/tamacodex.git
-cd tamacodex
-./install.sh --line toast --machine aurora
-```
+- [简体中文](README.zh-CN.md)
+- [日本語](README.ja.md)
+- [한국어](README.ko.md)
 
 ## Notes
 
