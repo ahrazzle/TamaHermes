@@ -12,7 +12,7 @@
 <p align="center">
   <a href="#quick-start">Quick Start</a> ·
   <a href="#switch-things">Switch Things</a> ·
-  <a href="#make-a-pawn">Make a Pawn</a> ·
+  <a href="#hatch-your-own-tamacodex">Hatch Your Own</a> ·
   <a href="#growth">Growth</a> ·
   <a href="#languages">中文 / 日本語 / 한국어</a>
 </p>
@@ -23,19 +23,19 @@
 
 Not a productivity hack. A little desk ritual.
 
-Pick a `pawn`, pick a `tamago`, wake it in Codex, and let your real work feed the pet. Prompts, successful runs, failures, reviews, recovery, rest, token usage, hover, and drag all become tiny local growth signals.
+Pick a companion line, pick a tamago shell, wake it in Codex, and let your real work feed the pet. Prompts, successful runs, failures, reviews, recovery, rest, token usage, hover, and drag all become tiny local growth signals.
 
-Have fun. Fork it. Hatch weird little companions.
+Have fun. Fork it. Hatch something strangely yours.
 
 ## Quick Start
 
-Ask Codex to install it:
+**🤖 One-line agent install: paste this into Codex.**
 
 ```text
 Install https://github.com/Alichua/tamacodex with Toast and Aurora.
 ```
 
-Or install by hand:
+**🛠 Manual install: clone, enter, install.**
 
 ```bash
 git clone https://github.com/Alichua/tamacodex.git
@@ -43,7 +43,7 @@ cd tamacodex
 ./install.sh --line toast --machine aurora
 ```
 
-Then wake it:
+**✨ Wake the pet in Codex App.**
 
 ```text
 Settings -> Appearance -> Pet -> Custom Pet -> Tamacodex
@@ -55,50 +55,50 @@ Open this repo in Codex App and enable the local plugin from `.agents/plugins/ma
 ## What's Inside
 
 - Codex custom pet package: `pet.json` + `spritesheet.webp`
-- Two pawn lines: `toast`, `mais`
+- Two companion lines: `toast`, `mais`
 - Two tamago shells: `aurora`, `pulse`
 - Local growth ledger: XP, stages, stats, traits, counters, recent events
 - macOS sidecar: frosted LCD on hover, 8-bit SFX, no focus stealing
-- Custom pawn generator from small profile JSON files
+- Custom Tamacodex hatching from small profile JSON files
 
 Tamacodex stores numeric usage signals, not raw prompts or tool output text.
 
 ## Switch Things
 
-Change the shell:
+**🎛 Switch the tamago shell.**
 
 ```bash
 ./install.sh --line toast --machine pulse
 ```
 
-Change the pawn:
+**🍞 Switch the companion line.**
 
 ```bash
 ./install.sh --line mais --machine aurora
 ```
 
-Start fresh:
+**🥚 Start from a fresh egg.**
 
 ```bash
 ./install.sh --line toast --machine aurora --reset
 ```
 
-Install an exact form:
+**🎯 Install an exact grown form.**
 
 ```bash
 tamacodex setup --form toast_adult_worker --machine pulse --force --json
 ```
 
-See what ships:
+**🔎 See what ships in the catalog.**
 
 ```bash
 tamacodex list-forms --line toast
 tamacodex list-forms --line mais
 ```
 
-## Make A Pawn
+## Hatch Your Own Tamacodex
 
-Create `custom/ducky.json`:
+**🐣 Create a tiny profile: `custom/ducky.json`.**
 
 ```json
 {
@@ -114,7 +114,7 @@ Create `custom/ducky.json`:
 }
 ```
 
-Render and install:
+**🎨 Render it, then install the hatchling.**
 
 ```bash
 tamacodex generate-profile --input custom/ducky.json --output custom/ducky.json
@@ -122,16 +122,16 @@ tamacodex render-catalog --profile custom/ducky.json --output-dir build/ducky --
 ./install.sh --catalog-dir build/ducky/assets --line ducky --machine pulse --reset
 ```
 
-Want Codex to draft the profile?
+**🧪 Want Codex to draft the profile brief first?**
 
 ```bash
 tamacodex generate-profile \
-  --prompt "Create a Tamacodex pawn named Ducky inspired by a duck" \
+  --prompt "Hatch a Tamacodex named Ducky inspired by a duck" \
   --brief-output /tmp/ducky-profile-brief.md \
   --output custom/ducky.json
 ```
 
-QA is there when you want it:
+**🔬 Optional QA: inspect the sprite sheets before shipping.**
 
 ```bash
 open build/ducky/qa/pet_contact_sheet.png
@@ -167,7 +167,7 @@ Signals:
 | `care` | energy, mood, health, bond up |
 | `rest` | energy and health recover |
 
-Useful little controls:
+**🎚 Useful little controls.**
 
 ```bash
 tamacodex status
@@ -181,7 +181,9 @@ tamacodex preview --port 8765
 ## Languages
 
 **中文**
-Tamacodex 是一个会跟着 Codex 工作成长的桌面小宠物。选 `pawn`，选 `tamago`，安装后在 Codex 里唤醒。提示词、成功、失败、Review、休息和 token 用量都会变成成长信号。Have fun，欢迎 fork 出自己的小东西。
+Tamacodex 是一个会跟着 Codex 工作成长的桌面小宠物。选一条伙伴线，选一个 tamago 外壳，安装后在 Codex 里唤醒。提示词、成功、失败、Review、休息和 token 用量都会变成成长信号。Have fun，也欢迎孵化你自己的 Tamacodex。
+
+**🚀 中文快速安装：**
 
 ```bash
 git clone https://github.com/Alichua/tamacodex.git
@@ -190,7 +192,9 @@ cd tamacodex
 ```
 
 **日本語**
-Tamacodex は Codex の作業と一緒に育つ小さなデスクトップペットです。`pawn` と `tamago` を選び、Codex App で起こすだけ。成功も失敗も、少しずつ成長になります。Have fun.
+Tamacodex は Codex の作業と一緒に育つ小さなデスクトップペットです。相棒ラインと tamago シェルを選び、Codex App で起こすだけ。成功も失敗も、少しずつ成長になります。Have fun. 自分だけの Tamacodex も孵化できます。
+
+**🚀 日本語クイックインストール:**
 
 ```bash
 git clone https://github.com/Alichua/tamacodex.git
@@ -199,7 +203,9 @@ cd tamacodex
 ```
 
 **한국어**
-Tamacodex는 Codex 작업과 함께 자라는 작은 데스크톱 펫입니다. `pawn`과 `tamago`를 고르고 Codex App에서 깨우면 됩니다. 성공, 실패, 리뷰, 휴식이 모두 성장 신호가 됩니다. Have fun.
+Tamacodex는 Codex 작업과 함께 자라는 작은 데스크톱 펫입니다. companion line과 tamago shell을 고르고 Codex App에서 깨우면 됩니다. 성공, 실패, 리뷰, 휴식이 모두 성장 신호가 됩니다. Have fun. 나만의 Tamacodex도 부화시킬 수 있어요.
+
+**🚀 한국어 빠른 설치:**
 
 ```bash
 git clone https://github.com/Alichua/tamacodex.git
@@ -211,4 +217,4 @@ cd tamacodex
 
 Tamacodex does not patch Codex App internals. It uses the custom pet package contract, local plugin hooks, local session-log adaptation, and a supervised macOS sidecar.
 
-MIT. PRs and strange pawn ideas welcome.
+MIT. PRs and strange Tamacodex hatch ideas welcome.
