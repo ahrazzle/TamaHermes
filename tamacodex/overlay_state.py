@@ -11,6 +11,7 @@ from .visual_state import derive_visual_state
 OVERLAY_SCHEMA = "tamacodex.sidecar_overlay.v1"
 TAMACODEX_AVATAR_ID = "custom:tamacodex"
 GLOBAL_STATE_FILE = ".codex-global-state.json"
+SURFACE_STALE_SECONDS = 10.0
 
 
 @dataclass(frozen=True)
@@ -79,6 +80,7 @@ def default_overlay_state() -> dict[str, Any]:
         "updatedAt": now_iso(),
         "lastSeenEventId": None,
         "lastPlayedEventId": None,
+        "lastSuppressedEventId": None,
         "lastPlayedAt": None,
         "audioPrimed": False,
         "muted": False,
@@ -90,6 +92,10 @@ def default_overlay_state() -> dict[str, Any]:
         "lastCodexEventSyncAt": None,
         "lastCodexEventSyncCount": 0,
         "lastBounds": None,
+        "lastBoundsSignature": None,
+        "lastBoundsChangedAtEpoch": None,
+        "surfaceActive": False,
+        "lastSurfaceCheckedAtEpoch": None,
         "sidecarPid": None,
         "supervisorPid": None,
     }
@@ -184,6 +190,70 @@ def parse_overlay_bounds(global_state: dict[str, Any]) -> OverlayBounds | None:
     anchor = _rect_from_mapping(raw.get("anchor"), origin=root)
     mascot = _rect_from_mapping(raw.get("mascot"), origin=root)
     tray = _rect_from_mapping(raw.get("tray"), origin=root)
+    placement = raw.get("placement")
+    if not any([root, anchor, mascot, tray]):
+        return None
+    return OverlayBounds(
+        root=root,
+        anchor=anchor,
+        mascot=mascot,
+        tray=tray,
+        placement=placement if isinstance(placement, str) else None,
+    )
+
+
+def bounds_signature(bounds: OverlayBounds | None) -> str | None:
+    if bounds is None:
+        return None
+    return json.dumps(bounds.to_dict(), sort_keys=True, separators=(",", ":"))
+
+
+def update_surface_activity(
+    global_state: dict[str, Any],
+    overlay_state: dict[str, Any],
+    now_epoch: float,
+    stale_after: float = SURFACE_STALE_SECONDS,
+) -> tuple[bool, OverlayBounds | None]:
+    selected = is_tamacodex_selected(global_state)
+    bounds = parse_overlay_bounds(global_state)
+    signature = bounds_signature(bounds)
+    previous_signature = overlay_state.get("lastBoundsSignature")
+    if not isinstance(previous_signature, str):
+        previous_signature = bounds_signature(_bounds_from_overlay_state(overlay_state.get("lastBounds")))
+        if previous_signature:
+            overlay_state["lastBoundsSignature"] = previous_signature
+
+    if signature:
+        if previous_signature != signature:
+            overlay_state["lastBoundsSignature"] = signature
+            overlay_state["lastBoundsChangedAtEpoch"] = now_epoch
+        overlay_state["lastBounds"] = bounds.to_dict() if bounds else None
+    else:
+        overlay_state["lastBounds"] = None
+
+    active = False
+    if selected and avatar_overlay_open(global_state):
+        active = True
+        overlay_state["lastBoundsChangedAtEpoch"] = now_epoch
+    elif selected and signature:
+        try:
+            last_changed = float(overlay_state.get("lastBoundsChangedAtEpoch"))
+        except (TypeError, ValueError):
+            last_changed = 0.0
+        active = last_changed > 0 and now_epoch - last_changed <= stale_after
+
+    overlay_state["surfaceActive"] = active
+    overlay_state["lastSurfaceCheckedAtEpoch"] = now_epoch
+    return active, bounds
+
+
+def _bounds_from_overlay_state(raw: Any) -> OverlayBounds | None:
+    if not isinstance(raw, dict):
+        return None
+    root = _rect_from_mapping(raw.get("root"))
+    anchor = _rect_from_mapping(raw.get("anchor"))
+    mascot = _rect_from_mapping(raw.get("mascot"))
+    tray = _rect_from_mapping(raw.get("tray"))
     placement = raw.get("placement")
     if not any([root, anchor, mascot, tray]):
         return None

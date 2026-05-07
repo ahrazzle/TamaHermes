@@ -28,6 +28,7 @@ from tamacodex.overlay_state import (
     parse_overlay_bounds,
     should_expand_overlay,
     status_snapshot,
+    update_surface_activity,
 )
 from tamacodex.overlay_supervisor import claim_pid_file, launch_agent_plist, start_overlay_process, supervise_once, write_pid
 
@@ -95,6 +96,34 @@ class M10OverlayStateTests(unittest.TestCase):
         global_state["electron-avatar-overlay-open"] = True
         self.assertTrue(should_expand_overlay(global_state, bounds, None))
 
+    def test_surface_activity_requires_open_or_recently_changed_bounds(self) -> None:
+        global_state = {
+            "electron-persisted-atom-state": {"selected-avatar-id": "custom:tamacodex"},
+            "electron-avatar-overlay-open": False,
+            "electron-avatar-overlay-bounds": {
+                "x": 100,
+                "y": 200,
+                "width": 160,
+                "height": 120,
+                "mascot": {"left": 20, "top": 30, "width": 40, "height": 40},
+            },
+        }
+        overlay = default_overlay_state()
+
+        fresh, bounds = update_surface_activity(global_state, overlay, now_epoch=100.0)
+        self.assertTrue(fresh)
+        self.assertIsNotNone(bounds)
+        self.assertEqual(overlay["lastBoundsChangedAtEpoch"], 100.0)
+
+        stale, _bounds = update_surface_activity(global_state, overlay, now_epoch=111.0, stale_after=10.0)
+        self.assertFalse(stale)
+        self.assertFalse(overlay["surfaceActive"])
+
+        global_state["electron-avatar-overlay-open"] = True
+        opened, _bounds = update_surface_activity(global_state, overlay, now_epoch=120.0, stale_after=10.0)
+        self.assertTrue(opened)
+        self.assertEqual(overlay["lastBoundsChangedAtEpoch"], 120.0)
+
     def test_overlay_uses_nonactivating_window_style_and_tamago_palette(self) -> None:
         class FakeTk:
             def __init__(self) -> None:
@@ -154,9 +183,11 @@ class M10OverlayAudioTests(unittest.TestCase):
         played: list[tuple[str, float]] = []
 
         seeded = apply_audio_decision(self.state_with_event("old-event"), overlay, player=lambda filename, volume: played.append((filename, volume)) or True)
+        replay = apply_audio_decision(self.state_with_event("old-event"), overlay, player=lambda filename, volume: played.append((filename, volume)) or True)
 
         self.assertEqual(seeded.reason, "seeded")
         self.assertFalse(seeded.should_play)
+        self.assertEqual(replay.reason, "already-seen")
         self.assertEqual(played, [])
         self.assertTrue(overlay["audioPrimed"])
         self.assertEqual(overlay["lastSeenEventId"], "old-event")
@@ -185,6 +216,21 @@ class M10OverlayAudioTests(unittest.TestCase):
         self.assertEqual(inactive.reason, "inactive")
         self.assertFalse(muted.should_play)
         self.assertFalse(inactive.should_play)
+
+    def test_inactive_event_is_suppressed_instead_of_replayed_later(self) -> None:
+        overlay = default_overlay_state()
+        overlay["audioPrimed"] = True
+        played: list[tuple[str, float]] = []
+
+        inactive = apply_audio_decision(self.state_with_event("closed-event"), overlay, selected=False, player=lambda filename, volume: played.append((filename, volume)) or True)
+        replay = apply_audio_decision(self.state_with_event("closed-event"), overlay, selected=True, player=lambda filename, volume: played.append((filename, volume)) or True)
+        fresh = apply_audio_decision(self.state_with_event("fresh-event"), overlay, selected=True, player=lambda filename, volume: played.append((filename, volume)) or True)
+
+        self.assertEqual(inactive.reason, "inactive")
+        self.assertEqual(replay.reason, "suppressed")
+        self.assertTrue(fresh.should_play)
+        self.assertEqual(overlay["lastSuppressedEventId"], "closed-event")
+        self.assertEqual([filename for filename, _volume in played], ["task_success.wav"])
 
     def test_quiet_mode_reduces_volume(self) -> None:
         overlay = default_overlay_state()
@@ -233,8 +279,16 @@ class M10OverlayAudioTests(unittest.TestCase):
 
 
 class M10SupervisorGuardTests(unittest.TestCase):
-    def write_global_state(self, home: Path, selected: str | None) -> None:
+    def write_global_state(self, home: Path, selected: str | None, bounds: bool = False) -> None:
         payload = {"electron-persisted-atom-state": {"selected-avatar-id": selected}}
+        if bounds:
+            payload["electron-avatar-overlay-bounds"] = {
+                "x": 100,
+                "y": 200,
+                "width": 160,
+                "height": 120,
+                "mascot": {"left": 20, "top": 30, "width": 40, "height": 40},
+            }
         (home / ".codex-global-state.json").write_text(json.dumps(payload), encoding="utf-8")
 
     def test_claim_pid_file_rejects_live_duplicate_and_cleans_stale_pid(self) -> None:
@@ -260,7 +314,7 @@ class M10SupervisorGuardTests(unittest.TestCase):
             starts: list[int] = []
             stops: list[bool] = []
 
-            self.write_global_state(home, "custom:tamacodex")
+            self.write_global_state(home, "custom:tamacodex", bounds=True)
             first = supervise_once(home, is_running=lambda pid: True, starter=lambda _home, _root, _python: starts.append(777) or 777)
             second = supervise_once(home, is_running=lambda pid: pid == 777, starter=lambda _home, _root, _python: starts.append(888) or 888)
             self.assertEqual(first["startedPid"], 777)

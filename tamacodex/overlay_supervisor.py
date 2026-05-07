@@ -13,13 +13,13 @@ from typing import Any, Callable
 from .overlay_state import (
     global_state_path,
     is_tamacodex_selected,
-    load_global_state,
     load_overlay_state,
     overlay_pid_path,
     overlay_state_path,
     read_json_object,
     save_overlay_state,
     supervisor_pid_path,
+    update_surface_activity,
 )
 from .paths import codex_home as resolve_codex_home
 from .paths import repo_root as resolve_repo_root
@@ -234,7 +234,7 @@ def stop_overlay_process(home: Path, is_running: Callable[[int], bool] = pid_run
 
 
 def selected_from_disk(home: Path) -> bool:
-    return is_tamacodex_selected(load_global_state(home))
+    return is_tamacodex_selected(read_json_object(global_state_path(home)))
 
 
 def supervise_once(
@@ -245,21 +245,25 @@ def supervise_once(
     starter: Callable[[Path, Path | None, str | None], int] | None = None,
     stopper: Callable[[Path], bool] | None = None,
 ) -> dict[str, Any]:
-    selected = selected_from_disk(home)
+    global_state = read_json_object(global_state_path(home))
+    selected = is_tamacodex_selected(global_state)
+    overlay_state = load_overlay_state(overlay_state_path(home))
+    surface_active, _bounds = update_surface_activity(global_state, overlay_state, time.time())
+    save_overlay_state(overlay_state_path(home), overlay_state)
     running_pid = overlay_process_alive(home, is_running=is_running)
-    if not selected:
+    if not selected or not surface_active:
         stopped = True
         if running_pid:
             stopped = stopper(home) if stopper else stop_overlay_process(home, is_running=is_running)
-        return {"selected": False, "runningPid": running_pid, "startedPid": None, "stopped": stopped}
+        return {"selected": selected, "surfaceActive": surface_active, "runningPid": running_pid, "startedPid": None, "stopped": stopped}
     if running_pid:
-        return {"selected": True, "runningPid": running_pid, "startedPid": None, "stopped": False}
+        return {"selected": True, "surfaceActive": True, "runningPid": running_pid, "startedPid": None, "stopped": False}
     started_pid = starter(home, root, python) if starter else start_overlay_process(home, root=root, python=python)
     write_pid(overlay_pid_path(home), started_pid)
     state = load_overlay_state(overlay_state_path(home))
     state["sidecarPid"] = started_pid
     save_overlay_state(overlay_state_path(home), state)
-    return {"selected": True, "runningPid": None, "startedPid": started_pid, "stopped": False}
+    return {"selected": True, "surfaceActive": True, "runningPid": None, "startedPid": started_pid, "stopped": False}
 
 
 def ensure_overlay_supervisor(
@@ -324,7 +328,12 @@ def supervisor_loop(home: Path, root: Path | None = None, python: str | None = N
     last_start = 0.0
     try:
         while True:
-            if is_tamacodex_selected(read_json_object(global_state_path(home))):
+            global_state = read_json_object(global_state_path(home))
+            overlay_state = load_overlay_state(overlay_state_path(home))
+            selected = is_tamacodex_selected(global_state)
+            surface_active, _bounds = update_surface_activity(global_state, overlay_state, time.time())
+            save_overlay_state(overlay_state_path(home), overlay_state)
+            if selected and surface_active:
                 running = overlay_process_alive(home)
                 if not running and time.monotonic() - last_start >= MIN_RESTART_SECONDS:
                     start_overlay_process(home, root=root, python=python)

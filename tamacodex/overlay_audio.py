@@ -101,8 +101,12 @@ def decide_audio(
         return AudioDecision(False, "inactive", event=event, event_id=event_id)
     if overlay_state.get("muted"):
         return AudioDecision(False, "muted", event=event, event_id=event_id)
+    if overlay_state.get("lastSuppressedEventId") == event_id:
+        return AudioDecision(False, "suppressed", event=event, event_id=event_id)
     if overlay_state.get("lastPlayedEventId") == event_id:
         return AudioDecision(False, "already-played", event=event, event_id=event_id)
+    if overlay_state.get("lastSeenEventId") == event_id:
+        return AudioDecision(False, "already-seen", event=event, event_id=event_id)
     volume = QUIET_VOLUME if overlay_state.get("quietMode") or quiet_hours_active(overlay_state.get("quietHours"), now=now) else DEFAULT_VOLUME
     return AudioDecision(
         True,
@@ -142,9 +146,13 @@ def apply_audio_decision(
         overlay_state["audioPrimed"] = True
         if decision.event_id:
             overlay_state["lastSeenEventId"] = decision.event_id
+            if decision.reason == "inactive":
+                overlay_state["lastSuppressedEventId"] = decision.event_id
             return AudioDecision(False, "seeded", event=decision.event, event_id=decision.event_id, filename=decision.filename, volume=decision.volume)
     if decision.event_id:
         overlay_state["lastSeenEventId"] = decision.event_id
+        if decision.reason == "inactive":
+            overlay_state["lastSuppressedEventId"] = decision.event_id
     if decision.should_play and decision.filename:
         if player(decision.filename, decision.volume):
             overlay_state["lastPlayedEventId"] = decision.event_id

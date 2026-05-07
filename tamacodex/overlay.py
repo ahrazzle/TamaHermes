@@ -22,11 +22,11 @@ from .overlay_state import (
     load_overlay_state,
     overlay_pid_path,
     overlay_state_path,
-    parse_overlay_bounds,
     read_json_object,
     save_overlay_state,
     should_expand_overlay,
     status_snapshot,
+    update_surface_activity,
 )
 from .paths import codex_home as resolve_codex_home
 from .paths import default_state_path, repo_root as resolve_repo_root
@@ -234,10 +234,12 @@ class TamacodexOverlayApp:
         global_state = load_global_state(self.home)
         selected = is_tamacodex_selected(global_state)
         overlay_state = load_overlay_state(self.overlay_state_file)
-        if not selected:
+        surface_active, bounds = update_surface_activity(global_state, overlay_state, time.time())
+        if not selected or not surface_active:
             if self.was_visible:
                 self.window.withdraw()
                 self.was_visible = False
+            save_overlay_state(self.overlay_state_file, overlay_state)
             self.window.after(self.interval_ms, self.tick)
             return
 
@@ -251,10 +253,7 @@ class TamacodexOverlayApp:
             self.window.after(self.interval_ms, self.tick)
             return
 
-        bounds = parse_overlay_bounds(global_state)
-        if bounds:
-            overlay_state["lastBounds"] = bounds.to_dict()
-        apply_audio_decision(state, overlay_state, selected=True)
+        apply_audio_decision(state, overlay_state, selected=surface_active)
         save_overlay_state(self.overlay_state_file, overlay_state)
 
         expanded = should_expand_overlay(global_state, bounds, self.pointer())
@@ -729,6 +728,7 @@ def run_native_overlay_loop(home: Path, root: Path, interval: float = 0.4) -> No
             global_state = load_global_state(home)
             selected = is_tamacodex_selected(global_state)
             overlay_state = load_overlay_state(overlay_file)
+            surface_active, bounds = update_surface_activity(global_state, overlay_state, time.time())
             if selected:
                 try:
                     now = time.monotonic()
@@ -736,30 +736,37 @@ def run_native_overlay_loop(home: Path, root: Path, interval: float = 0.4) -> No
                         records = sync_codex_session_events(home, catalog, state_path)
                         overlay_state["lastCodexEventSyncAt"] = time.time()
                         overlay_state["lastCodexEventSyncCount"] = len(records)
-                        apply_progress_audio_for_records(records, overlay_state, selected=True)
+                        apply_progress_audio_for_records(records, overlay_state, selected=surface_active)
                         last_codex_event_sync = now
                     state = load_state(state_path, catalog)
                 except Exception:  # noqa: BLE001
                     state = None
                 if state:
-                    bounds = parse_overlay_bounds(global_state)
-                    if bounds:
-                        overlay_state["lastBounds"] = bounds.to_dict()
                     snapshot = status_snapshot(state)
-                    hover = native_overlay_hover_rect(bounds)
-                    paths["html"].write_text(render_native_overlay_html(snapshot, expanded=True), encoding="utf-8")
-                    write_native_overlay_config(
-                        home,
-                        visible=bool(hover),
-                        frame=native_overlay_frame(bounds),
-                        html_path=paths["html"],
-                        hover=hover,
-                    )
-                    apply_audio_decision(state, overlay_state, selected=True)
-                    apply_native_interaction_audio(overlay_state, read_json_object(paths["status"]), hover, selected=True)
+                    hover = native_overlay_hover_rect(bounds) if surface_active else None
+                    if surface_active:
+                        paths["html"].write_text(render_native_overlay_html(snapshot, expanded=True), encoding="utf-8")
+                        write_native_overlay_config(
+                            home,
+                            visible=bool(hover),
+                            frame=native_overlay_frame(bounds),
+                            html_path=paths["html"],
+                            hover=hover,
+                        )
+                    else:
+                        write_native_overlay_config(home, visible=False)
+                        overlay_state["lastHoverReady"] = False
+                        overlay_state["lastAudioMascotRect"] = None
+                    apply_audio_decision(state, overlay_state, selected=surface_active)
+                    if surface_active:
+                        apply_native_interaction_audio(overlay_state, read_json_object(paths["status"]), hover, selected=True)
+                    save_overlay_state(overlay_file, overlay_state)
+                else:
+                    write_native_overlay_config(home, visible=False)
                     save_overlay_state(overlay_file, overlay_state)
             else:
                 write_native_overlay_config(home, visible=False)
+                save_overlay_state(overlay_file, overlay_state)
             if helper.poll() is not None:
                 helper = subprocess.Popen([str(binary), str(paths["config"])], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             time.sleep(max(0.25, interval))
@@ -784,22 +791,24 @@ def run_headless_audio_loop(home: Path, root: Path, interval: float = 0.8) -> No
     while True:
         global_state = load_global_state(home)
         selected = is_tamacodex_selected(global_state)
+        overlay_state = load_overlay_state(overlay_file)
+        surface_active, _bounds = update_surface_activity(global_state, overlay_state, time.time())
         if selected:
             try:
                 now = time.monotonic()
                 if now - last_codex_event_sync >= 1.0:
                     records = sync_codex_session_events(home, catalog, state_path)
-                    overlay_state = load_overlay_state(overlay_file)
-                    apply_progress_audio_for_records(records, overlay_state, selected=True)
+                    apply_progress_audio_for_records(records, overlay_state, selected=surface_active)
                     save_overlay_state(overlay_file, overlay_state)
                     last_codex_event_sync = now
                 state = load_state(state_path, catalog)
             except Exception:  # noqa: BLE001
                 state = None
             if state:
-                overlay_state = load_overlay_state(overlay_file)
-                apply_audio_decision(state, overlay_state, selected=True)
+                apply_audio_decision(state, overlay_state, selected=surface_active)
                 save_overlay_state(overlay_file, overlay_state)
+        else:
+            save_overlay_state(overlay_file, overlay_state)
         time.sleep(max(0.3, interval))
 
 
