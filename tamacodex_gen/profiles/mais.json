@@ -1,0 +1,16 @@
+{
+  "id": "mais",
+  "displayName": "Mais",
+  "inspiration": "a slim corn cob",
+  "description": "A bright corn-cob companion with a tall kernel silhouette.",
+  "family": "mais",
+  "palette": {
+    "main": "#ffe86b",
+    "shade": "#72a846"
+  },
+  "personality": {
+    "defaultAdult": "worker",
+    "branchBias": ["focused", "resilient", "worker"],
+    "notes": "Spry, vertical, readable as corn without adding extra colors."
+  }
+}

@@ -1,0 +1,78 @@
+{
+  "id": "mais_egg",
+  "displayName": "Mais Egg",
+  "description": "Pre-hatch Mais egg keyed to a slim corn cob.",
+  "lineId": "mais",
+  "lineDisplayName": "Mais",
+  "inspiration": "a slim corn cob",
+  "stage": "egg",
+  "branch": null,
+  "sourceSize": [
+    24,
+    26
+  ],
+  "ink": "#ffe86b",
+  "palette": {
+    "main": "#ffe86b",
+    "secondary": "#72a846",
+    "shade": "#72a846",
+    "mainShade": "#26372c",
+    "accent": "#f0a6ce",
+    "identityMain": "#ffe86b",
+    "identitySecondary": "#72a846",
+    "identityAccent": "#f0a6ce",
+    "policy": "transparent plus M2 identity main/shade inks, dark LCD face ink, and one readable lifecycle accessory accent ink",
+    "lcdRuleset": "m6-lcd-screen-integration-v1",
+    "artDirection": "m6.1-clean-limbed-pawn-v1",
+    "symbolMap": {
+      "#": "main",
+      "+": "secondary",
+      "=": "mainShade",
+      "*": "accent"
+    }
+  },
+  "artDirection": {
+    "id": "m6.1-clean-limbed-pawn-v1",
+    "summary": "Clean 1px mascot silhouettes with visible hands, feet, and sparse intentional linework.",
+    "noisePolicy": "No random dither or speckle fields; secondary/detail pixels must read as outline, limb, prop, or accessory."
+  },
+  "transparent": "#00000000",
+  "poses": [
+    "idle_0",
+    "idle_1",
+    "blink",
+    "squash",
+    "wave_0",
+    "wave_1",
+    "wave_2",
+    "jump_0",
+    "jump_1",
+    "jump_2",
+    "failed_0",
+    "failed_1",
+    "failed_2",
+    "wait_0",
+    "wait_1",
+    "wait_2",
+    "work_0",
+    "work_1",
+    "work_2",
+    "review_0",
+    "review_1",
+    "review_2",
+    "step_right_0",
+    "step_right_1",
+    "step_right_2",
+    "step_left_0",
+    "step_left_1",
+    "step_left_2"
+  ],
+  "atlas": {
+    "path": "poses_atlas.png",
+    "columns": 8,
+    "cell": [
+      24,
+      26
+    ]
+  }
+}

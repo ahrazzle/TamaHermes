@@ -1,0 +1,16 @@
+{
+  "id": "toast",
+  "displayName": "Toast",
+  "inspiration": "a compact slice of toast",
+  "description": "A warm bread-slice work companion with crusty lower shading.",
+  "family": "toast",
+  "palette": {
+    "main": "#ffe9a8",
+    "shade": "#c9823a"
+  },
+  "personality": {
+    "defaultAdult": "calm",
+    "branchBias": ["calm", "worker", "quiet"],
+    "notes": "Cozy, grounded, readable as toast even at 24x26."
+  }
+}

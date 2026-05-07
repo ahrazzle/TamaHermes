@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tamacodex"
+version = "0.10.0"
+description = "A Codex-native draggable desktop pet with Tamagotchi-style growth state."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["Pillow>=10"]
+authors = [{ name = "Alichua" }]
+license = { text = "MIT" }
+keywords = ["codex", "desktop-pet", "pixel-art", "tamagotchi"]
+
+[project.scripts]
+tamacodex = "tamacodex.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["tamacodex*"]
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.package-data]
+tamacodex = [
+  "catalog_assets/**/*",
+  "sfx/*.wav",
+  "sfx/*.md",
+  "native_overlay/*.swift",
+]
+tamacodex_gen = [
+  "SKILL.md",
+  "profiles/*.json",
+  "references/*.md",
+]

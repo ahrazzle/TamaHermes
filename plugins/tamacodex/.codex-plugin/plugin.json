@@ -1,0 +1,41 @@
+{
+  "name": "tamacodex",
+  "version": "0.10.0",
+  "description": "Codex-native Tamacodex pet installer and growth hooks.",
+  "author": {
+    "name": "Alichua",
+    "url": "https://github.com/Alichua"
+  },
+  "homepage": "https://github.com/Alichua/tamacodex",
+  "repository": "https://github.com/Alichua/tamacodex",
+  "license": "MIT",
+  "keywords": [
+    "codex",
+    "custom-pet",
+    "desktop-pet",
+    "tamagotchi"
+  ],
+  "skills": "./skills/",
+  "hooks": "./hooks.json",
+  "interface": {
+    "displayName": "Tamacodex",
+    "shortDescription": "Install and grow a Codex-native desktop pet.",
+    "longDescription": "Tamacodex installs a Codex custom pet package, then uses Codex hooks to update its growth ledger as you work.",
+    "developerName": "Alichua",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/Alichua/tamacodex",
+    "privacyPolicyURL": "https://github.com/Alichua/tamacodex",
+    "termsOfServiceURL": "https://github.com/Alichua/tamacodex",
+    "defaultPrompt": [
+      "Install Tamacodex with Mais and Pulse",
+      "Show my Tamacodex status",
+      "Switch Tamacodex to Toast and Aurora"
+    ],
+    "brandColor": "#6FD8D6",
+    "screenshots": []
+  }
+}

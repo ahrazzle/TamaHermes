@@ -1,0 +1,20 @@
+{
+  "name": "tamacodex-marketplace",
+  "interface": {
+    "displayName": "Tamacodex Local"
+  },
+  "plugins": [
+    {
+      "name": "tamacodex",
+      "source": {
+        "source": "local",
+        "path": "./plugins/tamacodex"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_USE"
+      },
+      "category": "Productivity"
+    }
+  ]
+}
