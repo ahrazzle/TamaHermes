@@ -71,7 +71,17 @@ Tamacodex は数値化された利用シグナルだけを保存します。元�
 
 ## 切り替え
 
+terminal に慣れていなくても大丈夫です。Codex App でこの repo を開き、Composer に下のプロンプトを貼り付ければ、Codex が代わりにコマンドを実行します。完了後、ペットが眠っている場合は `Cmd+K -> Wake Pet` で起こしてください。
+
 **🎛 tamago シェルを切り替えます。**
+
+**Composer に貼り付けるプロンプト:**
+
+```text
+この repo で、Tamacodex を Toast のまま Pulse tamago シェルに切り替えてください。./install.sh --line toast --machine pulse を実行し、完了したら Wake Pet するタイミングを教えてください。
+```
+
+**Terminal 用の予備コマンド:**
 
 ```bash
 ./install.sh --line toast --machine pulse
@@ -79,11 +89,27 @@ Tamacodex は数値化された利用シグナルだけを保存します。元�
 
 **🍞 相棒ラインを切り替えます。**
 
+**Composer に貼り付けるプロンプト:**
+
+```text
+この repo で、Tamacodex を Mais 相棒ライン + Aurora シェルに切り替えてください。./install.sh --line mais --machine aurora を実行し、完了したら Wake Pet するタイミングを教えてください。
+```
+
+**Terminal 用の予備コマンド:**
+
 ```bash
 ./install.sh --line mais --machine aurora
 ```
 
 **🥚 新しい卵から始めます。**
+
+**Composer に貼り付けるプロンプト:**
+
+```text
+この repo で、Tamacodex をリセットし、新しい Toast の卵を Aurora シェルでインストールしてください。./install.sh --line toast --machine aurora --reset を実行し、完了したら Wake Pet するタイミングを教えてください。
+```
+
+**Terminal 用の予備コマンド:**
 
 ```bash
 ./install.sh --line toast --machine aurora --reset
@@ -91,11 +117,27 @@ Tamacodex は数値化された利用シグナルだけを保存します。元�
 
 **🎯 特定の成長フォームをインストールします。**
 
+**Composer に貼り付けるプロンプト:**
+
+```text
+この repo で、Tamacodex の指定フォーム toast_adult_worker を Pulse シェルでインストールしてください。./install.sh --line toast --machine pulse --form toast_adult_worker を実行し、完了したら Wake Pet するタイミングを教えてください。
+```
+
+**Terminal 用の予備コマンド:**
+
 ```bash
-tamacodex setup --form toast_adult_worker --machine pulse --force --json
+./install.sh --line toast --machine pulse --form toast_adult_worker
 ```
 
 **🔎 付属カタログのフォームを確認します。**
+
+**Composer に貼り付けるプロンプト:**
+
+```text
+この repo で、toast と mais の内蔵 Tamacodex フォームを一覧してください。tamacodex list-forms --line toast と tamacodex list-forms --line mais を実行し、選択肢をわかりやすい日本語でまとめてください。
+```
+
+**Terminal 用の予備コマンド:**
 
 ```bash
 tamacodex list-forms --line toast

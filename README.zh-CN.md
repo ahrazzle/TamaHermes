@@ -71,7 +71,17 @@ Tamacodex 只保存数值化使用信号，不保存原始提示词或工具输�
 
 ## 切换配置
 
+你不需要会用 terminal。打开 Codex App 里的这个仓库，新建一条 Composer 消息，把下面的提示词贴进去，让 Codex 替你运行命令。完成后，如果宠物还在睡觉，用 `Cmd+K -> Wake Pet` 唤醒它。
+
 **🎛 切换 tamago 外壳。**
+
+**Composer 里直接粘贴：**
+
+```text
+在这个 repo 里，把 Tamacodex 切换成 Toast + Pulse 外壳。请运行 ./install.sh --line toast --machine pulse，完成后告诉我什么时候需要 Wake Pet。
+```
+
+**Terminal 备用命令：**
 
 ```bash
 ./install.sh --line toast --machine pulse
@@ -79,11 +89,27 @@ Tamacodex 只保存数值化使用信号，不保存原始提示词或工具输�
 
 **🍞 切换伙伴线。**
 
+**Composer 里直接粘贴：**
+
+```text
+在这个 repo 里，把 Tamacodex 切换成 Mais 伙伴线 + Aurora 外壳。请运行 ./install.sh --line mais --machine aurora，完成后告诉我什么时候需要 Wake Pet。
+```
+
+**Terminal 备用命令：**
+
 ```bash
 ./install.sh --line mais --machine aurora
 ```
 
 **🥚 从一颗新蛋重新开始。**
+
+**Composer 里直接粘贴：**
+
+```text
+在这个 repo 里，重置 Tamacodex，并安装一颗新的 Toast + Aurora 蛋。请运行 ./install.sh --line toast --machine aurora --reset，完成后告诉我什么时候需要 Wake Pet。
+```
+
+**Terminal 备用命令：**
 
 ```bash
 ./install.sh --line toast --machine aurora --reset
@@ -91,11 +117,27 @@ Tamacodex 只保存数值化使用信号，不保存原始提示词或工具输�
 
 **🎯 安装指定的成长形态。**
 
+**Composer 里直接粘贴：**
+
+```text
+在这个 repo 里，安装指定形态 toast_adult_worker，并使用 Pulse 外壳。请运行 ./install.sh --line toast --machine pulse --form toast_adult_worker，完成后告诉我什么时候需要 Wake Pet。
+```
+
+**Terminal 备用命令：**
+
 ```bash
-tamacodex setup --form toast_adult_worker --machine pulse --force --json
+./install.sh --line toast --machine pulse --form toast_adult_worker
 ```
 
 **🔎 查看内置目录里有哪些形态。**
+
+**Composer 里直接粘贴：**
+
+```text
+在这个 repo 里，列出 toast 和 mais 的所有内置 Tamacodex 形态。请运行 tamacodex list-forms --line toast 和 tamacodex list-forms --line mais，然后用普通中文总结可选项。
+```
+
+**Terminal 备用命令：**
 
 ```bash
 tamacodex list-forms --line toast

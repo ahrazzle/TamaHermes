@@ -65,7 +65,17 @@ Tamacodex stores numeric usage signals, not raw prompts or tool output text.
 
 ## Switch Things
 
+You do not need to be a terminal person. Open this repo in Codex App, start a Composer message, paste one of the prompts below, and let Codex run the command for you. When it finishes, use `Cmd+K -> Wake Pet` if the pet is sleeping.
+
 **🎛 Switch the tamago shell.**
+
+**Composer prompt:**
+
+```text
+In this repo, switch Tamacodex to the Pulse tamago shell while keeping Toast. Run ./install.sh --line toast --machine pulse, then tell me when to Wake Pet.
+```
+
+**Terminal fallback:**
 
 ```bash
 ./install.sh --line toast --machine pulse
@@ -73,11 +83,27 @@ Tamacodex stores numeric usage signals, not raw prompts or tool output text.
 
 **🍞 Switch the companion line.**
 
+**Composer prompt:**
+
+```text
+In this repo, switch Tamacodex to the Mais companion line with the Aurora shell. Run ./install.sh --line mais --machine aurora, then tell me when to Wake Pet.
+```
+
+**Terminal fallback:**
+
 ```bash
 ./install.sh --line mais --machine aurora
 ```
 
 **🥚 Start from a fresh egg.**
+
+**Composer prompt:**
+
+```text
+In this repo, reset Tamacodex and install a fresh Toast egg in the Aurora shell. Run ./install.sh --line toast --machine aurora --reset, then tell me when to Wake Pet.
+```
+
+**Terminal fallback:**
 
 ```bash
 ./install.sh --line toast --machine aurora --reset
@@ -85,11 +111,27 @@ Tamacodex stores numeric usage signals, not raw prompts or tool output text.
 
 **🎯 Install an exact grown form.**
 
+**Composer prompt:**
+
+```text
+In this repo, install the exact Tamacodex form toast_adult_worker with the Pulse shell. Run ./install.sh --line toast --machine pulse --form toast_adult_worker, then tell me when to Wake Pet.
+```
+
+**Terminal fallback:**
+
 ```bash
-tamacodex setup --form toast_adult_worker --machine pulse --force --json
+./install.sh --line toast --machine pulse --form toast_adult_worker
 ```
 
 **🔎 See what ships in the catalog.**
+
+**Composer prompt:**
+
+```text
+In this repo, list the built-in Tamacodex forms for toast and mais. Run tamacodex list-forms --line toast and tamacodex list-forms --line mais, then summarize the choices in plain English.
+```
+
+**Terminal fallback:**
 
 ```bash
 tamacodex list-forms --line toast

@@ -71,7 +71,17 @@ Tamacodex는 숫자화된 사용 신호만 저장합니다. 원본 프롬프트�
 
 ## 바꾸기
 
+terminal에 익숙하지 않아도 괜찮습니다. Codex App에서 이 repo를 열고, Composer에 아래 프롬프트를 붙여 넣으면 Codex가 대신 명령을 실행합니다. 완료 후 펫이 잠들어 있으면 `Cmd+K -> Wake Pet`으로 깨워 주세요.
+
 **🎛 tamago shell을 바꿉니다.**
+
+**Composer에 붙여 넣을 프롬프트:**
+
+```text
+이 repo에서 Tamacodex를 Toast 라인은 유지한 채 Pulse tamago shell로 바꿔 주세요. ./install.sh --line toast --machine pulse 를 실행하고, 완료되면 언제 Wake Pet을 하면 되는지 알려 주세요.
+```
+
+**Terminal 대체 명령:**
 
 ```bash
 ./install.sh --line toast --machine pulse
@@ -79,11 +89,27 @@ Tamacodex는 숫자화된 사용 신호만 저장합니다. 원본 프롬프트�
 
 **🍞 동료 라인을 바꿉니다.**
 
+**Composer에 붙여 넣을 프롬프트:**
+
+```text
+이 repo에서 Tamacodex를 Mais 동료 라인 + Aurora shell로 바꿔 주세요. ./install.sh --line mais --machine aurora 를 실행하고, 완료되면 언제 Wake Pet을 하면 되는지 알려 주세요.
+```
+
+**Terminal 대체 명령:**
+
 ```bash
 ./install.sh --line mais --machine aurora
 ```
 
 **🥚 새 알에서 다시 시작합니다.**
+
+**Composer에 붙여 넣을 프롬프트:**
+
+```text
+이 repo에서 Tamacodex를 리셋하고, 새로운 Toast 알을 Aurora shell로 설치해 주세요. ./install.sh --line toast --machine aurora --reset 를 실행하고, 완료되면 언제 Wake Pet을 하면 되는지 알려 주세요.
+```
+
+**Terminal 대체 명령:**
 
 ```bash
 ./install.sh --line toast --machine aurora --reset
@@ -91,11 +117,27 @@ Tamacodex는 숫자화된 사용 신호만 저장합니다. 원본 프롬프트�
 
 **🎯 특정 성장 form을 설치합니다.**
 
+**Composer에 붙여 넣을 프롬프트:**
+
+```text
+이 repo에서 Tamacodex의 지정 form toast_adult_worker를 Pulse shell로 설치해 주세요. ./install.sh --line toast --machine pulse --form toast_adult_worker 를 실행하고, 완료되면 언제 Wake Pet을 하면 되는지 알려 주세요.
+```
+
+**Terminal 대체 명령:**
+
 ```bash
-tamacodex setup --form toast_adult_worker --machine pulse --force --json
+./install.sh --line toast --machine pulse --form toast_adult_worker
 ```
 
 **🔎 기본 catalog에 무엇이 있는지 확인합니다.**
+
+**Composer에 붙여 넣을 프롬프트:**
+
+```text
+이 repo에서 toast와 mais의 기본 Tamacodex form을 모두 보여 주세요. tamacodex list-forms --line toast 와 tamacodex list-forms --line mais 를 실행한 뒤, 선택지를 쉬운 한국어로 요약해 주세요.
+```
+
+**Terminal 대체 명령:**
 
 ```bash
 tamacodex list-forms --line toast

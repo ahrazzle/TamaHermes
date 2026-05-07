@@ -27,7 +27,7 @@ Usage: ./install.sh [options]
 Install or switch Tamacodex for Codex App.
 
 Options:
-  --line toast|mais          Pawn line to install (default: toast)
+  --line LINE_ID             Companion line to install (default: toast)
   --machine aurora|pulse     Tamago shell to install (default: aurora)
   --form FORM_ID             Exact bundled/custom form id
   --catalog-dir PATH         Custom rendered catalog assets directory
