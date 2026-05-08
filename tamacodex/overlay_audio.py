@@ -12,9 +12,9 @@ from typing import Any, Callable
 from .paths import now_iso
 from .sfx import SFX_EVENT_MAP
 
-DEFAULT_VOLUME = 0.32
-QUIET_VOLUME = 0.14
-INTERACTION_VOLUME = 0.20
+DEFAULT_VOLUME = 0.20
+QUIET_VOLUME = 0.08
+INTERACTION_VOLUME = 0.12
 INTERACTION_COOLDOWNS = {
     "hover": 2.0,
     "drag": 1.0,

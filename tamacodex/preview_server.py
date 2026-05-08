@@ -380,7 +380,7 @@ function playSfx(eventName, data = null) {
   const url = payload.sfx.events[key] || payload.sfx.events[eventName];
   if (!url) return;
   const audio = new Audio(url);
-  audio.volume = 0.28;
+  audio.volume = 0.16;
   audio.play().catch(() => {});
 }
 
