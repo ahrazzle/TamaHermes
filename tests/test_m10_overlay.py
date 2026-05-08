@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from datetime import datetime
 from pathlib import Path
+from unittest import mock
 
 from tamacodex.catalog import load_catalog
 from tamacodex.cli import setup_overlay_supervisor
@@ -37,7 +38,7 @@ from tamacodex.overlay_state import (
     status_snapshot,
     update_surface_activity,
 )
-from tamacodex.overlay_supervisor import claim_pid_file, launch_agent_plist, start_overlay_process, supervise_once, write_pid
+from tamacodex.overlay_supervisor import claim_pid_file, launch_agent_plist, pid_running, start_overlay_process, supervise_once, write_pid
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -318,6 +319,13 @@ class M10SupervisorGuardTests(unittest.TestCase):
             self.assertEqual(path.read_text(encoding="utf-8").strip(), "111")
             self.assertTrue(claim_pid_file(path, pid=222, is_running=lambda pid: False))
             self.assertEqual(path.read_text(encoding="utf-8").strip(), "222")
+
+    def test_pid_running_treats_zombie_process_as_stopped(self) -> None:
+        with mock.patch("tamacodex.overlay_supervisor.os.kill") as kill:
+            kill.return_value = None
+            self.assertFalse(pid_running(123, stat_reader=lambda _pid: "Z"))
+            self.assertFalse(pid_running(123, stat_reader=lambda _pid: "Z+"))
+            self.assertTrue(pid_running(123, stat_reader=lambda _pid: "S"))
 
     def test_launch_agent_restarts_crashed_supervisor_without_restart_loop_on_clean_exit(self) -> None:
         plist = launch_agent_plist(Path("/tmp/codex-home"), root=Path("/tmp/repo"), python="/usr/bin/python3")

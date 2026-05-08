@@ -28,7 +28,18 @@ LAUNCH_AGENT_LABEL = "com.autoark.tamacodex.overlay-supervisor"
 MIN_RESTART_SECONDS = 3.0
 
 
-def pid_running(pid: int) -> bool:
+def _pid_stat(pid: int, runner: Callable[..., subprocess.CompletedProcess[Any]] = subprocess.run) -> str | None:
+    ps = "/bin/ps" if Path("/bin/ps").exists() else "ps"
+    try:
+        completed = runner([ps, "-p", str(pid), "-o", "stat="], capture_output=True, text=True, timeout=0.5, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if completed.returncode != 0:
+        return None
+    return completed.stdout.strip() or None
+
+
+def pid_running(pid: int, stat_reader: Callable[[int], str | None] = _pid_stat) -> bool:
     if pid <= 0:
         return False
     try:
@@ -37,6 +48,9 @@ def pid_running(pid: int) -> bool:
         return False
     except PermissionError:
         return True
+    stat = stat_reader(pid)
+    if stat and stat.upper().startswith("Z"):
+        return False
     return True
 
 
