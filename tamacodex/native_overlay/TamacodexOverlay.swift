@@ -195,7 +195,8 @@ final class OverlayController: NSObject {
         panel.setFrame(clampedFrame(for: config), display: true)
         reloadIfNeeded(htmlPath: config.htmlPath)
         let point = mouseTopLeftPoint()
-        let ready = config.visible == true && hoverReady(config, point: point)
+        let hasHoverTarget = config.hoverX != nil && config.hoverY != nil && config.hoverWidth != nil && config.hoverHeight != nil
+        let ready = config.visible == true && (!hasHoverTarget || hoverReady(config, point: point))
         if ready {
             if !panel.isVisible {
                 panel.orderFrontRegardless()

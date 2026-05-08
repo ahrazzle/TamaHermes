@@ -98,6 +98,7 @@ def default_overlay_state() -> dict[str, Any]:
         "lastSurfaceCheckedAtEpoch": None,
         "sidecarPid": None,
         "supervisorPid": None,
+        "evolutionAnnouncement": None,
     }
 
 

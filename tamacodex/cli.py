@@ -26,6 +26,7 @@ from .codex_events import (
     save_cursor,
     scan_session_logs,
 )
+from .feedback import apply_evolution_feedback
 from .paths import codex_home as resolve_codex_home
 from .paths import default_state_path, repo_root as resolve_repo_root
 from .overlay_state import global_state_path, is_tamacodex_selected, load_global_state, load_overlay_state, overlay_state_path, save_overlay_state
@@ -210,13 +211,17 @@ def cmd_event(args: argparse.Namespace) -> None:
     result = apply_event(state, catalog, args.event, amount=args.amount)
     save_state(state_path, result["state"])
     install_report = None
+    feedback_report = None
     if args.install:
+        previous_form = state.get("lastInstalledFormId")
         build_dir = home / "tamacodex" / "build"
         install_report = install_codex_pet(catalog, result["state"], home, build_dir, force=True)
         record_install_metadata(result["state"], install_report)
         save_state(state_path, result["state"])
+        if result["evolution"]["evolved"] and previous_form and previous_form != result["state"]["formId"]:
+            feedback_report = apply_evolution_feedback(home, previous_form, result["state"]["formId"])
     if args.json:
-        print_json({"ok": True, **result, "install": install_report})
+        print_json({"ok": True, **result, "install": install_report, "evolutionFeedback": feedback_report})
     else:
         evo = result["evolution"]
         print(human_status(result["state"]))

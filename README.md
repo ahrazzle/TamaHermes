@@ -204,10 +204,10 @@ Stages:
 | Stage | Trigger |
 | --- | --- |
 | Egg | start |
-| Hatchling | 12 XP |
-| Child | 32 XP |
-| Teen | 90 XP |
-| Adult | 180 XP |
+| Hatchling | 120 XP |
+| Child | 320 XP |
+| Teen | 900 XP |
+| Adult | 1800 XP |
 | Hibernation | low energy, low health, or long idle |
 
 Signals:

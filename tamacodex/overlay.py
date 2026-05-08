@@ -15,6 +15,7 @@ from typing import Any
 from .bridge import apply_bridge_event
 from .catalog import load_catalog
 from .codex_events import default_cursor, load_cursor, resolve_session_inputs, save_cursor, scan_session_logs
+from .feedback import active_evolution_announcement
 from .overlay_audio import apply_audio_decision, apply_interaction_audio
 from .overlay_state import (
     is_tamacodex_selected,
@@ -451,6 +452,17 @@ def native_overlay_hover_rect(bounds: Any) -> dict[str, int] | None:
     return {"x": target.x, "y": target.y, "width": target.width, "height": target.height}
 
 
+def evolution_overlay_frame(bounds: Any) -> dict[str, int | None]:
+    width = 274
+    height = 92
+    anchor = bounds.primary_anchor() if bounds else None
+    if not anchor:
+        return {"x": None, "y": None, "width": width, "height": height}
+    x = anchor.x + (anchor.width - width) // 2
+    y = max(8, anchor.y - height - 18)
+    return {"x": x, "y": y, "width": width, "height": height}
+
+
 def _bars(value: int) -> str:
     count = _bar_count(value)
     return "".join('<i class="on"></i>' if index < count else "<i></i>" for index in range(5))
@@ -700,6 +712,58 @@ body {{
 """
 
 
+def render_evolution_announcement_html(message: str) -> str:
+    safe_message = html.escape(message)
+    return f"""<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+html, body {{
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: transparent;
+  font-family: Menlo, Monaco, monospace;
+  letter-spacing: 0;
+  user-select: none;
+}}
+body {{
+  -webkit-font-smoothing: none;
+}}
+.bubble {{
+  position: absolute;
+  inset: 10px;
+  display: grid;
+  place-items: center;
+  border-radius: 18px;
+  color: #092a2f;
+  background:
+    radial-gradient(circle at 18% 14%, rgba(255,255,255,.94) 0 9%, transparent 22%),
+    linear-gradient(135deg, rgba(215,255,241,.94), rgba(135,242,220,.88) 46%, rgba(255,216,109,.82));
+  border: 1px solid rgba(255,255,255,.86);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.78), 0 12px 34px rgba(23, 20, 33, .24);
+  backdrop-filter: blur(16px) saturate(1.45);
+  -webkit-backdrop-filter: blur(16px) saturate(1.45);
+}}
+.message {{
+  max-width: 232px;
+  padding: 0 14px;
+  text-align: center;
+  font-size: 16px;
+  line-height: 21px;
+  font-weight: 900;
+}}
+</style>
+</head>
+<body>
+  <main class="bubble" aria-label="Tamacodex evolution"><div class="message">{safe_message}</div></main>
+</body>
+</html>
+"""
+
+
 def write_native_overlay_config(
     home: Path,
     visible: bool,
@@ -774,7 +838,17 @@ def run_native_overlay_loop(home: Path, root: Path, interval: float = 0.4) -> No
                 if state:
                     snapshot = status_snapshot(state)
                     hover = native_overlay_hover_rect(bounds) if surface_active else None
-                    if surface_active:
+                    announcement = active_evolution_announcement(overlay_state, time.time())
+                    if announcement:
+                        paths["html"].write_text(render_evolution_announcement_html(str(announcement.get("message") or "")), encoding="utf-8")
+                        write_native_overlay_config(
+                            home,
+                            visible=True,
+                            frame=evolution_overlay_frame(bounds),
+                            html_path=paths["html"],
+                            hover=None,
+                        )
+                    elif surface_active:
                         paths["html"].write_text(render_native_overlay_html(snapshot, expanded=True), encoding="utf-8")
                         write_native_overlay_config(
                             home,

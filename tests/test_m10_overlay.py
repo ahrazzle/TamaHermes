@@ -4,6 +4,7 @@ import json
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from datetime import datetime
 from pathlib import Path
@@ -11,11 +12,20 @@ from unittest import mock
 
 from tamacodex.catalog import load_catalog
 from tamacodex.cli import setup_overlay_supervisor
+from tamacodex.feedback import (
+    active_evolution_announcement,
+    apply_evolution_feedback,
+    evolution_message,
+    queue_evolution_announcement,
+    request_avatar_reload,
+)
 from tamacodex.overlay import (
     apply_native_interaction_audio,
     apply_progress_audio_for_records,
     apply_nonactivating_window_style,
+    evolution_overlay_frame,
     refresh_installed_pet_for_records,
+    render_evolution_announcement_html,
     render_native_overlay_html,
     sync_codex_session_events,
     tamago_palette,
@@ -35,6 +45,8 @@ from tamacodex.overlay_state import (
     default_overlay_state,
     is_tamacodex_selected,
     load_global_state,
+    load_overlay_state,
+    overlay_state_path,
     parse_overlay_bounds,
     should_expand_overlay,
     status_snapshot,
@@ -174,6 +186,72 @@ class M10OverlayStateTests(unittest.TestCase):
         )
 
         self.assertEqual(snapshot["latestEvent"]["event"], "prompt_sent")
+
+    def test_evolution_announcement_expires_and_renders(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            overlay = queue_evolution_announcement(home, "toast_teen_focused", now_epoch=10.0)
+
+            self.assertEqual(evolution_message("toast_teen_focused"), "I'm toast teen focused now!")
+            self.assertIsNotNone(active_evolution_announcement(overlay, now_epoch=12.0))
+            self.assertIsNone(active_evolution_announcement(overlay, now_epoch=13.1))
+            self.assertIn("I&#x27;m toast teen focused now!", render_evolution_announcement_html("I'm toast teen focused now!"))
+
+    def test_avatar_reload_nudges_selected_tamacodex_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            (home / ".codex-global-state.json").write_text(
+                json.dumps({"electron-persisted-atom-state": {"selected-avatar-id": "custom:tamacodex"}, "electron-avatar-overlay-open": True}) + "\n",
+                encoding="utf-8",
+            )
+
+            report = request_avatar_reload(home, delay_seconds=0.0)
+            global_state = load_global_state(home)
+
+            self.assertTrue(report["attempted"])
+            self.assertTrue(is_tamacodex_selected(global_state))
+            self.assertTrue(global_state["electron-avatar-overlay-open"])
+
+    def test_evolution_feedback_reloads_announces_and_plays_sfx(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            played: list[tuple[str, float]] = []
+            (home / ".codex-global-state.json").write_text(
+                json.dumps({"electron-persisted-atom-state": {"selected-avatar-id": "custom:tamacodex"}}) + "\n",
+                encoding="utf-8",
+            )
+
+            report = apply_evolution_feedback(
+                home,
+                "toast_child",
+                "toast_teen_focused",
+                player=lambda filename, volume: played.append((filename, volume)) or True,
+            )
+            overlay = load_overlay_state(overlay_state_path(home))
+
+            self.assertTrue(report["avatarReload"]["attempted"])
+            self.assertEqual(report["audio"]["filename"], "evolve.wav")
+            self.assertEqual(played, [("evolve.wav", 1.0)])
+            self.assertEqual(active_evolution_announcement(overlay, now_epoch=time.time())["message"], "I'm toast teen focused now!")
+            self.assertTrue(is_tamacodex_selected(load_global_state(home)))
+
+    def test_evolution_overlay_frame_tracks_anchor(self) -> None:
+        bounds = parse_overlay_bounds(
+            {
+                "electron-avatar-overlay-bounds": {
+                    "x": 100,
+                    "y": 200,
+                    "width": 160,
+                    "height": 120,
+                    "mascot": {"left": 20, "top": 30, "width": 40, "height": 40},
+                }
+            }
+        )
+
+        frame = evolution_overlay_frame(bounds)
+
+        self.assertEqual(frame["width"], 274)
+        self.assertLess(frame["y"], 230)
 
 
 class M10OverlayAudioTests(unittest.TestCase):
@@ -458,6 +536,7 @@ class M10SupervisorGuardTests(unittest.TestCase):
         self.assertIn(".nonactivatingPanel", swift)
         self.assertIn("ignoresMouseEvents = true", swift)
         self.assertIn("hoverReady", swift)
+        self.assertIn("!hasHoverTarget || hoverReady", swift)
         self.assertIn("hoverDelaySeconds", swift)
 
     def test_native_overlay_config_carries_hover_gate(self) -> None:

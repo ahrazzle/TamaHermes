@@ -12,10 +12,10 @@ from .paths import now_iso
 SCHEMA_VERSION = 1
 
 STAGE_THRESHOLDS = {
-    "egg": 12,
-    "hatchling": 32,
-    "child": 90,
-    "teen": 180,
+    "egg": 120,
+    "hatchling": 320,
+    "child": 900,
+    "teen": 1800,
 }
 
 EVENT_ALIASES = {

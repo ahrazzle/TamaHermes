@@ -7,7 +7,7 @@ from pathlib import Path
 
 from tamacodex.catalog import load_catalog
 from tamacodex.pet_compiler import PetCompileError, install_codex_pet, validate_atlas
-from tamacodex.state import apply_event, apply_passive_rest, default_state, load_state, record_install_metadata, save_state
+from tamacodex.state import apply_event, apply_passive_rest, default_state, load_state, maybe_evolve, record_install_metadata, save_state
 from tamacodex.watcher import refresh_if_needed
 from tamacodex_gen.scripts.render_catalog import load_profiles, render
 
@@ -22,7 +22,7 @@ class M4RuntimeTests(unittest.TestCase):
         self.assertIn("aurora", catalog.machine_ids())
 
         state = default_state(catalog, line_id="toast", machine_id="aurora")
-        result = apply_event(state, catalog, "task_success", amount=12)
+        result = apply_event(state, catalog, "care", amount=300)
         self.assertEqual(result["state"]["lifeStage"], "teen")
         self.assertEqual(result["state"]["formId"], "toast_teen_focused")
 
@@ -31,9 +31,14 @@ class M4RuntimeTests(unittest.TestCase):
         recovered = apply_event(sleepy["state"], catalog, "rest", amount=4)
         self.assertNotEqual(recovered["state"]["lifeStage"], "hibernation")
 
-        adult = apply_event(default_state(catalog, line_id="mais", machine_id="aurora"), catalog, "task_success", amount=13)
-        self.assertEqual(adult["state"]["lifeStage"], "adult")
-        sleeping_adult = apply_event(adult["state"], catalog, "idle_minute", amount=240)
+        adult = default_state(catalog, line_id="mais", machine_id="aurora")
+        adult["xp"] = 1800
+        adult["counters"]["completedRuns"] = 4
+        adult["traits"]["focus"] = 12
+        maybe_evolve(adult, catalog)
+        self.assertEqual(adult["lifeStage"], "adult")
+        self.assertEqual(adult["formId"], "mais_adult_worker")
+        sleeping_adult = apply_event(adult, catalog, "idle_minute", amount=240)
         self.assertEqual(sleeping_adult["state"]["lifeStage"], "hibernation")
         self.assertEqual(sleeping_adult["state"]["previousActiveBranch"], "worker")
         recovered_adult = apply_event(sleeping_adult["state"], catalog, "rest", amount=4)
@@ -95,7 +100,7 @@ class M4RuntimeTests(unittest.TestCase):
             self.assertTrue(validate_atlas(home / "pets" / "tamacodex" / "spritesheet.webp")["ok"])
 
             state = load_state(state_path, catalog)
-            evolved = apply_event(state, catalog, "task_success", amount=12)
+            evolved = apply_event(state, catalog, "care", amount=300)
             save_state(state_path, evolved["state"])
             second = refresh_if_needed(catalog, state_path, home, build_dir)
 
@@ -107,6 +112,30 @@ class M4RuntimeTests(unittest.TestCase):
             self.assertEqual(stored["lastInstalledMachineId"], "aurora")
             self.assertEqual(stored["lastInstalledCatalogDir"], str(catalog.root))
             self.assertEqual(stored["lastInstallHash"], second["installHash"])
+
+    def test_watch_queues_evolution_feedback_after_form_change(self) -> None:
+        catalog = load_catalog(ROOT)
+        calls: list[tuple[Path, str | None, str | None]] = []
+
+        def feedbacker(home: Path, from_form: str | None, to_form: str | None) -> dict[str, object]:
+            calls.append((home, from_form, to_form))
+            return {"ok": True}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "codex-home"
+            state_path = home / "tamacodex" / "state.json"
+            build_dir = home / "tamacodex" / "build"
+            save_state(state_path, default_state(catalog, line_id="toast", machine_id="aurora"))
+            refresh_if_needed(catalog, state_path, home, build_dir, force=True, feedbacker=feedbacker)
+            self.assertEqual(calls, [])
+
+            state = load_state(state_path, catalog)
+            evolved = apply_event(state, catalog, "care", amount=300)
+            save_state(state_path, evolved["state"])
+            second = refresh_if_needed(catalog, state_path, home, build_dir, feedbacker=feedbacker)
+
+            self.assertTrue(second["evolution"]["evolved"])
+            self.assertEqual(calls, [(home, "toast_egg", "toast_teen_focused")])
 
     def test_custom_catalog_install_records_catalog_source(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

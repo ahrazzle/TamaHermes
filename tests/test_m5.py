@@ -43,7 +43,7 @@ class M5BridgeTests(unittest.TestCase):
             state = load_state(state_path, catalog)
             self.assertEqual(result["event"], "task_success")
             self.assertEqual(state["updatedAt"], "2026-05-06T10:02:00Z")
-            self.assertEqual(state["lifeStage"], "hatchling")
+            self.assertEqual(state["lifeStage"], "egg")
             self.assertEqual(state["recentEvents"][0]["event"], "task_success")
             self.assertEqual(state["recentEvents"][1]["meta"]["thread"], "abc")
             self.assertEqual(state["recentEvents"][2]["source"], "codex")
@@ -100,7 +100,7 @@ class M5BridgeTests(unittest.TestCase):
             state = json.loads(status.stdout)["state"]
 
             self.assertEqual(state["xp"], 42)
-            self.assertEqual(state["lifeStage"], "child")
+            self.assertEqual(state["lifeStage"], "egg")
             self.assertEqual(state["recentEvents"][0]["event"], "task_success")
 
 

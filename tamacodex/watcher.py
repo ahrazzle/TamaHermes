@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from .catalog import Catalog
+from .feedback import apply_evolution_feedback
 from .pet_compiler import install_codex_pet, package_source_hash
 from .state import apply_passive_rest, load_state, record_install_metadata, save_state
 from .visual_state import derive_visual_state, visual_state_hash
@@ -39,6 +40,7 @@ def refresh_if_needed(
     machine_id: str = "aurora",
     force: bool = False,
     catalog_dir: str | None = None,
+    feedbacker: Any = apply_evolution_feedback,
 ) -> dict[str, Any]:
     state = load_state(state_path, catalog, line_id=line_id, machine_id=machine_id)
     rest = apply_passive_rest(state, catalog)
@@ -69,14 +71,17 @@ def refresh_if_needed(
         }
 
     allow_overwrite = force or bool(state.get("lastInstallHash"))
+    previous_form = state.get("lastInstalledFormId")
+    evolved = "formId" in reasons and bool(previous_form) and previous_form != state["formId"]
     report = install_codex_pet(catalog, state, codex_home, build_dir, force=allow_overwrite)
     record_install_metadata(state, report)
     save_state(state_path, state)
-    return {
+    response = {
         "ok": True,
         "refreshed": True,
         "reasons": reasons,
         "passiveRest": rest if passive_rest_applied else None,
+        "evolution": {"evolved": evolved, "from": previous_form, "to": state["formId"]},
         "formId": state["formId"],
         "machineId": state["machineId"],
         "catalogDir": str(catalog.root),
@@ -85,3 +90,6 @@ def refresh_if_needed(
         "visualStateHash": report["visualStateHash"],
         "install": report,
     }
+    if evolved and feedbacker:
+        response["evolutionFeedback"] = feedbacker(codex_home, previous_form, state["formId"])
+    return response

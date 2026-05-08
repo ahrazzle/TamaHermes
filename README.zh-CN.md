@@ -210,10 +210,10 @@ tamacodex --catalog-dir build/ducky/assets doctor --line ducky --machine pulse
 | 阶段 | 触发条件 |
 | --- | --- |
 | Egg | 起始 |
-| Hatchling | 12 XP |
-| Child | 32 XP |
-| Teen | 90 XP |
-| Adult | 180 XP |
+| Hatchling | 120 XP |
+| Child | 320 XP |
+| Teen | 900 XP |
+| Adult | 1800 XP |
 | Hibernation | 能量低、健康低，或长时间 idle |
 
 信号：

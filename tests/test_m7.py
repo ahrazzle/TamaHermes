@@ -82,7 +82,7 @@ class M7CodexEventAdapterTests(unittest.TestCase):
             self.assertEqual(events, ["session_start", "prompt_sent", "review_opened", "task_success"])
 
             state = json.loads((home / "tamacodex" / "state.json").read_text(encoding="utf-8"))
-            self.assertEqual(state["lifeStage"], "hatchling")
+            self.assertEqual(state["lifeStage"], "egg")
             self.assertEqual(state["xp"], 25)
             self.assertEqual(state["counters"]["reviews"], 1)
             self.assertEqual(state["recentEvents"][0]["event"], "task_success")
