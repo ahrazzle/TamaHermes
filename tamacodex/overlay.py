@@ -310,6 +310,24 @@ def sync_codex_session_events(home: Path, catalog: Any, state_path: Path, sessio
     return records
 
 
+def refresh_installed_pet_for_records(
+    records: list[dict[str, Any]],
+    catalog: Any,
+    state_path: Path,
+    home: Path,
+    refresher: Any = None,
+) -> dict[str, Any] | None:
+    if not records:
+        return None
+    if refresher is None:
+        from .watcher import refresh_if_needed as refresher
+
+    try:
+        return refresher(catalog, state_path, home, home / "tamacodex" / "build")
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "refreshed": False, "error": str(exc)}
+
+
 def apply_native_interaction_audio(
     overlay_state: dict[str, Any],
     helper_status: dict[str, Any],
@@ -736,6 +754,13 @@ def run_native_overlay_loop(home: Path, root: Path, interval: float = 0.4) -> No
                         records = sync_codex_session_events(home, catalog, state_path)
                         overlay_state["lastCodexEventSyncAt"] = time.time()
                         overlay_state["lastCodexEventSyncCount"] = len(records)
+                        refresh_report = refresh_installed_pet_for_records(records, catalog, state_path, home)
+                        if refresh_report:
+                            overlay_state["lastInstallRefresh"] = {
+                                "ok": bool(refresh_report.get("ok")),
+                                "refreshed": bool(refresh_report.get("refreshed")),
+                                "error": refresh_report.get("error"),
+                            }
                         apply_progress_audio_for_records(records, overlay_state, selected=surface_active)
                         last_codex_event_sync = now
                     state = load_state(state_path, catalog)
@@ -798,6 +823,13 @@ def run_headless_audio_loop(home: Path, root: Path, interval: float = 0.8) -> No
                 now = time.monotonic()
                 if now - last_codex_event_sync >= 1.0:
                     records = sync_codex_session_events(home, catalog, state_path)
+                    refresh_report = refresh_installed_pet_for_records(records, catalog, state_path, home)
+                    if refresh_report:
+                        overlay_state["lastInstallRefresh"] = {
+                            "ok": bool(refresh_report.get("ok")),
+                            "refreshed": bool(refresh_report.get("refreshed")),
+                            "error": refresh_report.get("error"),
+                        }
                     apply_progress_audio_for_records(records, overlay_state, selected=surface_active)
                     save_overlay_state(overlay_file, overlay_state)
                     last_codex_event_sync = now

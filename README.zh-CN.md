@@ -222,6 +222,33 @@ tamacodex --catalog-dir build/ducky/assets doctor --line ducky --machine pulse
 | `care` | energy、mood、health、bond 上升 |
 | `rest` | energy 和 health 恢复 |
 
+**🫶 怎么照顾它。**
+
+```bash
+# 喂一下、陪玩、清理、拍拍，都算 care。
+tamacodex event care --amount 1 --install
+tamacodex event feed --amount 1 --install
+tamacodex event play --amount 1 --install
+tamacodex event clean --amount 1 --install
+
+# 如果已经休眠，energy=0 时通常需要多一点 care 才能醒。
+tamacodex event care --amount 7 --install
+```
+
+`care` 每次会给：`+3 XP`、`+5 energy`、`+5 mood`、`+4 health`、`+3 bond`、`+2 care trait`、`-2 mess`，并减少 care mistake 计数。`--amount N` 会把这些数值乘以 N。`--install` 会顺手重建并安装 Codex custom pet package，让你看到的形态立即跟着状态更新。
+
+**💤 rest 是怎么算的。**
+
+```bash
+# 让它安静恢复一段时间。
+tamacodex event rest --amount 1 --install
+
+# energy=0 且 health 还正常时，4 次 rest 通常足够从 hibernation 醒来。
+tamacodex event rest --amount 4 --install
+```
+
+`rest` 每次代表 10 分钟安静恢复：`+10 energy`、`+3 health`、`+1 mood`、`-3 restlessness`，同时 `quietMinutes +10`。它不加 XP，也不代表你正在工作。Tamacodex 从 hibernation 醒来需要 `energy >= 35` 且 `health >= 35`。
+
 **🎚 常用小控制。**
 
 ```bash

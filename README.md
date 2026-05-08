@@ -216,6 +216,33 @@ Signals:
 | `care` | energy, mood, health, bond up |
 | `rest` | energy and health recover |
 
+**🫶 Care For It.**
+
+```bash
+# Feed, play, clean, and gentle care all count as care.
+tamacodex event care --amount 1 --install
+tamacodex event feed --amount 1 --install
+tamacodex event play --amount 1 --install
+tamacodex event clean --amount 1 --install
+
+# If it is hibernating from energy=0, it usually needs more care to wake up.
+tamacodex event care --amount 7 --install
+```
+
+Each `care` gives `+3 XP`, `+5 energy`, `+5 mood`, `+4 health`, `+3 bond`, `+2 care trait`, and `-2 mess`, then reduces care mistakes. `--amount N` multiplies those changes. `--install` rebuilds and installs the Codex custom pet package so the visible form updates immediately.
+
+**💤 How Rest Works.**
+
+```bash
+# Give it a quiet recovery block.
+tamacodex event rest --amount 1 --install
+
+# From energy=0 with decent health, four rest blocks usually wake it from hibernation.
+tamacodex event rest --amount 4 --install
+```
+
+Each `rest` represents 10 quiet minutes: `+10 energy`, `+3 health`, `+1 mood`, `-3 restlessness`, and `quietMinutes +10`. It does not add XP and does not mean active work. Tamacodex wakes from hibernation when `energy >= 35` and `health >= 35`.
+
 **🎚 Useful little controls.**
 
 ```bash

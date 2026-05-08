@@ -107,6 +107,7 @@ def default_state(catalog: Catalog, line_id: str = "toast", machine_id: str = "a
         "branch": None,
         "formId": form_id,
         "previousActiveStage": "egg",
+        "previousActiveBranch": None,
         "level": 1,
         "xp": 0,
         "stats": {
@@ -191,6 +192,7 @@ def migrate_state(state: dict[str, Any], catalog: Catalog) -> None:
     state.setdefault("lastInstalledVisualState", None)
     state.setdefault("lastInstalledVisualHash", None)
     state.setdefault("previousActiveStage", state["lifeStage"])
+    state.setdefault("previousActiveBranch", state.get("branch"))
     for key, value in {"energy": 82, "mood": 72, "health": 100, "bond": 0, "mess": 0}.items():
         state["stats"].setdefault(key, value)
     for key in ["focus", "resilience", "restlessness", "care"]:
@@ -262,6 +264,23 @@ def choose_adult_branch(state: dict[str, Any]) -> str:
     return "calm"
 
 
+def restore_branch_for_stage(state: dict[str, Any], catalog: Catalog, stage: str) -> str | None:
+    if stage in {"egg", "hatchling", "child"}:
+        return None
+    previous = state.get("previousActiveBranch")
+    if isinstance(previous, str) and previous:
+        try:
+            catalog.find_form(state["lineId"], stage, previous)
+            return previous
+        except Exception:  # noqa: BLE001
+            pass
+    if stage == "teen":
+        return choose_teen_branch(state)
+    if stage == "adult":
+        return choose_adult_branch(state)
+    return None
+
+
 def maybe_evolve(state: dict[str, Any], catalog: Catalog) -> dict[str, Any]:
     before = state.get("formId")
     stage = state["lifeStage"]
@@ -271,12 +290,12 @@ def maybe_evolve(state: dict[str, Any], catalog: Catalog) -> dict[str, Any]:
 
     if stage != "hibernation" and (stats["energy"] <= 4 or stats["health"] <= 12 or counters["idleMinutes"] >= 240):
         state["previousActiveStage"] = stage
+        state["previousActiveBranch"] = state.get("branch") if stage in {"teen", "adult"} else None
         state["lifeStage"] = "hibernation"
         state["branch"] = None
     elif stage == "hibernation" and stats["energy"] >= 35 and stats["health"] >= 35:
         state["lifeStage"] = state.get("previousActiveStage") or "child"
-        if state["lifeStage"] in {"egg", "hatchling", "child"}:
-            state["branch"] = None
+        state["branch"] = restore_branch_for_stage(state, catalog, state["lifeStage"])
     else:
         while state["lifeStage"] in STAGE_THRESHOLDS and xp >= STAGE_THRESHOLDS[state["lifeStage"]]:
             stage = state["lifeStage"]

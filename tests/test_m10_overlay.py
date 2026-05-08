@@ -15,6 +15,7 @@ from tamacodex.overlay import (
     apply_native_interaction_audio,
     apply_progress_audio_for_records,
     apply_nonactivating_window_style,
+    refresh_installed_pet_for_records,
     render_native_overlay_html,
     sync_codex_session_events,
     tamago_palette,
@@ -26,6 +27,7 @@ from tamacodex.overlay_audio import (
     QUIET_VOLUME,
     apply_audio_decision,
     apply_interaction_audio,
+    afplay,
     decide_audio,
 )
 from tamacodex.overlay_state import (
@@ -248,16 +250,23 @@ class M10OverlayAudioTests(unittest.TestCase):
         self.assertEqual(decision.volume, QUIET_VOLUME)
         self.assertLess(decision.volume, DEFAULT_VOLUME)
 
-    def test_default_audio_volumes_are_audible_but_below_full_scale(self) -> None:
+    def test_default_audio_volumes_match_direct_file_playback(self) -> None:
         overlay = default_overlay_state()
         event_decision = decide_audio(self.state_with_event(), overlay)
         hover_decision = apply_interaction_audio("hover", overlay, player=lambda _filename, _volume: True, now_epoch=10.0)
 
         self.assertEqual(event_decision.volume, DEFAULT_VOLUME)
         self.assertEqual(hover_decision.volume, INTERACTION_VOLUME)
-        self.assertGreater(DEFAULT_VOLUME, INTERACTION_VOLUME)
+        self.assertEqual(DEFAULT_VOLUME, 1.0)
+        self.assertEqual(INTERACTION_VOLUME, 1.0)
         self.assertGreater(INTERACTION_VOLUME, QUIET_VOLUME)
-        self.assertLess(DEFAULT_VOLUME, 1.0)
+
+    def test_afplay_default_uses_full_scale_volume(self) -> None:
+        with mock.patch("tamacodex.overlay_audio.shutil.which", return_value="/usr/bin/afplay"), mock.patch("tamacodex.overlay_audio.subprocess.Popen") as popen:
+            self.assertTrue(afplay("task_success.wav"))
+
+        command = popen.call_args.args[0]
+        self.assertEqual(command[0:3], ["/usr/bin/afplay", "-v", "1.00"])
 
     def test_interaction_audio_plays_hover_and_cools_down(self) -> None:
         overlay = default_overlay_state()
@@ -488,6 +497,24 @@ class M10SupervisorGuardTests(unittest.TestCase):
             state = json.loads(state_path.read_text(encoding="utf-8"))
             self.assertEqual(state["recentEvents"][0]["event"], "task_success")
             self.assertEqual(state["recentEvents"][1]["event"], "prompt_sent")
+
+    def test_sidecar_refreshes_installed_pet_after_new_session_records(self) -> None:
+        calls: list[tuple[object, Path, Path, Path]] = []
+
+        def refresher(catalog: object, state_path: Path, home: Path, build_dir: Path) -> dict[str, object]:
+            calls.append((catalog, state_path, home, build_dir))
+            return {"ok": True, "refreshed": True}
+
+        home = Path("/tmp/codex-home")
+        state_path = home / "tamacodex" / "state.json"
+        report = refresh_installed_pet_for_records([{"event": "prompt_sent"}], object(), state_path, home, refresher=refresher)
+
+        self.assertEqual(report, {"ok": True, "refreshed": True})
+        self.assertEqual(calls[0][1], state_path)
+        self.assertEqual(calls[0][2], home)
+        self.assertEqual(calls[0][3], home / "tamacodex" / "build")
+        self.assertIsNone(refresh_installed_pet_for_records([], object(), state_path, home, refresher=refresher))
+        self.assertEqual(len(calls), 1)
 
 
 class M10OverlayCliTests(unittest.TestCase):

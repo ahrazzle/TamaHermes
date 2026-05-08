@@ -31,6 +31,22 @@ class M4RuntimeTests(unittest.TestCase):
         recovered = apply_event(sleepy["state"], catalog, "rest", amount=4)
         self.assertNotEqual(recovered["state"]["lifeStage"], "hibernation")
 
+        adult = apply_event(default_state(catalog, line_id="mais", machine_id="aurora"), catalog, "task_success", amount=13)
+        self.assertEqual(adult["state"]["lifeStage"], "adult")
+        sleeping_adult = apply_event(adult["state"], catalog, "idle_minute", amount=240)
+        self.assertEqual(sleeping_adult["state"]["lifeStage"], "hibernation")
+        self.assertEqual(sleeping_adult["state"]["previousActiveBranch"], "worker")
+        recovered_adult = apply_event(sleeping_adult["state"], catalog, "rest", amount=4)
+        self.assertEqual(recovered_adult["state"]["lifeStage"], "adult")
+        self.assertEqual(recovered_adult["state"]["branch"], "worker")
+        self.assertEqual(recovered_adult["state"]["formId"], "mais_adult_worker")
+
+        legacy_sleeping_adult = dict(sleeping_adult["state"])
+        legacy_sleeping_adult["previousActiveBranch"] = None
+        recovered_legacy = apply_event(legacy_sleeping_adult, catalog, "rest", amount=4)
+        self.assertEqual(recovered_legacy["state"]["lifeStage"], "adult")
+        self.assertIsNotNone(recovered_legacy["state"]["branch"])
+
     def test_watch_refreshes_after_evolution_and_records_qa(self) -> None:
         catalog = load_catalog(ROOT)
         with tempfile.TemporaryDirectory() as tmp:

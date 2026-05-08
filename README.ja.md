@@ -222,6 +222,33 @@ tamacodex --catalog-dir build/ducky/assets doctor --line ducky --machine pulse
 | `care` | energy、mood、health、bond 上昇 |
 | `rest` | energy と health が回復 |
 
+**🫶 お世話のしかた。**
+
+```bash
+# ごはん、遊び、掃除、やさしいお世話はすべて care です。
+tamacodex event care --amount 1 --install
+tamacodex event feed --amount 1 --install
+tamacodex event play --amount 1 --install
+tamacodex event clean --amount 1 --install
+
+# energy=0 で hibernation している場合は、起こすまで少し多めの care が必要です。
+tamacodex event care --amount 7 --install
+```
+
+`care` 1 回ごとに `+3 XP`、`+5 energy`、`+5 mood`、`+4 health`、`+3 bond`、`+2 care trait`、`-2 mess` が入ります。care mistake のカウントも減ります。`--amount N` はその変化量を N 倍します。`--install` を付けると Codex custom pet package も再ビルドしてインストールされるので、見えている姿がすぐ状態に追いつきます。
+
+**💤 rest の計算。**
+
+```bash
+# 静かに回復する時間を与えます。
+tamacodex event rest --amount 1 --install
+
+# energy=0 で health が十分ある場合、通常は rest 4 回で hibernation から起きます。
+tamacodex event rest --amount 4 --install
+```
+
+`rest` 1 回は静かな回復 10 分ぶんです。`+10 energy`、`+3 health`、`+1 mood`、`-3 restlessness`、さらに `quietMinutes +10` になります。XP は増えず、作業中という意味でもありません。Tamacodex が hibernation から起きる条件は `energy >= 35` かつ `health >= 35` です。
+
 **🎚 便利な小さな操作。**
 
 ```bash
