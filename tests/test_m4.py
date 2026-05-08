@@ -97,6 +97,9 @@ class M4RuntimeTests(unittest.TestCase):
             self.assertEqual(first["formId"], "toast_egg")
             self.assertTrue(Path(first["install"]["qa"]["validationWebp"]).exists())
             self.assertTrue(Path(first["install"]["qa"]["contactSheet"]).exists())
+            manifest = json.loads((home / "pets" / "tamacodex" / "pet.json").read_text(encoding="utf-8"))
+            self.assertTrue(manifest["spritesheetPath"].startswith("spritesheet-"))
+            self.assertTrue(validate_atlas(home / "pets" / "tamacodex" / manifest["spritesheetPath"])["ok"])
             self.assertTrue(validate_atlas(home / "pets" / "tamacodex" / "spritesheet.webp")["ok"])
 
             state = load_state(state_path, catalog)
@@ -165,6 +168,7 @@ class M4RuntimeTests(unittest.TestCase):
 
             manifest = json.loads((home / "pets" / "tamacodex" / "pet.json").read_text(encoding="utf-8"))
             self.assertEqual(manifest["displayName"], "Ducky")
+            self.assertEqual(manifest["spritesheetPath"], Path(report["spritesheet"]).name)
             self.assertEqual(report["formId"], "ducky_egg")
             self.assertEqual(state["lastInstalledCatalogDir"], str(catalog.root))
             self.assertTrue(Path(report["qa"]["validationPng"]).exists())

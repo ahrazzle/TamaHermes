@@ -119,14 +119,18 @@ class M91NativeVisualStateTests(unittest.TestCase):
 
             first = refresh_if_needed(catalog, state_path, home, build_dir, force=True)
             self.assertTrue(first["refreshed"])
-            first_sheet = (home / "pets" / "tamacodex" / "spritesheet.webp").read_bytes()
+            first_manifest = json.loads((home / "pets" / "tamacodex" / "pet.json").read_text(encoding="utf-8"))
+            first_sheet_path = home / "pets" / "tamacodex" / first_manifest["spritesheetPath"]
+            first_sheet = first_sheet_path.read_bytes()
 
             same_bin = load_state(state_path, catalog)
             same_bin["stats"]["energy"] = 81
             save_state(state_path, same_bin)
             second = refresh_if_needed(catalog, state_path, home, build_dir)
             self.assertFalse(second["refreshed"])
-            self.assertEqual(first_sheet, (home / "pets" / "tamacodex" / "spritesheet.webp").read_bytes())
+            second_manifest = json.loads((home / "pets" / "tamacodex" / "pet.json").read_text(encoding="utf-8"))
+            self.assertEqual(first_manifest["spritesheetPath"], second_manifest["spritesheetPath"])
+            self.assertEqual(first_sheet, (home / "pets" / "tamacodex" / second_manifest["spritesheetPath"]).read_bytes())
 
             crossed_bin = load_state(state_path, catalog)
             crossed_bin["stats"]["energy"] = 79
@@ -134,7 +138,9 @@ class M91NativeVisualStateTests(unittest.TestCase):
             third = refresh_if_needed(catalog, state_path, home, build_dir)
             self.assertTrue(third["refreshed"])
             self.assertEqual(third["reasons"], ["visualState"])
-            self.assertNotEqual(first_sheet, (home / "pets" / "tamacodex" / "spritesheet.webp").read_bytes())
+            third_manifest = json.loads((home / "pets" / "tamacodex" / "pet.json").read_text(encoding="utf-8"))
+            self.assertNotEqual(first_manifest["spritesheetPath"], third_manifest["spritesheetPath"])
+            self.assertNotEqual(first_sheet, (home / "pets" / "tamacodex" / third_manifest["spritesheetPath"]).read_bytes())
 
             stored = json.loads(state_path.read_text(encoding="utf-8"))
             self.assertEqual(stored["lastInstalledVisualHash"], third["visualStateHash"])

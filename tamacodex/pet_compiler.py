@@ -31,6 +31,7 @@ CODEX_ROWS = [
 ]
 
 VISUAL_OVERLAY_VERSION = "m9.1-status-strip-v2"
+SPRITESHEET_BASENAME = "spritesheet.webp"
 
 
 class PetCompileError(RuntimeError):
@@ -546,7 +547,7 @@ def build_codex_pet(
             )
 
     png_path = output_dir / "spritesheet.png"
-    webp_path = output_dir / "spritesheet.webp"
+    webp_path = output_dir / SPRITESHEET_BASENAME
     manifest_path = output_dir / "pet.json"
     report_path = output_dir / "build_report.json"
     qa_dir = output_dir / "qa"
@@ -559,7 +560,7 @@ def build_codex_pet(
         "id": pet_id,
         "displayName": display_name,
         "description": f"{display_name} form {form_info.get('stage')}:{form_info.get('branch') or 'root'} from the bundled catalog.",
-        "spritesheetPath": "spritesheet.webp",
+        "spritesheetPath": SPRITESHEET_BASENAME,
     }
     manifest_path.write_text(json.dumps(pet_manifest, indent=2) + "\n", encoding="utf-8")
     validation_png = validate_atlas(png_path)
@@ -620,7 +621,7 @@ def build_codex_pet(
 
 def install_codex_pet(catalog: Catalog, state: dict[str, Any], codex_home: Path, build_dir: Path, force: bool = False) -> dict[str, Any]:
     pet_dir = codex_home / "pets" / state.get("petId", "tamacodex")
-    target_sheet = pet_dir / "spritesheet.webp"
+    target_sheet = pet_dir / SPRITESHEET_BASENAME
     target_manifest = pet_dir / "pet.json"
     if pet_dir.exists() and not force and (target_sheet.exists() or target_manifest.exists()):
         raise PetCompileError(
@@ -628,13 +629,21 @@ def install_codex_pet(catalog: Catalog, state: dict[str, Any], codex_home: Path,
         )
     report = build_codex_pet(catalog, state, build_dir)
     pet_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(build_dir / "spritesheet.webp", target_sheet)
-    shutil.copy2(build_dir / "pet.json", target_manifest)
+    versioned_sheet_name = f"spritesheet-{report['installHash'][:12]}.webp"
+    versioned_sheet = pet_dir / versioned_sheet_name
+    shutil.copy2(build_dir / SPRITESHEET_BASENAME, target_sheet)
+    shutil.copy2(build_dir / SPRITESHEET_BASENAME, versioned_sheet)
+
+    manifest = json.loads((build_dir / "pet.json").read_text(encoding="utf-8"))
+    manifest["spritesheetPath"] = versioned_sheet_name
+    target_manifest.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     install_report = {
         "ok": True,
         "petDir": str(pet_dir),
         "manifest": str(target_manifest),
-        "spritesheet": str(target_sheet),
+        "spritesheet": str(versioned_sheet),
+        "legacySpritesheet": str(target_sheet),
+        "spritesheetPath": versioned_sheet_name,
         "formId": report["formId"],
         "machineId": report["machineId"],
         "catalogDir": report["catalogDir"],

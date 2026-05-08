@@ -100,8 +100,11 @@ class M7PluginHookTests(unittest.TestCase):
             )
             setup_payload = json.loads(setup.stdout)
             self.assertTrue(setup_payload["refresh"]["refreshed"])
-            self.assertTrue((home / "pets" / "tamacodex" / "pet.json").exists())
+            manifest_path = home / "pets" / "tamacodex" / "pet.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertTrue(manifest_path.exists())
             self.assertTrue((home / "pets" / "tamacodex" / "spritesheet.webp").exists())
+            self.assertTrue((home / "pets" / "tamacodex" / manifest["spritesheetPath"]).exists())
 
             run_hook(
                 home,
