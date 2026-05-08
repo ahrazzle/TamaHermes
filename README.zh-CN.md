@@ -1,7 +1,7 @@
 # Tamacodex
 
 <p align="center">
-  <img src="docs/media/hero-toast.png" alt="Tamacodex Toast hero banner" width="100%">
+  <img src="docs/media/hero-90s-tamacodex.png" alt="Tamacodex 90s-style hero banner" width="100%">
 </p>
 
 <p align="center">
