@@ -15,6 +15,11 @@
 </p>
 
 <p align="center">
+  <strong>仍在开发中。</strong><br>
+  可能会有粗糙边角、奇怪的宠物行为和偶发 bug。欢迎 fork、提 issue 或贡献 PR。
+</p>
+
+<p align="center">
   <a href="README.md">English</a> ·
   <strong>简体中文</strong> ·
   <a href="README.ja.md">日本語</a> ·

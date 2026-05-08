@@ -15,6 +15,11 @@
 </p>
 
 <p align="center">
+  <strong>Still in active development.</strong><br>
+  Expect rough edges, weird pet behavior, and occasional bugs. Forks, issues, and contributions are very welcome.
+</p>
+
+<p align="center">
   <a href="#quick-start">Quick Start</a> ·
   <a href="#switch-things">Switch Things</a> ·
   <a href="#hatch-your-own-tamacodex">Hatch Your Own</a> ·

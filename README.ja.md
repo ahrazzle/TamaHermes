@@ -15,6 +15,11 @@
 </p>
 
 <p align="center">
+  <strong>現在も開発中です。</strong><br>
+  まだ粗い部分や不思議なペット挙動、まれな bug が残っているかもしれません。fork、issue、PR を歓迎します。
+</p>
+
+<p align="center">
   <a href="README.md">English</a> ·
   <a href="README.zh-CN.md">简体中文</a> ·
   <strong>日本語</strong> ·

@@ -15,6 +15,11 @@
 </p>
 
 <p align="center">
+  <strong>아직 활발히 개발 중입니다.</strong><br>
+  거친 부분, 이상한 펫 행동, 가끔 생기는 bug가 있을 수 있습니다. fork, issue, PR을 환영합니다.
+</p>
+
+<p align="center">
   <a href="README.md">English</a> ·
   <a href="README.zh-CN.md">简体中文</a> ·
   <a href="README.ja.md">日本語</a> ·
