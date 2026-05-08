@@ -40,6 +40,7 @@ from tamacodex.overlay_state import (
     status_snapshot,
     update_surface_activity,
 )
+from tamacodex.state import default_state, save_state
 from tamacodex.overlay_supervisor import claim_pid_file, launch_agent_plist, pid_running, start_overlay_process, supervise_once, write_pid
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -515,6 +516,20 @@ class M10SupervisorGuardTests(unittest.TestCase):
         self.assertEqual(calls[0][3], home / "tamacodex" / "build")
         self.assertIsNone(refresh_installed_pet_for_records([], object(), state_path, home, refresher=refresher))
         self.assertEqual(len(calls), 1)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            catalog = load_catalog(ROOT)
+            rest_home = Path(tmp) / "codex-home"
+            rest_state_path = rest_home / "tamacodex" / "state.json"
+            state = default_state(catalog, line_id="toast", machine_id="aurora")
+            state["updatedAt"] = "2026-05-07T10:00:00Z"
+            state["stats"]["energy"] = 50
+            save_state(rest_state_path, state, touch=False)
+
+            report = refresh_installed_pet_for_records([], catalog, rest_state_path, rest_home, refresher=refresher)
+
+        self.assertEqual(report, {"ok": True, "refreshed": True})
+        self.assertEqual(calls[-1][1], rest_state_path)
 
 
 class M10OverlayCliTests(unittest.TestCase):

@@ -7,7 +7,7 @@ from pathlib import Path
 
 from tamacodex.catalog import load_catalog
 from tamacodex.pet_compiler import PetCompileError, install_codex_pet, validate_atlas
-from tamacodex.state import apply_event, default_state, load_state, record_install_metadata, save_state
+from tamacodex.state import apply_event, apply_passive_rest, default_state, load_state, record_install_metadata, save_state
 from tamacodex.watcher import refresh_if_needed
 from tamacodex_gen.scripts.render_catalog import load_profiles, render
 
@@ -46,6 +46,38 @@ class M4RuntimeTests(unittest.TestCase):
         recovered_legacy = apply_event(legacy_sleeping_adult, catalog, "rest", amount=4)
         self.assertEqual(recovered_legacy["state"]["lifeStage"], "adult")
         self.assertIsNotNone(recovered_legacy["state"]["branch"])
+
+    def test_passive_rest_recovers_elapsed_quiet_time(self) -> None:
+        catalog = load_catalog(ROOT)
+        state = default_state(catalog, line_id="toast", machine_id="aurora")
+        state["updatedAt"] = "2026-05-07T10:00:00Z"
+        state["stats"]["energy"] = 73
+
+        result = apply_passive_rest(state, catalog, at="2026-05-07T10:45:00Z")
+
+        self.assertTrue(result["applied"])
+        self.assertEqual(result["amount"], 3)
+        self.assertEqual(result["elapsedMinutes"], 45)
+        self.assertEqual(result["state"]["stats"]["energy"], 100)
+        self.assertEqual(result["state"]["counters"]["quietMinutes"], 30)
+        self.assertEqual(result["state"]["recentEvents"][0]["event"], "rest")
+        self.assertEqual(result["state"]["recentEvents"][0]["source"], "tamacodex-passive-rest")
+
+    def test_passive_rest_wakes_hibernating_pet(self) -> None:
+        catalog = load_catalog(ROOT)
+        sleepy = apply_event(
+            default_state(catalog, line_id="toast", machine_id="aurora"),
+            catalog,
+            "idle_minute",
+            amount=240,
+            at="2026-05-07T10:00:00Z",
+        )
+
+        result = apply_passive_rest(sleepy["state"], catalog, at="2026-05-07T12:00:00Z")
+
+        self.assertTrue(result["applied"])
+        self.assertEqual(result["state"]["stats"]["energy"], 100)
+        self.assertNotEqual(result["state"]["lifeStage"], "hibernation")
 
     def test_watch_refreshes_after_evolution_and_records_qa(self) -> None:
         catalog = load_catalog(ROOT)

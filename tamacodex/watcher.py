@@ -5,7 +5,7 @@ from typing import Any
 
 from .catalog import Catalog
 from .pet_compiler import install_codex_pet, package_source_hash
-from .state import load_state, record_install_metadata, save_state
+from .state import apply_passive_rest, load_state, record_install_metadata, save_state
 from .visual_state import derive_visual_state, visual_state_hash
 
 
@@ -41,6 +41,10 @@ def refresh_if_needed(
     catalog_dir: str | None = None,
 ) -> dict[str, Any]:
     state = load_state(state_path, catalog, line_id=line_id, machine_id=machine_id)
+    rest = apply_passive_rest(state, catalog)
+    passive_rest_applied = bool(rest["applied"])
+    if passive_rest_applied:
+        state = rest["state"]
     catalog_selection_changed = bool(catalog_dir and state.get("catalogDir") != catalog_dir)
     if catalog_dir:
         state["catalogDir"] = catalog_dir
@@ -49,12 +53,13 @@ def refresh_if_needed(
     desired_visual_hash = visual_state_hash(desired_visual_state)
     reasons = refresh_reasons(state, catalog, desired_hash, desired_visual_hash)
     if not reasons:
-        if catalog_selection_changed:
-            save_state(state_path, state)
+        if catalog_selection_changed or passive_rest_applied:
+            save_state(state_path, state, touch=not passive_rest_applied)
         return {
             "ok": True,
             "refreshed": False,
             "reasons": [],
+            "passiveRest": rest if passive_rest_applied else None,
             "formId": state["formId"],
             "machineId": state["machineId"],
             "catalogDir": str(catalog.root),
@@ -71,6 +76,7 @@ def refresh_if_needed(
         "ok": True,
         "refreshed": True,
         "reasons": reasons,
+        "passiveRest": rest if passive_rest_applied else None,
         "formId": state["formId"],
         "machineId": state["machineId"],
         "catalogDir": str(catalog.root),

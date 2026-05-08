@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from copy import deepcopy
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -76,10 +77,98 @@ CODEX_STATE_BY_EVENT = {
 }
 
 BOUNDED_STATS = {"energy", "mood", "health", "bond", "mess"}
+PASSIVE_REST_BLOCK_MINUTES = 10
+PASSIVE_REST_MAX_BLOCKS = 48
 
 
 def clamp(value: int, low: int = 0, high: int = 100) -> int:
     return max(low, min(high, value))
+
+
+def _ceil_div(value: int, divisor: int) -> int:
+    return max(0, (value + divisor - 1) // divisor)
+
+
+def _int_value(value: Any, default: int = 0) -> int:
+    if isinstance(value, bool):
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def parse_iso_timestamp(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip()
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def passive_rest_plan(state: dict[str, Any], at: str | None = None) -> dict[str, int]:
+    """Return the rest blocks owed since the ledger was last updated."""
+    now_text = at or now_iso()
+    now = parse_iso_timestamp(now_text)
+    previous = parse_iso_timestamp(state.get("updatedAt"))
+    if not now or not previous or now <= previous:
+        return {"amount": 0, "elapsedMinutes": 0}
+
+    elapsed_minutes = int((now - previous).total_seconds() // 60)
+    elapsed_blocks = elapsed_minutes // PASSIVE_REST_BLOCK_MINUTES
+    if elapsed_blocks <= 0:
+        return {"amount": 0, "elapsedMinutes": elapsed_minutes}
+
+    stats = state.get("stats", {})
+    traits = state.get("traits", {})
+    needed_blocks = max(
+        _ceil_div(100 - _int_value(stats.get("energy"), 100), 10),
+        _ceil_div(100 - _int_value(stats.get("health"), 100), 3),
+        _ceil_div(_int_value(traits.get("restlessness"), 0), 3),
+    )
+    if needed_blocks <= 0:
+        return {"amount": 0, "elapsedMinutes": elapsed_minutes}
+
+    return {
+        "amount": min(elapsed_blocks, needed_blocks, PASSIVE_REST_MAX_BLOCKS),
+        "elapsedMinutes": elapsed_minutes,
+    }
+
+
+def apply_passive_rest(state: dict[str, Any], catalog: Catalog, at: str | None = None) -> dict[str, Any]:
+    timestamp = at or now_iso()
+    plan = passive_rest_plan(state, timestamp)
+    amount = plan["amount"]
+    if amount <= 0:
+        return {
+            "state": state,
+            "event": "rest",
+            "amount": 0,
+            "elapsedMinutes": plan["elapsedMinutes"],
+            "evolution": {"evolved": False, "from": state.get("formId"), "to": state.get("formId")},
+            "applied": False,
+        }
+
+    result = apply_event(state, catalog, "rest", amount=amount, at=timestamp)
+    recent = result["state"]["recentEvents"][0]
+    recent["source"] = "tamacodex-passive-rest"
+    recent["meta"] = {
+        "elapsedMinutes": plan["elapsedMinutes"],
+        "blockMinutes": PASSIVE_REST_BLOCK_MINUTES,
+    }
+    return {
+        **result,
+        "amount": amount,
+        "elapsedMinutes": plan["elapsedMinutes"],
+        "applied": True,
+    }
 
 
 def normalize_event(event_name: str) -> str:

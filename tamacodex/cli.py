@@ -30,7 +30,7 @@ from .paths import codex_home as resolve_codex_home
 from .paths import default_state_path, repo_root as resolve_repo_root
 from .overlay_state import global_state_path, is_tamacodex_selected, load_global_state, load_overlay_state, overlay_state_path, save_overlay_state
 from .overlay_supervisor import ensure_overlay_supervisor, overlay_process_alive, pid_running, read_pid, stop_overlay_process, supervisor_pid_path
-from .state import apply_event, default_state, load_state, record_install_metadata, save_state
+from .state import apply_event, apply_passive_rest, default_state, load_state, record_install_metadata, save_state
 from .visual_state import derive_visual_state
 
 
@@ -172,8 +172,14 @@ def cmd_init(args: argparse.Namespace) -> None:
 
 
 def cmd_status(args: argparse.Namespace) -> None:
-    _root, _home, state_path, catalog = context(args)
+    _root, home, state_path, catalog = context(args)
     state = load_state(state_path, catalog, line_id=args.line, machine_id=args.machine)
+    rest = apply_passive_rest(state, catalog)
+    if rest["applied"]:
+        state = rest["state"]
+        save_state(state_path, state, touch=False)
+        refresh_if_needed(catalog, state_path, home, home / "tamacodex" / "build")
+        state = load_state(state_path, catalog, line_id=args.line, machine_id=args.machine)
     state["formId"] = catalog.find_form(state["lineId"], state["lifeStage"], state.get("branch") if state["lifeStage"] in {"teen", "adult"} else None)
     if args.json:
         print_json({"ok": True, "statePath": str(state_path), "state": state, "visualState": derive_visual_state(state)})
@@ -197,6 +203,9 @@ def cmd_event(args: argparse.Namespace) -> None:
         raise SystemExit("event name is required unless --jsonl is used")
     _root, home, state_path, catalog = context(args)
     state = load_state(state_path, catalog, line_id=args.line, machine_id=args.machine)
+    rest = apply_passive_rest(state, catalog)
+    if rest["applied"]:
+        state = rest["state"]
     remember_catalog_selection(state, catalog, args)
     result = apply_event(state, catalog, args.event, amount=args.amount)
     save_state(state_path, result["state"])

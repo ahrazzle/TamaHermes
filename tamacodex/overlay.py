@@ -30,7 +30,7 @@ from .overlay_state import (
 )
 from .paths import codex_home as resolve_codex_home
 from .paths import default_state_path, repo_root as resolve_repo_root
-from .state import load_state
+from .state import load_state, passive_rest_plan
 
 
 def _clamp(value: int, low: int, high: int) -> int:
@@ -318,7 +318,12 @@ def refresh_installed_pet_for_records(
     refresher: Any = None,
 ) -> dict[str, Any] | None:
     if not records:
-        return None
+        try:
+            if passive_rest_plan(load_state(state_path, catalog))["amount"] <= 0:
+                return None
+        except Exception:  # noqa: BLE001
+            return None
+        records = [{"event": "rest", "source": "tamacodex-passive-rest"}]
     if refresher is None:
         from .watcher import refresh_if_needed as refresher
 

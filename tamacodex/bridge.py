@@ -8,7 +8,7 @@ from typing import Any, Iterable, TextIO
 
 from .catalog import Catalog
 from .paths import now_iso
-from .state import apply_event, load_state, migrate_state, normalize_event, save_state
+from .state import apply_event, apply_passive_rest, load_state, migrate_state, normalize_event, save_state
 
 BRIDGE_SCHEMA = "tamacodex.bridge.event.v1"
 EXPORT_SCHEMA = "tamacodex.export.v1"
@@ -191,9 +191,14 @@ def apply_bridge_event(
     state = load_state(state_path, catalog, line_id=line_id, machine_id=machine_id)
     if catalog_dir:
         state["catalogDir"] = catalog_dir
+    rest = apply_passive_rest(state, catalog, at=record.get("at"))
+    if rest["applied"]:
+        state = rest["state"]
     event = normalize_event(str(record["event"]))
     meta = record.get("meta") if isinstance(record.get("meta"), dict) else {}
     if duplicate_token_usage(state, event, meta):
+        if rest["applied"]:
+            save_state(state_path, state, touch=False)
         return {
             "ok": True,
             "schema": BRIDGE_SCHEMA,
