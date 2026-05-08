@@ -19,7 +19,14 @@ from tamacodex.overlay import (
     tamago_palette,
     write_native_overlay_config,
 )
-from tamacodex.overlay_audio import apply_audio_decision, apply_interaction_audio, decide_audio
+from tamacodex.overlay_audio import (
+    DEFAULT_VOLUME,
+    INTERACTION_VOLUME,
+    QUIET_VOLUME,
+    apply_audio_decision,
+    apply_interaction_audio,
+    decide_audio,
+)
 from tamacodex.overlay_state import (
     avatar_overlay_open,
     default_overlay_state,
@@ -237,7 +244,19 @@ class M10OverlayAudioTests(unittest.TestCase):
         overlay["quietHours"] = {"enabled": True, "start": "22:00", "end": "07:00"}
         decision = decide_audio(self.state_with_event(), overlay, now=datetime(2026, 5, 7, 23, 30))
         self.assertTrue(decision.should_play)
-        self.assertLess(decision.volume, 0.2)
+        self.assertEqual(decision.volume, QUIET_VOLUME)
+        self.assertLess(decision.volume, DEFAULT_VOLUME)
+
+    def test_default_audio_volumes_are_audible_but_below_full_scale(self) -> None:
+        overlay = default_overlay_state()
+        event_decision = decide_audio(self.state_with_event(), overlay)
+        hover_decision = apply_interaction_audio("hover", overlay, player=lambda _filename, _volume: True, now_epoch=10.0)
+
+        self.assertEqual(event_decision.volume, DEFAULT_VOLUME)
+        self.assertEqual(hover_decision.volume, INTERACTION_VOLUME)
+        self.assertGreater(DEFAULT_VOLUME, INTERACTION_VOLUME)
+        self.assertGreater(INTERACTION_VOLUME, QUIET_VOLUME)
+        self.assertLess(DEFAULT_VOLUME, 1.0)
 
     def test_interaction_audio_plays_hover_and_cools_down(self) -> None:
         overlay = default_overlay_state()
