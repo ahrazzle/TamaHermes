@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -32,6 +33,21 @@ TOKEN_USAGE_FIELDS = {
 
 class CodexEventAdapterError(ValueError):
     pass
+
+
+def parse_iso_timestamp(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip()
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def default_cursor() -> dict[str, Any]:
@@ -94,6 +110,37 @@ def iter_log_lines(path: Path, offset: int) -> Iterable[tuple[int, int, str]]:
                 return
             after = handle.tell()
             yield before, after, raw.decode("utf-8", errors="replace")
+
+
+def first_event_timestamp(path: Path) -> datetime | None:
+    for _before, _after, line in iter_log_lines(path, 0):
+        try:
+            raw = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(raw, dict) and raw.get("type") == "event_msg":
+            return parse_iso_timestamp(raw.get("timestamp"))
+    return None
+
+
+def should_read_unseen_file_from_start(path: Path, cursor: dict[str, Any]) -> bool:
+    cursor_created = parse_iso_timestamp(cursor.get("createdAt"))
+    first_seen = first_event_timestamp(path)
+    return bool(cursor_created and first_seen and first_seen >= cursor_created)
+
+
+def record_sort_key(record: dict[str, Any]) -> tuple[float, str, int]:
+    timestamp = parse_iso_timestamp(record.get("at"))
+    meta = record.get("meta") if isinstance(record.get("meta"), dict) else {}
+    try:
+        offset = int(meta.get("offset") or 0)
+    except (TypeError, ValueError):
+        offset = 0
+    return (
+        timestamp.timestamp() if timestamp else float("inf"),
+        str(meta.get("rolloutFile") or ""),
+        offset,
+    )
 
 
 def meta_base(payload: dict[str, Any], source_path: Path, offset: int) -> dict[str, Any]:
@@ -336,9 +383,9 @@ def scan_session_logs(paths: list[Path], cursor: dict[str, Any], backfill: bool 
         if "offset" in file_state:
             offset = int(file_state["offset"])
         else:
-            offset = 0 if backfill else path.stat().st_size
+            offset = 0 if backfill or should_read_unseen_file_from_start(path, cursor) else path.stat().st_size
             file_state["offset"] = offset
-            if not backfill:
+            if offset > 0 and not backfill:
                 continue
 
         for before, after, line in iter_log_lines(path, offset):
@@ -353,4 +400,4 @@ def scan_session_logs(paths: list[Path], cursor: dict[str, Any], backfill: bool 
             file_state["offset"] = after
 
     cursor["pendingFailures"] = {key: value for key, value in pending.items() if value}
-    return records
+    return sorted(records, key=record_sort_key)

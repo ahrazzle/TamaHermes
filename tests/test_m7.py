@@ -7,7 +7,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from tamacodex.bridge import apply_bridge_event
+from tamacodex.catalog import load_catalog
 from tamacodex.codex_events import default_cursor, scan_session_logs
+from tamacodex.state import default_state, load_state, save_state
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -47,6 +50,71 @@ class M7CodexEventAdapterTests(unittest.TestCase):
             self.assertEqual(records[4]["meta"]["assetName"], "contact-sheet.png")
             self.assertEqual(cursor["files"][str(log)]["offset"], log.stat().st_size)
             self.assertEqual(scan_session_logs([log], cursor, backfill=True), [])
+
+    def test_new_rollout_after_cursor_is_read_from_start_for_idle_recovery(self) -> None:
+        catalog = load_catalog(ROOT)
+        with tempfile.TemporaryDirectory() as tmp:
+            state_path = Path(tmp) / "state.json"
+            state = default_state(catalog, line_id="toast", machine_id="aurora")
+            state["updatedAt"] = "2026-05-08T10:00:00Z"
+            state["stats"]["energy"] = 0
+            state["stats"]["health"] = 76
+            save_state(state_path, state, touch=False)
+
+            log = Path(tmp) / "rollout-2026-05-08T18-47-00-019e-rest-test.jsonl"
+            log.write_text(
+                "\n".join(
+                    [
+                        rollout_line("2026-05-08T10:47:00Z", {"type": "task_started", "turn_id": "turn-rest"}),
+                        rollout_line("2026-05-08T10:47:01Z", {"type": "user_message", "message": "wake up", "images": [], "local_images": []}),
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            cursor = default_cursor()
+            cursor["createdAt"] = "2026-05-08T10:10:00Z"
+
+            records = scan_session_logs([log], cursor, backfill=False)
+            for record in records:
+                apply_bridge_event(catalog, state_path, record)
+
+            restored = load_state(state_path, catalog)
+            self.assertEqual([record["event"] for record in records], ["session_start", "prompt_sent"])
+            self.assertEqual(restored["counters"]["quietMinutes"], 40)
+            self.assertEqual(restored["stats"]["energy"], 37)
+
+    def test_preexisting_rollout_is_still_skipped_without_backfill(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "rollout-2026-05-08T17-00-00-019e-old-test.jsonl"
+            log.write_text(
+                rollout_line("2026-05-08T09:00:00Z", {"type": "task_started", "turn_id": "turn-old"}) + "\n",
+                encoding="utf-8",
+            )
+            cursor = default_cursor()
+            cursor["createdAt"] = "2026-05-08T10:10:00Z"
+
+            self.assertEqual(scan_session_logs([log], cursor, backfill=False), [])
+            self.assertEqual(cursor["files"][str(log)]["offset"], log.stat().st_size)
+
+    def test_records_are_returned_in_timestamp_order_across_rollout_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            later_name = Path(tmp) / "rollout-2026-05-08T19-16-01-019e-later-name.jsonl"
+            earlier_name = Path(tmp) / "rollout-2026-05-08T19-18-31-019e-earlier-event.jsonl"
+            later_name.write_text(
+                rollout_line("2026-05-08T11:20:00Z", {"type": "task_started", "turn_id": "turn-later"}) + "\n",
+                encoding="utf-8",
+            )
+            earlier_name.write_text(
+                rollout_line("2026-05-08T11:18:00Z", {"type": "task_started", "turn_id": "turn-earlier"}) + "\n",
+                encoding="utf-8",
+            )
+            cursor = default_cursor()
+            cursor["createdAt"] = "2026-05-08T11:00:00Z"
+
+            records = scan_session_logs([later_name, earlier_name], cursor, backfill=False)
+
+            self.assertEqual([record["at"] for record in records], ["2026-05-08T11:18:00Z", "2026-05-08T11:20:00Z"])
 
     def test_codex_events_cli_updates_state_from_session_log(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
