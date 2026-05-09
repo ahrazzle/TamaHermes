@@ -16,6 +16,13 @@ struct OverlayConfig: Decodable {
     let hoverDelaySeconds: Double?
 }
 
+struct SfxRequest: Decodable {
+    let id: String?
+    let filePath: String?
+    let volume: Double?
+    let expiresAt: Double?
+}
+
 final class NonActivatingPanel: NSPanel {
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
@@ -24,15 +31,23 @@ final class NonActivatingPanel: NSPanel {
 final class OverlayController: NSObject {
     private let configPath: String
     private let statusPath: String
+    private let sfxPath: String
     private var panel: NonActivatingPanel!
     private var webView: WKWebView!
     private var lastHTMLPath: String = ""
     private var lastHTMLModified: Date?
     private var hoverStartedAt: Date?
+    private var lastSfxId: String?
+    private var lastSfxFilename: String?
+    private var lastSfxPlayedAt: String?
+    private var lastSfxError: String?
+    private var activeSounds: [NSSound] = []
 
     init(configPath: String) {
         self.configPath = configPath
-        self.statusPath = (configPath as NSString).deletingLastPathComponent + "/overlay-helper-status.json"
+        let root = (configPath as NSString).deletingLastPathComponent
+        self.statusPath = root + "/overlay-helper-status.json"
+        self.sfxPath = root + "/overlay-sfx-request.json"
         super.init()
         buildPanel()
         Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
@@ -166,6 +181,10 @@ final class OverlayController: NSObject {
             "hoverY": jsonValue(config.hoverY),
             "hoverWidth": jsonValue(config.hoverWidth),
             "hoverHeight": jsonValue(config.hoverHeight),
+            "lastSfxId": lastSfxId ?? NSNull(),
+            "lastSfxFilename": lastSfxFilename ?? NSNull(),
+            "lastSfxPlayedAt": lastSfxPlayedAt ?? NSNull(),
+            "lastSfxError": lastSfxError ?? NSNull(),
             "updatedAt": ISO8601DateFormatter().string(from: Date()),
         ]
         guard JSONSerialization.isValidJSONObject(payload),
@@ -187,11 +206,43 @@ final class OverlayController: NSObject {
         webView.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
     }
 
+    private func playSfxIfNeeded() {
+        guard
+            let data = try? Data(contentsOf: URL(fileURLWithPath: sfxPath)),
+            let request = try? JSONDecoder().decode(SfxRequest.self, from: data),
+            let requestId = request.id,
+            requestId != lastSfxId,
+            let filePath = request.filePath,
+            (request.expiresAt ?? Date().timeIntervalSince1970 + 1.0) >= Date().timeIntervalSince1970
+        else {
+            return
+        }
+        lastSfxId = requestId
+        let url = URL(fileURLWithPath: filePath)
+        guard let sound = NSSound(contentsOf: url, byReference: true) else {
+            lastSfxFilename = url.lastPathComponent
+            lastSfxError = "load-failed"
+            return
+        }
+        sound.volume = Float(max(0.0, min(1.0, request.volume ?? 1.0)))
+        activeSounds.append(sound)
+        if sound.play() {
+            lastSfxFilename = url.lastPathComponent
+            lastSfxPlayedAt = ISO8601DateFormatter().string(from: Date())
+            lastSfxError = nil
+        } else {
+            lastSfxFilename = url.lastPathComponent
+            lastSfxError = "play-failed"
+        }
+        activeSounds.removeAll { !$0.isPlaying }
+    }
+
     @objc private func tick() {
         guard let config = readConfig() else {
             panel.orderOut(nil)
             return
         }
+        playSfxIfNeeded()
         panel.setFrame(clampedFrame(for: config), display: true)
         reloadIfNeeded(htmlPath: config.htmlPath)
         let point = mouseTopLeftPoint()

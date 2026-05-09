@@ -130,8 +130,31 @@ def afplay(filename: str, volume: float = DEFAULT_VOLUME) -> bool:
     if not binary:
         return False
     path = sfx_resource_path(filename)
-    subprocess.Popen([binary, "-v", f"{volume:.2f}", str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    return True
+    try:
+        process = subprocess.Popen([binary, "-v", f"{volume:.2f}", str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError:
+        return False
+    try:
+        return process.wait(timeout=0.08) == 0
+    except subprocess.TimeoutExpired:
+        return True
+
+
+def _record_audio_error(
+    overlay_state: dict[str, Any],
+    *,
+    event: str | None,
+    filename: str | None,
+    reason: str,
+    event_id: str | None = None,
+) -> None:
+    overlay_state["lastAudioError"] = {
+        "event": event,
+        "eventId": event_id,
+        "filename": filename,
+        "reason": reason,
+        "at": now_iso(),
+    }
 
 
 def apply_audio_decision(
@@ -157,7 +180,15 @@ def apply_audio_decision(
         if player(decision.filename, decision.volume):
             overlay_state["lastPlayedEventId"] = decision.event_id
             overlay_state["lastPlayedAt"] = now_iso()
+            overlay_state["lastAudioError"] = None
         else:
+            _record_audio_error(
+                overlay_state,
+                event=decision.event,
+                event_id=decision.event_id,
+                filename=decision.filename,
+                reason="player-unavailable",
+            )
             return AudioDecision(False, "player-unavailable", event=decision.event, event_id=decision.event_id, filename=decision.filename, volume=decision.volume)
     return decision
 
@@ -190,6 +221,7 @@ def apply_interaction_audio(
     filename = str(SFX_EVENT_MAP[event]["file"])
     volume = QUIET_VOLUME if overlay_state.get("quietMode") or quiet_hours_active(overlay_state.get("quietHours"), now=now) else INTERACTION_VOLUME
     if not player(filename, volume):
+        _record_audio_error(overlay_state, event=event, filename=filename, reason="player-unavailable")
         return AudioDecision(False, "player-unavailable", event=event, filename=filename, volume=volume)
 
     overlay_state["lastInteractionSfx"] = {
@@ -198,4 +230,5 @@ def apply_interaction_audio(
         "atEpoch": epoch,
         "playedAt": now_iso(),
     }
+    overlay_state["lastAudioError"] = None
     return AudioDecision(True, "play-interaction", event=event, filename=filename, volume=volume)

@@ -16,7 +16,7 @@ from .bridge import apply_bridge_event
 from .catalog import load_catalog
 from .codex_events import default_cursor, load_cursor, resolve_session_inputs, save_cursor, scan_session_logs
 from .feedback import active_evolution_announcement
-from .overlay_audio import apply_audio_decision, apply_interaction_audio
+from .overlay_audio import apply_audio_decision, apply_interaction_audio, sfx_resource_path
 from .overlay_state import (
     is_tamacodex_selected,
     load_global_state,
@@ -290,6 +290,7 @@ def native_overlay_paths(home: Path) -> dict[str, Path]:
         "config": root / "overlay-config.json",
         "html": root / "overlay.html",
         "status": root / "overlay-helper-status.json",
+        "sfx": root / "overlay-sfx-request.json",
     }
 
 
@@ -381,6 +382,35 @@ def apply_progress_audio_for_records(records: list[dict[str, Any]], overlay_stat
     if player:
         return apply_interaction_audio("progress", overlay_state, selected=selected, player=player)
     return apply_interaction_audio("progress", overlay_state, selected=selected)
+
+
+def queue_native_sfx_request(home: Path, filename: str, volume: float) -> bool:
+    try:
+        source = sfx_resource_path(filename)
+    except FileNotFoundError:
+        return False
+    paths = native_overlay_paths(home)
+    paths["root"].mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema": "tamacodex.native_overlay.sfx_request.v1",
+        "id": f"{time.time_ns()}:{filename}",
+        "filename": filename,
+        "filePath": str(source),
+        "volume": max(0.0, min(1.0, float(volume))),
+        "updatedAt": time.time(),
+        "expiresAt": time.time() + 5.0,
+    }
+    tmp = paths["sfx"].with_suffix(".tmp")
+    try:
+        tmp.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        tmp.replace(paths["sfx"])
+    except OSError:
+        return False
+    return True
+
+
+def native_sfx_player(home: Path) -> Any:
+    return lambda filename, volume: queue_native_sfx_request(home, filename, volume)
 
 
 def native_overlay_source() -> Path:
@@ -799,6 +829,7 @@ def run_native_overlay_loop(home: Path, root: Path, interval: float = 0.4) -> No
     catalog = load_catalog(root)
     state_path = default_state_path(home)
     overlay_file = overlay_state_path(home)
+    player = native_sfx_player(home)
     stopped = False
 
     def stop(_signum: int, _frame: Any) -> None:
@@ -830,7 +861,7 @@ def run_native_overlay_loop(home: Path, root: Path, interval: float = 0.4) -> No
                                 "refreshed": bool(refresh_report.get("refreshed")),
                                 "error": refresh_report.get("error"),
                             }
-                        apply_progress_audio_for_records(records, overlay_state, selected=surface_active)
+                        apply_progress_audio_for_records(records, overlay_state, selected=surface_active, player=player)
                         last_codex_event_sync = now
                     state = load_state(state_path, catalog)
                 except Exception:  # noqa: BLE001
@@ -861,9 +892,9 @@ def run_native_overlay_loop(home: Path, root: Path, interval: float = 0.4) -> No
                         write_native_overlay_config(home, visible=False)
                         overlay_state["lastHoverReady"] = False
                         overlay_state["lastAudioMascotRect"] = None
-                    apply_audio_decision(state, overlay_state, selected=surface_active)
+                    apply_audio_decision(state, overlay_state, selected=surface_active, player=player)
                     if surface_active:
-                        apply_native_interaction_audio(overlay_state, read_json_object(paths["status"]), hover, selected=True)
+                        apply_native_interaction_audio(overlay_state, read_json_object(paths["status"]), hover, selected=True, player=player)
                     save_overlay_state(overlay_file, overlay_state)
                 else:
                     write_native_overlay_config(home, visible=False)

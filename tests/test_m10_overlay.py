@@ -22,6 +22,7 @@ from tamacodex.feedback import (
 from tamacodex.overlay import (
     apply_native_interaction_audio,
     apply_progress_audio_for_records,
+    queue_native_sfx_request,
     apply_nonactivating_window_style,
     evolution_overlay_frame,
     refresh_installed_pet_for_records,
@@ -342,10 +343,27 @@ class M10OverlayAudioTests(unittest.TestCase):
 
     def test_afplay_default_uses_full_scale_volume(self) -> None:
         with mock.patch("tamacodex.overlay_audio.shutil.which", return_value="/usr/bin/afplay"), mock.patch("tamacodex.overlay_audio.subprocess.Popen") as popen:
+            popen.return_value.wait.side_effect = subprocess.TimeoutExpired(["afplay"], 0.08)
             self.assertTrue(afplay("task_success.wav"))
 
         command = popen.call_args.args[0]
         self.assertEqual(command[0:3], ["/usr/bin/afplay", "-v", "1.00"])
+
+    def test_afplay_reports_fast_start_failure(self) -> None:
+        with mock.patch("tamacodex.overlay_audio.shutil.which", return_value="/usr/bin/afplay"), mock.patch("tamacodex.overlay_audio.subprocess.Popen") as popen:
+            popen.return_value.wait.return_value = 1
+            self.assertFalse(afplay("task_success.wav"))
+
+    def test_audio_failure_records_diagnostic_without_marking_played(self) -> None:
+        overlay = default_overlay_state()
+        overlay["audioPrimed"] = True
+
+        decision = apply_audio_decision(self.state_with_event("event-1"), overlay, player=lambda _filename, _volume: False)
+
+        self.assertEqual(decision.reason, "player-unavailable")
+        self.assertIsNone(overlay["lastPlayedEventId"])
+        self.assertEqual(overlay["lastAudioError"]["eventId"], "event-1")
+        self.assertEqual(overlay["lastAudioError"]["filename"], "task_success.wav")
 
     def test_interaction_audio_plays_hover_and_cools_down(self) -> None:
         overlay = default_overlay_state()
@@ -371,6 +389,19 @@ class M10OverlayAudioTests(unittest.TestCase):
         apply_native_interaction_audio(overlay, {"hoverReady": True}, {"x": 140, "y": 204, "width": 80, "height": 87}, player=player)
 
         self.assertEqual([filename for filename, _volume in played], ["care.wav", "work.wav"])
+
+    def test_native_sfx_request_writes_expiring_local_audio_request(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+
+            self.assertTrue(queue_native_sfx_request(home, "care.wav", 2.0))
+            request = json.loads((home / "tamacodex" / "native-overlay" / "overlay-sfx-request.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(request["schema"], "tamacodex.native_overlay.sfx_request.v1")
+        self.assertEqual(request["filename"], "care.wav")
+        self.assertTrue(request["filePath"].endswith("tamacodex/sfx/care.wav"))
+        self.assertEqual(request["volume"], 1.0)
+        self.assertGreater(request["expiresAt"], request["updatedAt"])
 
     def test_progress_audio_uses_token_count_only_when_no_concrete_event_is_present(self) -> None:
         overlay = default_overlay_state()
@@ -538,6 +569,9 @@ class M10SupervisorGuardTests(unittest.TestCase):
         self.assertIn("hoverReady", swift)
         self.assertIn("!hasHoverTarget || hoverReady", swift)
         self.assertIn("hoverDelaySeconds", swift)
+        self.assertIn("overlay-sfx-request.json", swift)
+        self.assertIn("NSSound", swift)
+        self.assertIn("lastSfxPlayedAt", swift)
 
     def test_native_overlay_config_carries_hover_gate(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

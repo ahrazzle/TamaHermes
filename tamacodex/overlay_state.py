@@ -87,6 +87,7 @@ def default_overlay_state() -> dict[str, Any]:
         "quietMode": False,
         "quietHours": None,
         "lastInteractionSfx": None,
+        "lastAudioError": None,
         "lastHoverReady": False,
         "lastAudioMascotRect": None,
         "lastCodexEventSyncAt": None,
