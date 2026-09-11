@@ -29,7 +29,15 @@ from tamahermes.pet_compiler import (
     validate_screen_mask_clipping,
     xp_bar_rect,
 )
-from tamahermes.state import STAGE_THRESHOLDS, default_state, load_state, maybe_evolve, save_state, stage_progress
+from tamahermes.state import (
+    STAGE_THRESHOLDS,
+    apply_event,
+    default_state,
+    load_state,
+    maybe_evolve,
+    save_state,
+    stage_progress,
+)
 from tamahermes.visual_state import VISUAL_STATE_SCHEMA, derive_visual_state, percent_bucket, visual_state_hash
 from tamahermes.watcher import refresh_if_needed
 
@@ -82,18 +90,59 @@ class StageProgressTests(unittest.TestCase):
                 self.assertEqual(state["lifeStage"], stage)
                 self.assertEqual(stage_progress(state)["percent"], percent)
 
-    def test_terminal_and_dormant_stages_do_not_pretend_to_progress(self) -> None:
+    def test_terminal_stages_do_not_pretend_to_progress(self) -> None:
         _catalog, adult = grown(2000)
         progress = stage_progress(adult)
         self.assertTrue(progress["terminal"])
         self.assertIsNone(progress["ceiling"])
         self.assertEqual(progress["percent"], 100)
 
-        dormant = copy.deepcopy(adult)
-        dormant["lifeStage"] = "hibernation"
-        asleep = stage_progress(dormant)
+    def test_a_dormant_pet_still_shows_the_progress_it_has_made(self) -> None:
+        """Sleeping is a condition, not a reset.
+
+        A dormant pet reports real growth against the stage it will wake into. A bar
+        pinned at zero is indistinguishable from a broken bar, and dormancy lands
+        exactly when the owner is looking at the pet.
+        """
+        _catalog, state = grown(830)
+        self.assertEqual(state["lifeStage"], "child")
+        awake = stage_progress(state)
+
+        state["previousActiveStage"] = "child"
+        state["lifeStage"] = "hibernation"
+        asleep = stage_progress(state)
+
         self.assertTrue(asleep["dormant"])
-        self.assertEqual(asleep["percent"], 0)
+        self.assertEqual(asleep["underlyingStage"], "child")
+        self.assertEqual(asleep["percent"], awake["percent"])
+        self.assertGreater(asleep["percent"], 0)
+
+    def test_a_dormant_pet_draws_the_bar_it_would_draw_awake(self) -> None:
+        _catalog, state = grown(830)
+        awake_bar = derive_visual_state(state)["xpPercent"]
+        state["previousActiveStage"] = state["lifeStage"]
+        state["lifeStage"] = "hibernation"
+        self.assertEqual(derive_visual_state(state)["xpPercent"], awake_bar)
+
+    def test_a_successful_turn_sustains_a_working_pet(self) -> None:
+        """Dormancy triggers at energy 4 and only lifts at 35, so an economy where a
+        turn costs more than it returns strands a working pet asleep permanently."""
+        catalog, state = grown(0)
+        start = state["stats"]["energy"]
+        for _ in range(12):
+            state = apply_event(state, catalog, "prompt_sent")["state"]
+            state = apply_event(state, catalog, "task_success")["state"]
+        self.assertGreaterEqual(state["stats"]["energy"], start)
+        self.assertNotEqual(state["lifeStage"], "hibernation")
+
+    def test_a_run_of_failures_still_tires_the_pet(self) -> None:
+        """The other half of the bargain: dormancy has to stay reachable, or it is
+        dead code and the hibernation artwork can never be seen."""
+        catalog, state = grown(0)
+        for _ in range(20):
+            state = apply_event(state, catalog, "prompt_sent")["state"]
+            state = apply_event(state, catalog, "task_failure")["state"]
+        self.assertEqual(state["lifeStage"], "hibernation")
 
     def test_unknown_stage_is_survivable(self) -> None:
         _catalog, state = grown(0)

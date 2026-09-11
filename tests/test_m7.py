@@ -82,7 +82,9 @@ class M7CodexEventAdapterTests(unittest.TestCase):
             restored = load_state(state_path, catalog)
             self.assertEqual([record["event"] for record in records], ["session_start", "prompt_sent"])
             self.assertEqual(restored["counters"]["quietMinutes"], 40)
-            self.assertEqual(restored["stats"]["energy"], 37)
+            # 4 rest blocks from the idle gap (+40), then the two events that follow it:
+            # session_start -1 and prompt_sent -1.
+            self.assertEqual(restored["stats"]["energy"], 38)
 
     def test_preexisting_rollout_is_still_skipped_without_backfill(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -38,15 +38,35 @@ def stage_xp_floor(stage: str) -> int:
 def stage_progress(state: dict[str, Any]) -> dict[str, Any]:
     """How far the pet has come toward its next evolution.
 
-    ``ceiling`` is ``None`` for the terminal stage (adult, reported as 100%) and for
-    hibernation, which is a dormant condition rather than a growth step and always
-    reports zero progress so its bar reads as asleep.
+    ``ceiling`` is ``None`` for the terminal stage (adult, reported as 100%).
+
+    Hibernation is a dormant *condition*, not a growth step, so it reports the progress
+    the pet has genuinely made against the stage it will wake into, plus ``dormant`` so
+    callers can render it asleep. Reporting zero instead would hide real growth at the
+    moment the pet is looked at most, and a bar pinned at zero is indistinguishable from
+    a broken one.
     """
     stage = state.get("lifeStage") or "egg"
     xp = _int_value(state.get("xp"), 0)
     floor = stage_xp_floor(stage)
     if stage == "hibernation":
-        return {"stage": stage, "floor": 0, "ceiling": None, "percent": 0, "terminal": False, "dormant": True}
+        underlying = str(state.get("previousActiveStage") or "child")
+        dormant_floor = stage_xp_floor(underlying)
+        dormant_ceiling = STAGE_THRESHOLDS.get(underlying)
+        if dormant_ceiling is None:
+            dormant_percent = 100
+        else:
+            span = max(1, dormant_ceiling - dormant_floor)
+            dormant_percent = max(0, min(100, round((xp - dormant_floor) * 100 / span)))
+        return {
+            "stage": stage,
+            "underlyingStage": underlying,
+            "floor": dormant_floor,
+            "ceiling": dormant_ceiling,
+            "percent": dormant_percent,
+            "terminal": False,
+            "dormant": True,
+        }
     ceiling = STAGE_THRESHOLDS.get(stage)
     if ceiling is None:
         return {"stage": stage, "floor": floor, "ceiling": None, "percent": 100, "terminal": True, "dormant": False}
@@ -76,10 +96,15 @@ EVENT_ALIASES = {
     "play": "care",
 }
 
+# Energy is the pet's "awake" budget: hibernation triggers at 4 and only lifts at 35,
+# so any economy where ordinary work costs more than it returns walks every working pet
+# into permanent dormancy -- and a dormant pet draws a bar that reads as broken rather
+# than asleep. Success therefore feeds the pet and failure drains it, which makes a pet
+# that is awake while you work and sleepy after a run of things going wrong.
 EVENT_DELTAS = {
     "session_start": {"xp": 2, "energy": -1, "mood": 2, "bond": 1, "focus": 1},
-    "prompt_sent": {"xp": 4, "energy": -2, "mood": 1, "focus": 2, "workRuns": 1},
-    "task_success": {"xp": 14, "energy": -3, "mood": 7, "bond": 2, "focus": 3, "completedRuns": 1},
+    "prompt_sent": {"xp": 4, "energy": -1, "mood": 1, "focus": 2, "workRuns": 1},
+    "task_success": {"xp": 14, "energy": 2, "mood": 7, "bond": 2, "focus": 3, "completedRuns": 1},
     "task_failure": {
         "xp": 5,
         "energy": -4,
@@ -90,8 +115,8 @@ EVENT_DELTAS = {
         "failedRuns": 1,
         "mess": 6,
     },
-    "recovery": {"xp": 6, "energy": -1, "mood": 4, "health": 2, "bond": 1, "resilience": 2, "mess": -3},
-    "review_opened": {"xp": 5, "energy": -1, "mood": 2, "focus": 2, "reviews": 1, "mess": -1},
+    "recovery": {"xp": 6, "energy": 1, "mood": 4, "health": 2, "bond": 1, "resilience": 2, "mess": -3},
+    "review_opened": {"xp": 5, "energy": 0, "mood": 2, "focus": 2, "reviews": 1, "mess": -1},
     "token_usage": {"tokenSamples": 1},
     "idle_minute": {"energy": -1, "mood": -1, "restlessness": 1, "idleMinutes": 1},
     "care": {"xp": 3, "energy": 5, "mood": 5, "health": 4, "bond": 3, "care": 2, "mess": -2},
