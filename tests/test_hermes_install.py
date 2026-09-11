@@ -226,5 +226,102 @@ class HermesPluginTests(unittest.TestCase):
         run_cli(home, "setup", "--line", "toast", "--machine", "aurora", "--force", "--json")
 
 
+class SheetPruningTests(unittest.TestCase):
+    """A regrowing pet must not accumulate one spritesheet per rebuild."""
+
+    def test_versioned_sheet_detection_is_narrow(self) -> None:
+        from tamacodex.pet_compiler import _is_versioned_sheet
+
+        self.assertTrue(_is_versioned_sheet("spritesheet-ab82599bcf5d.webp"))
+        self.assertFalse(_is_versioned_sheet("spritesheet.webp"))
+        self.assertFalse(_is_versioned_sheet("spritesheet-custom.webp"))
+        self.assertFalse(_is_versioned_sheet("spritesheet-AB82599BCF5D.webp"))  # uppercase: not ours
+        self.assertFalse(_is_versioned_sheet("spritesheet-ab82599bcf5.webp"))  # 11 hex chars
+        self.assertFalse(_is_versioned_sheet("spritesheet-ab82599bcf5d.png"))
+
+    def test_rebuild_prunes_superseded_sheets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "hermes-home"
+            pet_dir = home / "pets" / "tamacodex"
+            pet_dir.mkdir(parents=True)
+            # A hand-placed sheet must survive pruning untouched.
+            stranger = pet_dir / "spritesheet-custom.webp"
+            stranger.write_bytes(b"not ours")
+
+            # Two installs with different shells produce different install hashes,
+            # i.e. two distinct content-addressed sheets over time.
+            run_cli(home, "setup", "--line", "toast", "--machine", "aurora", "--force", "--json")
+            run_cli(home, "setup", "--line", "toast", "--machine", "pulse", "--force", "--json")
+
+            manifest = json.loads((pet_dir / "pet.json").read_text(encoding="utf-8"))
+            active = manifest["spritesheetPath"]
+
+            versioned = sorted(p.name for p in pet_dir.glob("spritesheet-*.webp") if p.name != "spritesheet-custom.webp")
+            self.assertEqual(versioned, [active], f"stale sheets left behind: {versioned}")
+            self.assertTrue((pet_dir / active).exists())
+            self.assertTrue((pet_dir / "spritesheet.webp").is_file(), "legacy sheet must remain")
+            self.assertEqual(stranger.read_bytes(), b"not ours")
+
+    def test_pruned_sheets_reported(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "hermes-home"
+            pet_dir = home / "pets" / "tamacodex"
+            pet_dir.mkdir(parents=True)
+            stale = pet_dir / "spritesheet-0123456789ab.webp"
+            stale.write_bytes(b"old")
+
+            completed = run_cli(home, "setup", "--line", "toast", "--machine", "aurora", "--force", "--json")
+            report = json.loads(completed.stdout)
+            self.assertIn("spritesheet-0123456789ab.webp", report["refresh"]["install"]["prunedSheets"])
+            self.assertFalse(stale.exists())
+
+
+class PluginRepoResolutionTests(unittest.TestCase):
+    """The plugin must not silently import an unrelated nearby checkout."""
+
+    def test_a_nearby_checkout_in_cwd_is_never_picked_up(self) -> None:
+        """Launching `hermes` from a dir containing a tamacodex/ must not import it."""
+        module = load_plugin_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            decoy = Path(tmp)
+            (decoy / "tamacodex").mkdir()
+            (decoy / "tamacodex" / "bridge.py").write_text("")
+            (decoy / "tamacodex" / "hermes_events.py").write_text("")
+
+            original = Path.cwd()
+            os.chdir(decoy)
+            try:
+                self.assertNotIn(decoy.resolve(), [c.resolve() for c in module._repo_candidates()])
+            finally:
+                os.chdir(original)
+
+    def test_stale_codex_only_checkout_is_rejected(self) -> None:
+        module = load_plugin_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "tamacodex").mkdir()
+            (root / "tamacodex" / "bridge.py").write_text("")
+            self.assertFalse(module._looks_like_tamacodex_checkout(root))
+            (root / "tamacodex" / "hermes_events.py").write_text("")
+            self.assertTrue(module._looks_like_tamacodex_checkout(root))
+
+    def test_recorded_repo_root_wins(self) -> None:
+        module = load_plugin_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "home"
+            (home / "tamacodex").mkdir(parents=True)
+            (home / "tamacodex" / "repo-root").write_text("/some/checkout\n", encoding="utf-8")
+
+            saved = os.environ.pop("TAMACODEX_REPO_ROOT", None)
+            os.environ["HERMES_HOME"] = str(home)
+            try:
+                candidates = module._repo_candidates()
+            finally:
+                os.environ.pop("HERMES_HOME", None)
+                if saved is not None:
+                    os.environ["TAMACODEX_REPO_ROOT"] = saved
+            self.assertEqual(candidates[0], Path("/some/checkout"))
+
+
 if __name__ == "__main__":
     unittest.main()

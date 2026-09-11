@@ -138,8 +138,25 @@ Hermes homes are **profile-scoped**: the pets dir is `<HERMES_HOME>/pets`, and
 profile you actually use:
 
 ```bash
+# every profile on this machine at once (default + ~/.hermes/profiles/*)
+./hermes/install-all-profiles.sh
+
+# ...or one at a time
 HERMES_HOME=~/.hermes/profiles/you ./hermes/install-hermes.sh
 HERMES_HOME=~/.hermes                 ./hermes/install-hermes.sh
+```
+
+`install-all-profiles.sh` also takes `--only name1,name2` and `--keep-selection`
+(install the pet without changing which pet is active).
+
+If `hermes plugins enable` dies with `TypeError: list indices must be integers`,
+that profile still has the legacy bare-list form of `plugins:` in its
+`config.yaml`. Rewrite it to the mapping form and retry:
+
+```yaml
+plugins:
+  enabled:
+    - petdex-desktop
 ```
 
 The installer records the checkout in `<HERMES_HOME>/tamacodex/repo-root`, which

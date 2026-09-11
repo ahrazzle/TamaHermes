@@ -55,6 +55,11 @@ def _repo_candidates() -> List[Path]:
 
     The installer writes ``<HERMES_HOME>/tamacodex/repo-root`` so normal Hermes
     runs (no env vars set) still find the checkout.
+
+    Deliberately excludes the process CWD: ``hermes`` can be launched from
+    anywhere, and silently importing whatever ``tamacodex/`` happens to be
+    nearby is worse than not loading at all. Set ``TAMACODEX_REPO_ROOT`` if you
+    run the plugin against an uninstalled checkout.
     """
     candidates: List[Path] = []
     env_root = os.environ.get("TAMACODEX_REPO_ROOT")
@@ -69,8 +74,15 @@ def _repo_candidates() -> List[Path]:
     except OSError:
         pass
     candidates.append(Path.home() / "TamaCodex")
-    candidates.append(Path.cwd())
     return candidates
+
+
+def _looks_like_tamacodex_checkout(root: Path) -> bool:
+    """Only accept a real Hermes-capable checkout, not a stale Codex-only copy."""
+    try:
+        return (root / "tamacodex" / "bridge.py").is_file() and (root / "tamacodex" / "hermes_events.py").is_file()
+    except OSError:
+        return False
 
 
 def _ensure_tamacodex_importable() -> bool:
@@ -86,10 +98,7 @@ def _ensure_tamacodex_importable() -> bool:
     except ImportError:
         pass
     for root in _repo_candidates():
-        try:
-            if not (root / "tamacodex" / "bridge.py").is_file():
-                continue
-        except OSError:
+        if not _looks_like_tamacodex_checkout(root):
             continue
         sys.path.insert(0, str(root))
         try:
@@ -100,6 +109,10 @@ def _ensure_tamacodex_importable() -> bool:
             return True
         except ImportError:
             sys.path.remove(str(root))
+    logger.warning(
+        "tamacodex-hermes: could not import tamacodex; no growth will be recorded. "
+        "Re-run hermes/install-hermes.sh (it records the checkout path) or set TAMACODEX_REPO_ROOT."
+    )
     return False
 
 

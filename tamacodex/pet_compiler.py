@@ -619,6 +619,18 @@ def build_codex_pet(
     return report
 
 
+def _is_versioned_sheet(name: str) -> bool:
+    """True for ``spritesheet-<12 hex>.webp`` — a sheet we generated and may own.
+
+    Deliberately narrow: a hand-placed ``spritesheet-custom.webp`` is never pruned.
+    """
+    prefix, suffix = "spritesheet-", ".webp"
+    if not (name.startswith(prefix) and name.endswith(suffix)):
+        return False
+    stem = name[len(prefix) : -len(suffix)]
+    return len(stem) == 12 and all(char in "0123456789abcdef" for char in stem)
+
+
 def install_codex_pet(catalog: Catalog, state: dict[str, Any], codex_home: Path, build_dir: Path, force: bool = False) -> dict[str, Any]:
     pet_dir = codex_home / "pets" / state.get("petId", "tamacodex")
     target_sheet = pet_dir / SPRITESHEET_BASENAME
@@ -637,6 +649,20 @@ def install_codex_pet(catalog: Catalog, state: dict[str, Any], codex_home: Path,
     manifest = json.loads((build_dir / "pet.json").read_text(encoding="utf-8"))
     manifest["spritesheetPath"] = versioned_sheet_name
     target_manifest.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+
+    # Every rebuild mints a new content-addressed sheet; without pruning, a pet
+    # that regrows often leaves one webp per rebuild in the pets dir forever.
+    pruned_sheets: list[str] = []
+    for stale in sorted(pet_dir.glob("spritesheet-*.webp")):
+        if stale.name == versioned_sheet_name or not _is_versioned_sheet(stale.name):
+            continue
+        try:
+            stale.unlink()
+            pruned_sheets.append(stale.name)
+        except OSError:
+            # A locked/unreadable stale sheet is not worth failing an install.
+            pass
+
     install_report = {
         "ok": True,
         "petDir": str(pet_dir),
@@ -644,6 +670,7 @@ def install_codex_pet(catalog: Catalog, state: dict[str, Any], codex_home: Path,
         "spritesheet": str(versioned_sheet),
         "legacySpritesheet": str(target_sheet),
         "spritesheetPath": versioned_sheet_name,
+        "prunedSheets": pruned_sheets,
         "formId": report["formId"],
         "machineId": report["machineId"],
         "catalogDir": report["catalogDir"],
