@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tamahermes"
-version = "1.1.0"
+version = "1.2.0"
 description = "TamaHermes: a Tamagotchi-style desktop pet for Hermes Agent, forked from Tamacodex. Grows from real agent activity — in the terminal, and floating on the desktop."
 readme = "README.md"
 requires-python = ">=3.10"

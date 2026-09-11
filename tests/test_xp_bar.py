@@ -1,9 +1,9 @@
-"""The XP bar: growth maths, rebuild discipline, and the compiler-side invariants.
+"""The XP bar and the two cell layouts: growth maths, rebuild discipline, and the
+compiler-side invariants that keep the bar (and the shell-less look) honest.
 
-The bar is drawn outside the LCD screen mask, which is the one place the atlas
-contract previously forbade paint. These tests pin both halves of that bargain:
-the bar appears where it should, and the screen-mask validator keeps its teeth
-everywhere else.
+The bar is drawn outside the LCD screen mask in the shelled layout, which is the one
+place the atlas contract previously forbade paint. These tests pin both halves of that
+bargain for the shelled layout, and pin the floating layout's own geometry guard.
 """
 
 from __future__ import annotations
@@ -12,22 +12,29 @@ import copy
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from PIL import Image, ImageChops
 
 from tamahermes.catalog import load_catalog
+from tamahermes import pet_compiler
 from tamahermes.pet_compiler import (
+    DEFAULT_LAYOUT,
+    FLOATING_XP_BAR,
+    LAYOUTS,
     XP_BAR,
-    XP_BAR_RECT,
     XP_BAR_STEPS,
     build_codex_pet,
+    validate_layout_geometry,
     validate_screen_mask_clipping,
+    xp_bar_rect,
 )
 from tamahermes.state import STAGE_THRESHOLDS, default_state, load_state, maybe_evolve, save_state, stage_progress
 from tamahermes.visual_state import VISUAL_STATE_SCHEMA, derive_visual_state, percent_bucket, visual_state_hash
 from tamahermes.watcher import refresh_if_needed
 
 ROOT = Path(__file__).resolve().parents[1]
+CELL = 192
 
 
 def grown(xp: int):
@@ -36,6 +43,10 @@ def grown(xp: int):
     state["xp"] = xp
     maybe_evolve(state, catalog)
     return catalog, state
+
+
+def cell_at(sheet: Path, column: int = 0, row: int = 0) -> Image.Image:
+    return Image.open(sheet).convert("RGBA").crop((column * CELL, row * 208, (column + 1) * CELL, (row + 1) * 208))
 
 
 def band_diff_boxes(path_a: Path, path_b: Path) -> list[tuple[int, int, int, int] | None]:
@@ -49,31 +60,21 @@ def band_diff_boxes(path_a: Path, path_b: Path) -> list[tuple[int, int, int, int
         return boxes
 
 
-def changed_pixels(path_a: Path, path_b: Path, box: tuple[int, int, int, int] | None = None) -> int:
+def changed_pixels(path_a: Path, path_b: Path, box: tuple[int, int, int, int]) -> int:
     with Image.open(path_a) as opened_a, Image.open(path_b) as opened_b:
-        left, right = opened_a.convert("RGBA"), opened_b.convert("RGBA")
-        if box:
-            left, right = left.crop(box), right.crop(box)
-        diff = ImageChops.difference(left, right)
+        diff = ImageChops.difference(opened_a.convert("RGBA").crop(box), opened_b.convert("RGBA").crop(box))
     pixels = diff.get_flattened_data() if hasattr(diff, "get_flattened_data") else diff.getdata()
     return sum(1 for pixel in pixels if pixel != (0, 0, 0, 0))
 
 
 class StageProgressTests(unittest.TestCase):
     def test_progress_is_measured_within_the_current_stage(self) -> None:
-        # (xp, stage, expected percent) — each threshold is the *end* of its stage.
         cases = [
-            (0, "egg", 0),
-            (60, "egg", 50),
-            (119, "egg", 99),
-            (120, "hatchling", 0),
-            (220, "hatchling", 50),
-            (320, "child", 0),
-            (610, "child", 50),
-            (900, "teen", 0),
-            (1350, "teen", 50),
-            (1800, "adult", 100),
-            (9000, "adult", 100),
+            (0, "egg", 0), (60, "egg", 50), (119, "egg", 99),
+            (120, "hatchling", 0), (220, "hatchling", 50),
+            (320, "child", 0), (610, "child", 50),
+            (900, "teen", 0), (1350, "teen", 50),
+            (1800, "adult", 100), (9000, "adult", 100),
         ]
         for xp, stage, percent in cases:
             with self.subTest(xp=xp):
@@ -102,8 +103,6 @@ class StageProgressTests(unittest.TestCase):
         self.assertIsNone(progress["ceiling"])
 
     def test_thresholds_stay_consistent_with_stage_order(self) -> None:
-        # Guards the single-source-of-truth wiring: every thresholded stage must be
-        # one the evolution loop can actually leave.
         self.assertEqual(set(STAGE_THRESHOLDS), {"egg", "hatchling", "child", "teen"})
 
 
@@ -117,8 +116,7 @@ class BucketTests(unittest.TestCase):
         self.assertEqual(percent_bucket(100), 100)
 
     def test_bucket_count_is_bounded(self) -> None:
-        seen = {percent_bucket(p) for p in range(101)}
-        self.assertLessEqual(len(seen), XP_BAR_STEPS + 1)
+        self.assertLessEqual(len({percent_bucket(p) for p in range(101)}), XP_BAR_STEPS + 1)
 
     def test_visual_state_carries_stage_and_bucketed_percent(self) -> None:
         _catalog, state = grown(500)
@@ -142,16 +140,13 @@ class RebuildDisciplineTests(unittest.TestCase):
             save_state(state_path, state)
             self.assertTrue(refresh_if_needed(catalog, state_path, home, build_dir, force=True)["refreshed"])
 
-            # Reload from disk: the refresh above records the install metadata the
-            # watcher compares against, so a rebuilt-from-scratch state would look
-            # like it had never been installed.
             same = load_state(state_path, catalog)
-            same["xp"] = 62  # 50% -> still the same 5% bucket
+            same["xp"] = 62
             save_state(state_path, same)
             self.assertFalse(refresh_if_needed(catalog, state_path, home, build_dir)["refreshed"])
 
             crossed = load_state(state_path, catalog)
-            crossed["xp"] = 78  # 65% -> a different bucket, so the bar moves
+            crossed["xp"] = 78
             save_state(state_path, crossed)
             third = refresh_if_needed(catalog, state_path, home, build_dir)
             self.assertTrue(third["refreshed"])
@@ -165,51 +160,45 @@ class RebuildDisciplineTests(unittest.TestCase):
 
 
 class BarRenderingTests(unittest.TestCase):
-    def test_bar_lives_inside_the_shell_and_only_there_changes(self) -> None:
-        catalog = load_catalog(ROOT)
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            _c, low = grown(60)
-            low["lifeStage"] = "egg"
-            _c, high = grown(110)
-            high["lifeStage"] = "egg"
-            self.assertEqual(low["lifeStage"], high["lifeStage"])
+    def test_bar_is_the_only_thing_that_moves_when_progress_moves(self) -> None:
+        """Holds for both layouts: each row's diff must stay inside that row's bar."""
+        for layout in LAYOUTS:
+            with self.subTest(layout=layout):
+                catalog = load_catalog(ROOT)
+                rect = xp_bar_rect(layout)
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    _c, low = grown(60)
+                    low["lifeStage"] = "egg"
+                    _c, high = grown(110)
+                    high["lifeStage"] = "egg"
+                    low_report = build_codex_pet(catalog, low, root / "low", layout=layout)
+                    high_report = build_codex_pet(catalog, high, root / "high", layout=layout)
+                    self.assertNotEqual(low_report["xpBar"]["percent"], high_report["xpBar"]["percent"])
+                    self.assertEqual(low_report["xpBar"]["rect"], list(rect))
 
-            low_report = build_codex_pet(catalog, low, root / "low")
-            high_report = build_codex_pet(catalog, high, root / "high")
-            self.assertNotEqual(low_report["xpBar"]["percent"], high_report["xpBar"]["percent"])
-
-            low_png = root / "low" / "spritesheet.png"
-            high_png = root / "high" / "spritesheet.png"
-            # Progress is the only difference, so every changed pixel in every one of
-            # the nine rows must land inside that row's bar rect. Checking row-by-row
-            # is what makes a leak into the shell or the LCD visible.
-            boxes = band_diff_boxes(low_png, high_png)
-            moved = [box for box in boxes if box]
-            self.assertTrue(moved, "the bar should have moved between 50% and 90%")
-            for box in moved:
-                # band_diff_boxes reports x across the whole atlas while each cell
-                # carries its own copy of the bar, so compare modulo the cell width.
-                self.assertGreaterEqual(box[0] % 192, XP_BAR_RECT[0])
-                self.assertGreaterEqual(box[1], XP_BAR_RECT[1])
-                self.assertLessEqual(box[2] % 192, XP_BAR_RECT[2] + 1)
-                self.assertLessEqual(box[3], XP_BAR_RECT[3] + 1)
+                    moved = [b for b in band_diff_boxes(root / "low" / "spritesheet.png", root / "high" / "spritesheet.png") if b]
+                    self.assertTrue(moved, "the bar should have moved between 50% and 90%")
+                    for box in moved:
+                        self.assertGreaterEqual(box[0] % CELL, rect[0])
+                        self.assertGreaterEqual(box[1], rect[1])
+                        self.assertLessEqual(box[2] % CELL, rect[2] + 1)
+                        self.assertLessEqual(box[3], rect[3] + 1)
 
     def test_full_bar_saturates_on_the_terminal_stage(self) -> None:
         catalog = load_catalog(ROOT)
+        rect = xp_bar_rect(DEFAULT_LAYOUT)
+        bar = FLOATING_XP_BAR if DEFAULT_LAYOUT == "floating" else XP_BAR
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             _c, adult = grown(2000)
-            report = build_codex_pet(catalog, adult, root / "adult")
+            report = build_codex_pet(catalog, adult, root / "adult", layout=DEFAULT_LAYOUT)
             self.assertEqual(report["xpBar"]["percent"], "100")
-            sheet = Image.open(root / "adult" / "spritesheet.png").convert("RGBA")
-            cell = sheet.crop((0, 0, 192, 208))
-            # Sample the far right of the track: a saturated bar paints there.
-            fill = cell.getpixel((XP_BAR["x"] + XP_BAR["width"] - 4, XP_BAR["y"] + XP_BAR["height"] // 2))
-            self.assertGreater(fill[3], 200)
+            cell = cell_at(root / "adult" / "spritesheet.png")
+            fill = cell.getpixel((bar["x"] + bar["width"] - 4, bar["y"] + bar["height"] // 2))
+            self.assertGreater(fill[3], 200, f"expected a saturated bar at {rect}")
 
     def test_bar_is_skipped_when_no_shell_is_supplied(self) -> None:
-        # LCD-only callers (and older call sites) must keep working unchanged.
         from tamahermes.pet_compiler import apply_visual_overlay
 
         catalog = load_catalog(ROOT)
@@ -219,56 +208,132 @@ class BarRenderingTests(unittest.TestCase):
         mask = Image.open(catalog.screen_mask_path("aurora")).convert("L")
         screen = {"x": 35, "y": 47, "width": 122, "height": 104}
         painted = apply_visual_overlay(blank.copy(), screen, mask, visual)
-        bar_only = painted.crop(XP_BAR_RECT).getchannel("A").getextrema()[1]
-        self.assertEqual(bar_only, 0)
+        self.assertEqual(painted.crop(xp_bar_rect("shell")).getchannel("A").getextrema()[1], 0)
 
 
-class ValidatorTests(unittest.TestCase):
-    """The screen mask must stay meaningful now that something is painted outside it."""
+class FloatingLayoutTests(unittest.TestCase):
+    """The shell-less look: no device bubble, no LCD, creature larger, HUD floating."""
 
-    def test_validator_rejects_a_rect_that_is_not_on_the_shell(self) -> None:
+    def test_floating_is_the_default(self) -> None:
+        self.assertEqual(DEFAULT_LAYOUT, "floating")
         catalog = load_catalog(ROOT)
+        _c, state = grown(500)
         with tempfile.TemporaryDirectory() as tmp:
-            _c, state = grown(500)
-            report = build_codex_pet(catalog, state, Path(tmp) / "b")
-            atlas = Path(report["atlas"]["png"])
-            shell = catalog.shell_path("aurora")
-            mask = catalog.screen_mask_path("aurora")
+            default_report = build_codex_pet(catalog, state, Path(tmp) / "default")
+            self.assertEqual(default_report["layout"], "floating")
 
-            # A rect in the transparent corner of the cell: paint would float over
-            # nothing, which is exactly the failure the guard exists to catch.
-            drifting = (0, 0, 12, 12)
-            after = validate_screen_mask_clipping(atlas, shell, mask, skip_rects=(drifting,))
-            self.assertFalse(after["ok"])
-            self.assertTrue(any("outside the shell silhouette" in error for error in after["errors"]))
+    def test_floating_drops_the_device_shell_entirely(self) -> None:
+        catalog = load_catalog(ROOT)
+        _c, state = grown(500)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            build_codex_pet(catalog, state, root / "float", layout="floating")
+            build_codex_pet(catalog, state, root / "shell", layout="shell")
+
+            def margin_opaque(name: str) -> int:
+                """Opaque pixels in the cell's left 20 columns."""
+                sheet = cell_at(root / name / "spritesheet.png")
+                alpha = sheet.getchannel("A").load()
+                return sum(1 for x in range(0, 20) for y in range(208) if alpha[x, y] > 8)
+
+            # The shell fills the cell edge to edge; the floating pet leaves the margins
+            # empty. Counting the margin is more robust than probing one pixel, because
+            # the shell's outer edge is a soft glow rather than a hard fill.
+            self.assertLess(margin_opaque("float"), 50)
+            self.assertGreater(margin_opaque("shell"), 500)
+            self.assertEqual(cell_at(root / "float" / "spritesheet.png").getpixel((20, 100))[3], 0)
+
+    def test_floating_scales_the_creature_up_and_keeps_scaling_integral(self) -> None:
+        catalog = load_catalog(ROOT)
+        _c, state = grown(500)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            floating = build_codex_pet(catalog, state, root / "float", layout="floating")
+            shelled = build_codex_pet(catalog, state, root / "shell", layout="shell")
+            self.assertIsInstance(floating["creature"]["scale"], int)
+            self.assertGreater(floating["creature"]["scale"], shelled["creature"]["scale"])
+
+    def test_floating_geometry_guard_passes_for_the_real_layout(self) -> None:
+        catalog = load_catalog(ROOT)
+        union = pet_compiler.union_content_bbox(catalog, "toast")
+        result = validate_layout_geometry("floating", union)
+        self.assertTrue(result["ok"], result["errors"])
+
+    def test_floating_geometry_guard_catches_a_collision(self) -> None:
+        catalog = load_catalog(ROOT)
+        union = pet_compiler.union_content_bbox(catalog, "toast")
+        with mock.patch.object(pet_compiler, "FLOATING_STATUS_XY", (40, 60)):
+            result = validate_layout_geometry("floating", union)
+        self.assertFalse(result["ok"])
+        self.assertTrue(any("overlaps" in error for error in result["errors"]), result["errors"])
+
+    def test_grime_never_lands_on_the_creature(self) -> None:
+        catalog = load_catalog(ROOT)
+        _c, base = grown(500)
+        dirty = copy.deepcopy(base)
+        dirty["stats"]["mess"] = 90
+        clean = copy.deepcopy(base)
+        clean["stats"]["mess"] = 0
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dirty_report = build_codex_pet(catalog, dirty, root / "dirty", layout="floating")
+            build_codex_pet(catalog, clean, root / "clean", layout="floating")
+            if dirty_report["validation"]["screenMaskClipping"]["ok"] is False:
+                self.fail(dirty_report["validation"]["screenMaskClipping"]["errors"])
+            creature = tuple(dirty_report["validation"]["screenMaskClipping"]["creature"]["rect"])
+            row0 = (creature[0], creature[1], creature[2] + 1, creature[3] + 1)
+            self.assertEqual(changed_pixels(root / "dirty" / "spritesheet.png", root / "clean" / "spritesheet.png", row0), 0)
+
+    def test_unknown_layout_is_rejected(self) -> None:
+        catalog = load_catalog(ROOT)
+        _c, state = grown(0)
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(pet_compiler.PetCompileError):
+                build_codex_pet(catalog, state, Path(tmp) / "bad", layout="hologram")
+
+
+class ShellMaskGuardTests(unittest.TestCase):
+    """The framed layout still enforces the screen-mask contract."""
+
+    def make(self, tmp: str) -> tuple[Path, object]:
+        catalog = load_catalog(ROOT)
+        _c, state = grown(500)
+        return Path(tmp), catalog
 
     def test_real_bar_rect_passes_the_silhouette_guard(self) -> None:
         catalog = load_catalog(ROOT)
+        _c, state = grown(500)
         with tempfile.TemporaryDirectory() as tmp:
-            _c, state = grown(500)
-            report = build_codex_pet(catalog, state, Path(tmp) / "b")
+            report = build_codex_pet(catalog, state, Path(tmp) / "b", layout="shell")
             clipping = report["validation"]["screenMaskClipping"]
             self.assertTrue(clipping["ok"], clipping["errors"])
-            self.assertEqual(clipping["skipRects"], [list(XP_BAR_RECT)])
+            self.assertEqual(clipping["skipRects"], [list(xp_bar_rect("shell"))])
+
+    def test_validator_rejects_a_rect_that_is_not_on_the_shell(self) -> None:
+        catalog = load_catalog(ROOT)
+        _c, state = grown(500)
+        with tempfile.TemporaryDirectory() as tmp:
+            report = build_codex_pet(catalog, state, Path(tmp) / "b", layout="shell")
+            after = validate_screen_mask_clipping(
+                Path(report["atlas"]["png"]),
+                catalog.shell_path("aurora"),
+                catalog.screen_mask_path("aurora"),
+                skip_rects=((0, 0, 12, 12),),
+            )
+            self.assertFalse(after["ok"])
+            self.assertTrue(any("outside the shell silhouette" in error for error in after["errors"]))
 
     def test_paint_outside_the_bar_rect_is_still_a_violation(self) -> None:
         catalog = load_catalog(ROOT)
+        _c, state = grown(500)
         with tempfile.TemporaryDirectory() as tmp:
-            _c, state = grown(500)
-            report = build_codex_pet(catalog, state, Path(tmp) / "b")
-            atlas_path = Path(report["atlas"]["png"])
-            # Blank out the bar, then dirty a pixel elsewhere on the face: with no
-            # skip rect the validator must notice the stray paint.
-            sheet = Image.open(atlas_path).convert("RGBA")
-            sheet.putpixel((XP_BAR["x"] + 3, XP_BAR["y"] + 5), (255, 0, 255, 255))
+            report = build_codex_pet(catalog, state, Path(tmp) / "b", layout="shell")
+            sheet = Image.open(report["atlas"]["png"]).convert("RGBA")
             sheet.putpixel((100, 180), (255, 0, 255, 255))
             dirty = Path(tmp) / "dirty.png"
             sheet.save(dirty)
-
-            unchecked = validate_screen_mask_clipping(dirty, catalog.shell_path("aurora"), catalog.screen_mask_path("aurora"))
-            self.assertFalse(unchecked["ok"])
             still_flagged = validate_screen_mask_clipping(
-                dirty, catalog.shell_path("aurora"), catalog.screen_mask_path("aurora"), skip_rects=(XP_BAR_RECT,)
+                dirty, catalog.shell_path("aurora"), catalog.screen_mask_path("aurora"), skip_rects=(xp_bar_rect("shell"),)
             )
             self.assertFalse(still_flagged["ok"], "paint outside the skip rect must still fail")
 

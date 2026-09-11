@@ -39,6 +39,16 @@ SPRITESHEET_BASENAME = "spritesheet.webp"
 # a fixed rect on purpose: the 192x208 atlas cell is a hard contract with Hermes
 # (FRAME_W/FRAME_H), so the art cannot grow to make room -- the bar has to live in
 # space the shell already leaves empty.
+# Two ways to render a pet into the 192x208 cell:
+#   "floating" -- the creature alone, with its HUD floating around it (the default;
+#                 no device shell, so no Tamagotchi-shaped bubble and no LCD panel)
+#   "shell"    -- the creature inside a tamago machine shell (aurora/pulse), with the
+#                 HUD drawn on the LCD. Retained so the framed look stays available.
+LAYOUTS = ("floating", "shell")
+DEFAULT_LAYOUT = "floating"
+
+# Shell layout: the bar sits in the shell's dead space below the LCD (aurora's screen
+# ends at y=150). Floating layout: it sits under the creature instead.
 XP_BAR = {"x": 35, "y": 156, "width": 122, "height": 11}
 XP_BAR_RECT = (
     XP_BAR["x"],
@@ -49,6 +59,25 @@ XP_BAR_RECT = (
 # Growth is drawn in 1/XP_BAR_STEPS buckets (see visual_state.percent_bucket), so the
 # drawn bar matches the quantised value the rebuild decision was made on.
 XP_BAR_STEPS = 20
+
+# Floating layout geometry. Without a shell there is no frame to anchor the HUD, so
+# it is arranged as two tidy rows -- one above the creature, one below -- rather than
+# scattered into the cell's corners:
+#     y  8..20   [alert] [ status strip ] [health]
+#     y 33..176  the creature
+#     y181..192  [food] [ growth bar ] [heart]
+# Each row is centred as a *group*, with the side icons sitting a 4px gap away from the
+# bar they decorate -- parking them in the cell corners reads as scattered, and there is
+# no shell left to anchor them.
+FLOATING_XP_BAR = {"x": 38, "y": 181, "width": 122, "height": 11}
+FLOATING_STATUS_XY = (43, 8)      # group of 13+4+107+4+13 = 141, centred
+FLOATING_ALERT_XY = (26, 8)
+FLOATING_HEALTH_XY = (154, 8)
+FLOATING_FOOD_XY = (18, 182)      # group of 16+4+122+4+9 = 155, centred
+FLOATING_HEART_XY = (164, 182)
+FLOATING_PET_BAND = (29, 181)          # inclusive top, exclusive bottom
+FLOATING_PET_MAX_WIDTH = 144
+FLOATING_MESS_BOX = (16, 28, 160, 152)  # x, y, width, height
 
 _STAGE_BAR_FILL = {
     "egg": (204, 142, 49, 245),
@@ -90,7 +119,9 @@ def package_source_hash(
     form_id: str | None = None,
     machine_id: str | None = None,
     pet_id: str = "tamahermes",
+    layout: str | None = None,
 ) -> str:
+    layout_name = resolve_layout(layout)
     form = form_id or state["formId"]
     machine = machine_id or state["machineId"]
     form_info = catalog.form_info(form)
@@ -112,20 +143,25 @@ def package_source_hash(
             "lifeStage": form_info["stage"],
             "branch": form_info.get("branch"),
             "machineId": machine,
+            "layout": layout_name,
             "visualOverlayVersion": VISUAL_OVERLAY_VERSION,
         },
     )
     _hash_json(hasher, "visual-state", visual_state)
-    for label, path in [
+    hashed_files = [
         ("catalog-manifest", catalog.root / "manifest.json"),
         ("evolution-manifest", catalog.root / "pawn" / "evolution" / "evolution_manifest.json"),
         ("form-manifest", catalog.pose_manifest_path(form)),
         ("runtime-motion", catalog.runtime_motion_path(form)),
-        ("machine-manifest", machine_manifest_path),
-        ("screen-viewport", viewport_path),
-        ("screen-mask", catalog.screen_mask_path(machine)),
-        ("machine-shell", catalog.shell_path(machine)),
-    ]:
+    ]
+    if layout_name == "shell":
+        hashed_files += [
+            ("machine-manifest", machine_manifest_path),
+            ("screen-viewport", viewport_path),
+            ("screen-mask", catalog.screen_mask_path(machine)),
+            ("machine-shell", catalog.shell_path(machine)),
+        ]
+    for label, path in hashed_files:
         _hash_file(hasher, label, path)
 
     pose_names = sorted(
@@ -316,6 +352,117 @@ def write_contact_sheet(atlas_path: Path, output_path: Path) -> Path:
     return output_path
 
 
+def resolve_layout(layout: str | None) -> str:
+    """Normalise a layout name, defaulting to the floating (shell-less) look."""
+    name = (layout or DEFAULT_LAYOUT).strip().lower()
+    if name not in LAYOUTS:
+        raise PetCompileError(f"unknown layout {layout!r}; expected one of {', '.join(LAYOUTS)}")
+    return name
+
+
+def xp_bar_rect(layout: str | None = None) -> tuple[int, int, int, int]:
+    """The growth bar rect for *layout* (the drawn copies differ per layout)."""
+    bar = FLOATING_XP_BAR if resolve_layout(layout) == "floating" else XP_BAR
+    return (bar["x"], bar["y"], bar["x"] + bar["width"] - 1, bar["y"] + bar["height"] - 1)
+
+
+def union_content_bbox(catalog: Catalog, form: str) -> tuple[int, int, int, int]:
+    """Union opaque bbox across every pose *form* can play.
+
+    Cropping every frame by the same box (rather than each frame's own bbox) is what
+    keeps per-frame offsets meaningful -- a per-frame crop would make the creature
+    jitter as limbs move.
+    """
+    motion = read_json(catalog.runtime_motion_path(form))
+    names = sorted({f["pose"] for frames in motion.get("states", {}).values() for f in frames if f.get("pose")})
+    union: list[int] | None = None
+    for name in names:
+        path = catalog.pose_root(form) / f"{name}.png"
+        if not path.exists():
+            raise PetCompileError(f"missing pose image: {path}")
+        bbox = Image.open(path).convert("RGBA").getchannel("A").getbbox()
+        if not bbox:
+            continue
+        union = list(bbox) if union is None else [
+            min(union[0], bbox[0]), min(union[1], bbox[1]), max(union[2], bbox[2]), max(union[3], bbox[3])
+        ]
+    if union is None:
+        raise PetCompileError(f"form {form} has no opaque pose pixels")
+    return (union[0], union[1], union[2], union[3])
+
+
+def floating_pet_placement(union: tuple[int, int, int, int]) -> tuple[int, tuple[int, int]]:
+    """Largest integer scale that fits the creature in its band, and where to put it.
+
+    Integer-only scaling keeps pixel art crisp; anything else resamples the art.
+    """
+    width, height = union[2] - union[0], union[3] - union[1]
+    top, bottom = FLOATING_PET_BAND
+    scale = max(1, min((bottom - top) // max(1, height), FLOATING_PET_MAX_WIDTH // max(1, width)))
+    scaled_w, scaled_h = width * scale, height * scale
+    return scale, ((CELL_WIDTH - scaled_w) // 2, top + ((bottom - top) - scaled_h) // 2)
+
+
+def floating_pet_rect(union: tuple[int, int, int, int], scale: int, origin: tuple[int, int]) -> tuple[int, int, int, int]:
+    """Where the scaled creature lands in the cell."""
+    return (
+        origin[0],
+        origin[1],
+        origin[0] + (union[2] - union[0]) * scale - 1,
+        origin[1] + (union[3] - union[1]) * scale - 1,
+    )
+
+
+def validate_layout_geometry(layout: str, union: tuple[int, int, int, int]) -> dict[str, Any]:
+    """Cheap structural guard for the floating layout: HUD and creature must not collide."""
+    errors: list[str] = []
+    scale, (px, py) = floating_pet_placement(union)
+    pet = floating_pet_rect(union, scale, (px, py))
+    rects = {
+        "status": (FLOATING_STATUS_XY[0], FLOATING_STATUS_XY[1], FLOATING_STATUS_XY[0] + 106, FLOATING_STATUS_XY[1] + 12),
+        "xpBar": xp_bar_rect("floating"),
+        "alert": (FLOATING_ALERT_XY[0], FLOATING_ALERT_XY[1], FLOATING_ALERT_XY[0] + 13, FLOATING_ALERT_XY[1] + 11),
+        "food": (FLOATING_FOOD_XY[0], FLOATING_FOOD_XY[1], FLOATING_FOOD_XY[0] + 15, FLOATING_FOOD_XY[1] + 8),
+        "heart": (FLOATING_HEART_XY[0], FLOATING_HEART_XY[1], FLOATING_HEART_XY[0] + 9, FLOATING_HEART_XY[1] + 8),
+        "health": (FLOATING_HEALTH_XY[0], FLOATING_HEALTH_XY[1], FLOATING_HEALTH_XY[0] + 13, FLOATING_HEALTH_XY[1] + 11),
+    }
+    for name, rect in rects.items():
+        if not (0 <= rect[0] < rect[2] < CELL_WIDTH and 0 <= rect[1] < rect[3] < CELL_HEIGHT):
+            errors.append(f"{name} rect {rect} leaves the {CELL_WIDTH}x{CELL_HEIGHT} cell")
+    for name, rect in rects.items():
+        if not (rect[2] < pet[0] or rect[0] > pet[2] or rect[3] < pet[1] or rect[1] > pet[3]):
+            errors.append(f"{name} rect {rect} overlaps the creature {pet}")
+    names = list(rects)
+    for index, left in enumerate(names):
+        for right in names[index + 1:]:
+            a, b = rects[left], rects[right]
+            if not (a[2] < b[0] or b[2] < a[0] or a[3] < b[1] or b[3] < a[1]):
+                errors.append(f"{left} rect {a} overlaps {right} rect {b}")
+    return {
+        "ok": not errors,
+        "layout": layout,
+        "skipped": "floating layout has no LCD shell, so there is no screen mask to clip to",
+        "creature": {"scale": scale, "rect": list(pet)},
+        "rects": {name: list(rect) for name, rect in rects.items()},
+        "errors": errors,
+    }
+
+
+def compose_float_cell(
+    pose: Image.Image,
+    offset: list[int] | tuple[int, int],
+    union: tuple[int, int, int, int],
+    scale: int,
+    origin: tuple[int, int],
+) -> Image.Image:
+    """The creature alone in the cell -- no shell, no LCD, transparent everywhere else."""
+    cell = Image.new("RGBA", (CELL_WIDTH, CELL_HEIGHT), (0, 0, 0, 0))
+    cropped = pose.crop(union)
+    pawn = cropped.resize((cropped.width * scale, cropped.height * scale), Image.Resampling.NEAREST)
+    cell.alpha_composite(pawn, (origin[0] + int(offset[0]) * scale, origin[1] + int(offset[1]) * scale))
+    return cell
+
+
 def compose_cell(
     shell: Image.Image,
     pose: Image.Image,
@@ -367,11 +514,26 @@ def _draw_health_warning(draw: ImageDraw.ImageDraw, x: int, y: int) -> None:
     _rect(draw, x + 5, y + 10, 3, 2, ink)
 
 
-def _draw_mess(draw: ImageDraw.ImageDraw, x: int, y: int, width: int, height: int, mess: str) -> None:
+def _draw_mess(
+    draw: ImageDraw.ImageDraw,
+    x: int,
+    y: int,
+    width: int,
+    height: int,
+    mess: str,
+    avoid: tuple[int, int, int, int] | None = None,
+) -> None:
+    """Grime specks. *avoid* is the creature's rect: with no LCD to grub up, the mess
+    has to sit in the space around the pet, and drawing it over the pet looks broken."""
     if mess == "clean":
         return
     dust = (83, 87, 71, 150)
     smudge = (51, 65, 52, 105)
+
+    def blocked(rect: tuple[int, int, int, int]) -> bool:
+        if not avoid:
+            return False
+        return not (rect[2] < avoid[0] or rect[0] > avoid[2] or rect[3] < avoid[1] or rect[1] > avoid[3])
     specks = [
         (x + width - 25, y + 26),
         (x + width - 18, y + 47),
@@ -386,10 +548,12 @@ def _draw_mess(draw: ImageDraw.ImageDraw, x: int, y: int, width: int, height: in
                 (x + 56, y + 24),
             ]
         )
-        draw.rectangle((x + width - 34, y + height - 41, x + width - 18, y + height - 36), fill=smudge)
-        draw.rectangle((x + 18, y + 39, x + 31, y + 42), fill=smudge)
+        for rect in ((x + width - 34, y + height - 41, x + width - 18, y + height - 36), (x + 18, y + 39, x + 31, y + 42)):
+            if not blocked(rect):
+                draw.rectangle(rect, fill=smudge)
     for sx, sy in specks:
-        _rect(draw, sx, sy, 2, 2, dust)
+        if not blocked((sx, sy, sx + 1, sy + 1)):
+            _rect(draw, sx, sy, 2, 2, dust)
 
 
 def _draw_food(draw: ImageDraw.ImageDraw, x: int, y: int, satiety: str) -> None:
@@ -523,7 +687,7 @@ def _percent_value(value: Any) -> int:
         return 0
 
 
-def _draw_xp_bar(draw: ImageDraw.ImageDraw, visual_state: dict[str, str]) -> None:
+def _draw_xp_bar(draw: ImageDraw.ImageDraw, visual_state: dict[str, str], rect: dict[str, int] | None = None) -> None:
     """Evolution progress, drawn in the dead space below the LCD screen.
 
     The status strip answers "how is the pet doing" in coarse bins; this answers
@@ -531,7 +695,8 @@ def _draw_xp_bar(draw: ImageDraw.ImageDraw, visual_state: dict[str, str]) -> Non
     watches. The fill colour tracks the current stage so the bar changes character as
     the pet grows, and it fills completely on the terminal (adult) stage.
     """
-    x, y, width, height = XP_BAR["x"], XP_BAR["y"], XP_BAR["width"], XP_BAR["height"]
+    bar = rect or XP_BAR
+    x, y, width, height = bar["x"], bar["y"], bar["width"], bar["height"]
     ink = (38, 54, 44, 245)
     track = (26, 30, 40, 205)
     tick = (74, 86, 80, 120)
@@ -603,6 +768,38 @@ def apply_visual_overlay(
     return cell
 
 
+def apply_float_overlay(
+    cell: Image.Image,
+    visual_state: dict[str, str],
+    creature_rect: tuple[int, int, int, int] | None = None,
+) -> Image.Image:
+    """Draw the HUD around a shell-less creature.
+
+    Nothing is clipped: with no LCD there is no screen mask, and the only reason the
+    shelled layout clipped at all was to keep the pawn inside the device's viewport.
+    """
+    overlay = Image.new("RGBA", (CELL_WIDTH, CELL_HEIGHT), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+    _draw_status_strip(draw, FLOATING_STATUS_XY[0], FLOATING_STATUS_XY[1], visual_state)
+    if visual_state["health"] == "weak":
+        _draw_health_warning(draw, FLOATING_HEALTH_XY[0], FLOATING_HEALTH_XY[1])
+    _draw_mess(
+        draw,
+        FLOATING_MESS_BOX[0],
+        FLOATING_MESS_BOX[1],
+        FLOATING_MESS_BOX[2],
+        FLOATING_MESS_BOX[3],
+        visual_state["mess"],
+        avoid=creature_rect,
+    )
+    _draw_food(draw, FLOATING_FOOD_XY[0], FLOATING_FOOD_XY[1], visual_state["satiety"])
+    _draw_heart(draw, FLOATING_HEART_XY[0], FLOATING_HEART_XY[1], visual_state["bond"])
+    _draw_alert(draw, FLOATING_ALERT_XY[0], FLOATING_ALERT_XY[1], visual_state["alert"])
+    _draw_xp_bar(draw, visual_state, FLOATING_XP_BAR)
+    cell.alpha_composite(overlay)
+    return cell
+
+
 def build_codex_pet(
     catalog: Catalog,
     state: dict[str, Any],
@@ -610,24 +807,37 @@ def build_codex_pet(
     form_id: str | None = None,
     machine_id: str | None = None,
     pet_id: str = "tamahermes",
+    layout: str | None = None,
 ) -> dict[str, Any]:
+    layout_name = resolve_layout(layout)
     form = form_id or state["formId"]
     machine = machine_id or state["machineId"]
-    source_hash = package_source_hash(catalog, state, form_id=form, machine_id=machine, pet_id=pet_id)
+    source_hash = package_source_hash(
+        catalog, state, form_id=form, machine_id=machine, pet_id=pet_id, layout=layout_name
+    )
     form_info = catalog.form_info(form)
     machine_info = catalog.machine_info(machine)
     visual_state = derive_visual_state(state)
     visual_hash = visual_state_hash(visual_state)
     motion = read_json(catalog.runtime_motion_path(form))
-    viewport = read_json(catalog.screen_viewport_path(machine))
-    screen = viewport["screen"]
-    scale = int(motion.get("defaultPawnScale") or viewport.get("defaultPawnScale") or 3)
-    shell = Image.open(catalog.shell_path(machine)).convert("RGBA")
-    screen_mask = Image.open(catalog.screen_mask_path(machine)).convert("L")
-    if shell.size != (CELL_WIDTH, CELL_HEIGHT):
-        raise PetCompileError(f"machine shell must be {CELL_WIDTH}x{CELL_HEIGHT}, got {shell.size}")
-    if screen_mask.size != (CELL_WIDTH, CELL_HEIGHT):
-        raise PetCompileError(f"screen mask must be {CELL_WIDTH}x{CELL_HEIGHT}, got {screen_mask.size}")
+    shell = screen_mask = screen = None
+    union: tuple[int, int, int, int] | None = None
+    origin: tuple[int, int] = (0, 0)
+    creature_rect: tuple[int, int, int, int] | None = None
+    if layout_name == "shell":
+        viewport = read_json(catalog.screen_viewport_path(machine))
+        screen = viewport["screen"]
+        scale = int(motion.get("defaultPawnScale") or viewport.get("defaultPawnScale") or 3)
+        shell = Image.open(catalog.shell_path(machine)).convert("RGBA")
+        screen_mask = Image.open(catalog.screen_mask_path(machine)).convert("L")
+        if shell.size != (CELL_WIDTH, CELL_HEIGHT):
+            raise PetCompileError(f"machine shell must be {CELL_WIDTH}x{CELL_HEIGHT}, got {shell.size}")
+        if screen_mask.size != (CELL_WIDTH, CELL_HEIGHT):
+            raise PetCompileError(f"screen mask must be {CELL_WIDTH}x{CELL_HEIGHT}, got {screen_mask.size}")
+    else:
+        union = union_content_bbox(catalog, form)
+        scale, origin = floating_pet_placement(union)
+        creature_rect = floating_pet_rect(union, scale, origin)
 
     output_dir.mkdir(parents=True, exist_ok=True)
     atlas = Image.new("RGBA", (ATLAS_WIDTH, ATLAS_HEIGHT), (0, 0, 0, 0))
@@ -642,8 +852,13 @@ def build_codex_pet(
             if not pose_path.exists():
                 raise PetCompileError(f"missing pose image: {pose_path}")
             pose = Image.open(pose_path).convert("RGBA")
-            cell = compose_cell(shell, pose, screen, scale, frame.get("offset", [0, 0]), screen_mask)
-            cell = apply_visual_overlay(cell, screen, screen_mask, visual_state, shell)
+            offset = frame.get("offset", [0, 0])
+            if layout_name == "shell":
+                cell = compose_cell(shell, pose, screen, scale, offset, screen_mask)
+                cell = apply_visual_overlay(cell, screen, screen_mask, visual_state, shell)
+            else:
+                cell = compose_float_cell(pose, offset, union, scale, origin)
+                cell = apply_float_overlay(cell, visual_state, creature_rect)
             atlas.alpha_composite(cell, (column * CELL_WIDTH, row_index * CELL_HEIGHT))
             frames_written.append(
                 {
@@ -675,9 +890,12 @@ def build_codex_pet(
     manifest_path.write_text(json.dumps(pet_manifest, indent=2) + "\n", encoding="utf-8")
     validation_png = validate_atlas(png_path)
     validation_webp = validate_atlas(webp_path)
-    validation_screen_mask = validate_screen_mask_clipping(
-        png_path, catalog.shell_path(machine), catalog.screen_mask_path(machine), skip_rects=(XP_BAR_RECT,)
-    )
+    if layout_name == "shell":
+        validation_screen_mask = validate_screen_mask_clipping(
+            png_path, catalog.shell_path(machine), catalog.screen_mask_path(machine), skip_rects=(XP_BAR_RECT,)
+        )
+    else:
+        validation_screen_mask = validate_layout_geometry(layout_name, union)
     validation_png_path = qa_dir / "validation-png.json"
     validation_webp_path = qa_dir / "validation-webp.json"
     validation_screen_mask_path = qa_dir / "validation-screen-mask.json"
@@ -695,12 +913,14 @@ def build_codex_pet(
         "branch": form_info.get("branch"),
         "machineId": machine,
         "machineDisplayName": machine_info.get("displayName", machine),
+        "layout": layout_name,
+        "creature": {"scale": scale, "origin": list(origin), "contentBox": list(union) if union else None},
         "catalogDir": str(catalog.root),
         "visualOverlayVersion": VISUAL_OVERLAY_VERSION,
         "visualState": visual_state,
         "visualStateHash": visual_hash,
         "xpBar": {
-            "rect": list(XP_BAR_RECT),
+            "rect": list(xp_bar_rect(layout_name)),
             "steps": XP_BAR_STEPS,
             "stage": visual_state.get("stage"),
             "percent": visual_state.get("xpPercent"),
@@ -789,8 +1009,8 @@ def install_petdex_pet(
         "id": pet_id,
         "displayName": display_name,
         "description": (
-            f"{display_name} — {state.get('lifeStage', 'egg')} stage, grown from "
-            "Hermes agent activity. A Tamagotchi-style desktop pet for Hermes Agent."
+            f"{display_name} — {state.get('lifeStage', 'egg')} stage, grown from your "
+            "coding agents. An evolving desktop companion."
         ),
         "spritesheetPath": SPRITESHEET_BASENAME,
     }

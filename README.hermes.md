@@ -68,12 +68,36 @@ python -m tamahermes --target hermes event rest --amount 4
 python -m tamahermes --target hermes status
 ```
 
+## The look
+
+By default the pet is rendered **floating**: the creature alone in the cell, with its
+HUD floating around it. There is no device shell, so no oval "bubble" and no LCD panel —
+the pet is a companion on your desktop rather than a Tamagotchi you peer into.
+
+```
+   [alert] [ ▮▮▮▮ status strip ] [health]      ← HUD row
+                 the creature
+      [food] [ ██████░░░░ growth bar ] [♥]      ← HUD row
+```
+
+Both HUD rows are centred as groups, with the side icons sitting a 4px gap from the bar
+they decorate; the creature is scaled to the largest **integer** multiple that fits the
+band between them (integer scaling keeps pixel art crisp). Grime specks are placed with
+the creature's rect excluded, so mess never lands on the pet.
+
+Set `layout="shell"` on `build_codex_pet` to get the framed look back — the creature
+inside an `aurora`/`pulse` tamago shell with the HUD drawn on the LCD. Shell geometry,
+the screen mask, and its validator are all retained; the shell-less layout simply skips
+them and is guarded instead by `validate_layout_geometry`, which fails the build if any
+HUD rect leaves the cell, drifts off the cell, or collides with the creature or another
+HUD element.
+
 ## The XP bar
 
-Every compiled pet carries a growth bar on its face, in the empty space below the
-LCD screen and above the button — visible on the terminal pet, in the desktop
-mirror, and in the preview, because it is baked into the sprite rather than drawn
-by any one host (Hermes renders nothing but the atlas).
+Every compiled pet carries a growth bar, visible on the terminal pet, in the desktop
+mirror, and in the preview, because it is baked into the sprite rather than drawn by any
+one host (Hermes renders nothing but the atlas). In the floating layout it sits in the
+lower HUD row; in the framed layout it lives in the shell's dead space below the LCD.
 
 ```
 egg 0%                 egg 50%               child ~30%            adult 100%

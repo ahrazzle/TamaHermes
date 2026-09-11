@@ -87,8 +87,10 @@ class M91NativeVisualStateTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
-            base_report = build_codex_pet(catalog, base_state, tmp_path / "base")
-            loud_report = build_codex_pet(catalog, loud_state, tmp_path / "loud")
+            # Explicitly the framed layout: this test is about the status strip baked
+            # into the LCD, which the default shell-less layout does not have.
+            base_report = build_codex_pet(catalog, base_state, tmp_path / "base", layout="shell")
+            loud_report = build_codex_pet(catalog, loud_state, tmp_path / "loud", layout="shell")
 
             self.assertEqual(base_report["atlas"]["width"], ATLAS_WIDTH)
             self.assertEqual(base_report["atlas"]["height"], ATLAS_HEIGHT)

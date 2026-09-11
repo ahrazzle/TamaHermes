@@ -100,7 +100,8 @@ Open this repo in Codex App and enable the local plugin from `.agents/plugins/ma
 
 - Codex custom pet package: `pet.json` + `spritesheet.webp`
 - Two companion lines: `toast`, `mais`
-- Two tamago shells: `aurora`, `pulse`
+- **Floating creature, no device bubble** by default — the pet floats with its HUD
+  (`--layout shell` restores the framed tamago look with the `aurora`/`pulse` shells)
 - Local growth ledger: XP, stages, stats, traits, counters, recent events
 - **XP bar on the pet itself** — progress toward the next life stage, drawn on the
   shell below the LCD so it shows on the terminal pet and the desktop pet alike
