@@ -631,6 +631,96 @@ def _is_versioned_sheet(name: str) -> bool:
     return len(stem) == 12 and all(char in "0123456789abcdef" for char in stem)
 
 
+def install_petdex_pet(
+    catalog: Catalog,
+    state: dict[str, Any],
+    petdex_home: Path,
+    build_dir: Path,
+    force: bool = False,
+    source_sheet: Path | None = None,
+    kind: str | None = None,
+) -> dict[str, Any]:
+    """Install the pet into a Petdex desktop home (``~/.petdex``).
+
+    The Petdex desktop app renders the same artifact Hermes does — an 8x9 atlas
+    of 192x208 cells plus ``pet.json`` — but it expects the conventional
+    unversioned ``spritesheet.webp`` beside the manifest, so this lays the pet
+    out that way instead of using the content-addressed name a Hermes home gets.
+
+    ``source_sheet`` short-circuits the render: when the pet is already built
+    for Hermes, mirroring it to the desktop is a file copy, not a rebuild.
+    """
+    pet_id = state.get("petId", "tamacodex")
+    pet_dir = petdex_home / "pets" / pet_id
+    target_sheet = pet_dir / SPRITESHEET_BASENAME
+    target_manifest = pet_dir / "pet.json"
+    if pet_dir.exists() and not force and (target_sheet.exists() or target_manifest.exists()):
+        raise PetCompileError(
+            f"{pet_dir} already contains a Petdex pet. This protects the existing package; pass --force to replace it."
+        )
+    if source_sheet is not None and Path(source_sheet).is_file():
+        sheet_source = Path(source_sheet)
+    else:
+        build_codex_pet(catalog, state, build_dir)
+        sheet_source = build_dir / SPRITESHEET_BASENAME
+
+    pet_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(sheet_source, target_sheet)
+    display_name = state.get("displayName") or "Tamacodex"
+    manifest: dict[str, Any] = {
+        "id": pet_id,
+        "displayName": display_name,
+        "description": (
+            f"{display_name} — a Tamacodex companion ({state.get('lifeStage', 'egg')} stage) "
+            "that grows from Hermes agent activity."
+        ),
+        "spritesheetPath": SPRITESHEET_BASENAME,
+    }
+    if kind:
+        # `kind` is optional in Petdex (most shipped pets omit it), so it is
+        # only written when the caller explicitly asks for one.
+        manifest["kind"] = kind
+    target_manifest.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    return {
+        "ok": True,
+        "petId": pet_id,
+        "petDir": str(pet_dir),
+        "manifest": str(target_manifest),
+        "spritesheet": str(target_sheet),
+        "spritesheetPath": SPRITESHEET_BASENAME,
+        "sourceSheet": str(sheet_source),
+    }
+
+
+def set_petdex_active_pet(petdex_home: Path, pet_id: str) -> dict[str, Any]:
+    """Point the Petdex desktop app at ``pet_id``.
+
+    Rewrites only the ``active_pet`` key of ``desktop-native-settings.json``,
+    preserving every other setting and its order. Petdex must not be running:
+    a live app writes that file from memory on quit and would clobber this.
+    """
+    settings_path = petdex_home / "desktop-native-settings.json"
+    settings: dict[str, Any] = {}
+    if settings_path.is_file():
+        try:
+            loaded = json.loads(settings_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                settings = loaded
+        except (OSError, ValueError):
+            settings = {}
+    previous = settings.get("active_pet")
+    settings["active_pet"] = pet_id
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    # No trailing newline and no spaces: matches how the app writes the file.
+    settings_path.write_text(json.dumps(settings, separators=(",", ":")), encoding="utf-8")
+    return {
+        "ok": True,
+        "settings": str(settings_path),
+        "previousPet": previous,
+        "activePet": pet_id,
+    }
+
+
 def install_codex_pet(catalog: Catalog, state: dict[str, Any], codex_home: Path, build_dir: Path, force: bool = False) -> dict[str, Any]:
     pet_dir = codex_home / "pets" / state.get("petId", "tamacodex")
     target_sheet = pet_dir / SPRITESHEET_BASENAME

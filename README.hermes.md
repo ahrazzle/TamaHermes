@@ -124,11 +124,48 @@ what the shell-hook script calls). `--reset` clears the turn bookkeeping.
 |---|---|
 | `HERMES_HOME` | target Hermes home (profile-aware) |
 | `TAMACODEX_HERMES_HOME` | overrides `HERMES_HOME` for the hook script/plugin |
+| `TAMACODEX_PETDEX_HOME` | Petdex desktop home to mirror into; unset = no desktop mirror |
 | `TAMACODEX_REPO_ROOT` | lets the plugin/script import `tamacodex` without an install |
 | `TAMACODEX_PY` | interpreter for the shell-hook wrapper |
 | `TAMACODEX_HERMES_SYNC=1` | run the plugin inline instead of on the worker thread (tests) |
 | `TAMACODEX_LINE` / `TAMACODEX_MACHINE` | pin the companion line / tamago shell |
 | `TAMACODEX_CATALOG_DIR` | custom rendered catalog directory |
+
+## Floating it on the desktop (Petdex)
+
+Hermes draws pets inside the terminal/TUI. If you also run **Petdex.app** — the
+macOS desktop pet host (`/Applications/Petdex.app`, pets in `~/.petdex/pets/`) —
+TamaCodex can float there too, off the same ledger:
+
+```bash
+./hermes/install-hermes.sh --petdex-activate     # close Petdex.app first
+./hermes/install-all-profiles.sh --petdex-activate   # every profile
+```
+
+This is a copy, not a second pet. The Petdex desktop app consumes the same
+8&times;9 / 192&times;208 atlas Hermes does, so the mirror writes
+`~/.petdex/pets/tamacodex/` (`pet.json` + `spritesheet.webp`) and optionally
+points `active_pet` at it.
+
+Once the opt-in marker is recorded at `<HERMES_HOME>/tamacodex/petdex-home`,
+every growth refresh re-mirrors the sheet, so the floating pet evolves with the
+terminal one instead of freezing at whatever it looked like on install day.
+
+```bash
+tamacodex petdex --petdex-home ~/.petdex --force [--activate] [--kind creature]
+```
+
+Honest caveats:
+
+- The desktop pet is **machine-global** while growth ledgers are per-profile, so
+  the sprite you see reflects whichever profile last grew. Installing from every
+  profile (as `install-all-profiles.sh --petdex` does) is what keeps the mirror
+  current from all of them.
+- `--activate` rewrites only `active_pet`; every other key of
+  `desktop-native-settings.json` — and its key order — is preserved. Petdex must
+  be **closed**, or it rewrites the file from memory on quit and clobbers it.
+- `--petdex` alone just adds the pet to the rotation (`rotate_pets`);
+  `--petdex-activate` pins it as the one on screen.
 
 ## Profiles
 

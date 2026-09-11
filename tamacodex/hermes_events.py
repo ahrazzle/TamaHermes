@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Any
 
 from .catalog import Catalog
-from .paths import now_iso
+from .paths import now_iso, petdex_home
 from .watcher import refresh_if_needed
 from .bridge import BRIDGE_SCHEMA, apply_bridge_event
 from .state import normalize_event
@@ -325,6 +325,30 @@ def hermes_hook_records(payload: dict[str, Any], hook_state: dict[str, Any]) -> 
 # ---------------------------------------------------------------------------
 
 
+def default_petdex_home(home: Path | None = None) -> Path | None:
+    """Where to mirror the pet for the Petdex *desktop* app, if configured.
+
+    Opt-in only, so a plain run never writes outside the Hermes home: either
+    ``TAMACODEX_PETDEX_HOME`` is set, or the installer recorded a pointer beside
+    the ledger (``<home>/tamacodex/petdex-home``).
+    """
+    from .paths import hermes_home
+
+    explicit = petdex_home(None)
+    if explicit is not None:
+        return explicit
+    base = home if home is not None else hermes_home(None)
+    marker = base / "tamacodex" / "petdex-home"
+    try:
+        if marker.is_file():
+            recorded = marker.read_text(encoding="utf-8").strip()
+            if recorded:
+                return Path(recorded).expanduser().resolve()
+    except OSError:
+        return None
+    return None
+
+
 def apply_hermes_hook(
     catalog: Catalog,
     state_path: Path,
@@ -380,6 +404,7 @@ def apply_hermes_hook(
             machine_id=machine_id or "aurora",
             force=False,
             catalog_dir=catalog_dir,
+            petdex_home=default_petdex_home(home),
         )
     except Exception as exc:  # noqa: BLE001 - a failed rebuild must never break the agent turn
         report["refresh"] = {"ok": False, "error": str(exc)}

@@ -27,6 +27,19 @@ def hermes_home(value: str | None = None) -> Path:
     return Path(raw).expanduser().resolve()
 
 
+def petdex_home(value: str | None = None) -> Path | None:
+    """The Petdex *desktop* home to mirror the pet into, if one is configured.
+
+    Returns ``None`` when nothing is configured. Deliberately does not guess
+    ``~/.petdex``: mirroring is an explicit opt-in, so a plain run never writes
+    outside the Hermes home it was pointed at.
+    """
+    raw = value or os.environ.get("TAMACODEX_PETDEX_HOME")
+    if not raw:
+        return None
+    return Path(raw).expanduser().resolve()
+
+
 def default_state_path(home: Path) -> Path:
     return home / "tamacodex" / "state.json"
 

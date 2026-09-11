@@ -23,6 +23,9 @@ DISPLAY_NAME=""
 RESET=""
 MODE="plugin"
 INSTALL_PYTHON="1"
+PETDEX=""
+PETDEX_ACTIVATE=""
+PETDEX_HOME_DIR="${TAMACODEX_PETDEX_HOME:-$HOME/.petdex}"
 
 usage() {
   cat <<'USAGE'
@@ -36,6 +39,11 @@ Options:
   --reset                    Reset the local growth ledger first
   --shell-hooks              Only print the shell-hook config; skip the plugin copy
   --no-python-install        Assume the tamacodex package is already importable
+  --petdex                   Also mirror the pet into the Petdex desktop home,
+                             so it floats on the desktop and not just the terminal
+  --petdex-activate          With --petdex, also make it the active desktop pet
+                             (Petdex.app must be closed)
+  --petdex-home PATH         Petdex desktop home (default: ~/.petdex)
   -h, --help                 Show this help
 
 Environment:
@@ -58,6 +66,10 @@ while [ "$#" -gt 0 ]; do
     --reset) RESET="--reset"; shift ;;
     --shell-hooks) MODE="shell"; shift ;;
     --no-python-install) INSTALL_PYTHON="0"; shift ;;
+    --petdex) PETDEX="1"; shift ;;
+    --petdex-activate) PETDEX="1"; PETDEX_ACTIVATE="1"; shift ;;
+    --petdex-home) [ "$#" -ge 2 ] || { echo "--petdex-home requires a value" >&2; exit 2; }; PETDEX_HOME_DIR="$2"; shift 2 ;;
+    --petdex-home=*) PETDEX_HOME_DIR=${1#*=}; shift ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -107,6 +119,18 @@ fi
 # during an ordinary `hermes` run, where TAMACODEX_REPO_ROOT is not set.
 mkdir -p "$HERMES_HOME_RESOLVED/tamacodex"
 printf '%s\n' "$REPO_ROOT" > "$HERMES_HOME_RESOLVED/tamacodex/repo-root"
+
+if [ -n "$PETDEX" ]; then
+  echo "==> mirroring the pet into the Petdex desktop home ($PETDEX_HOME_DIR)" >&2
+  set -- --target hermes --hermes-home "$HERMES_HOME_RESOLVED" --petdex-home "$PETDEX_HOME_DIR" \
+    petdex --line "$LINE" --machine "$MACHINE" --force --json
+  if [ -n "$PETDEX_ACTIVATE" ]; then
+    set -- "$@" --activate
+  fi
+  "$PY" -m tamacodex "$@" >/dev/null
+  # Opt-in marker: the Hermes plugin mirrors every rebuild into the desktop home.
+  printf '%s\n' "$PETDEX_HOME_DIR" > "$HERMES_HOME_RESOLVED/tamacodex/petdex-home"
+fi
 
 if [ "$MODE" = "plugin" ]; then
   PLUGIN_SRC="$REPO_ROOT/plugins/tamacodex-hermes"

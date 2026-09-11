@@ -13,6 +13,8 @@
 # Options:
 #   --only a,b,c        Only these profiles (default: all found)
 #   --keep-selection    Install the pet but leave display.pet.slug alone
+#   --petdex            Also float the pet on the desktop via Petdex.app
+#   --petdex-activate   ...and make it the active desktop pet (close Petdex first)
 #   --line / --machine  Passed through to the per-profile installer
 set -eu
 
@@ -33,9 +35,13 @@ while [ "$#" -gt 0 ]; do
     --only) [ "$#" -ge 2 ] || { echo "--only requires a value" >&2; exit 2; }; ONLY="$2"; shift 2 ;;
     --only=*) ONLY=${1#*=}; shift ;;
     --keep-selection) KEEP_SELECTION="1"; shift ;;
-    --line|--machine|--form|--display-name)
+    --line|--machine|--form|--display-name|--petdex-home)
       [ "$#" -ge 2 ] || { echo "$1 requires a value" >&2; exit 2; }
       PASSTHRU="$PASSTHRU $1 $2"; shift 2 ;;
+    # Machine-level flag, but it is passed per profile on purpose: each profile
+    # home gets its own pointer so that profile's plugin mirrors rebuilds too.
+    --petdex|--petdex-activate)
+      PASSTHRU="$PASSTHRU $1"; shift ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done

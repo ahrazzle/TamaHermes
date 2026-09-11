@@ -30,6 +30,7 @@ from .feedback import apply_evolution_feedback
 from .hermes_events import (
     apply_hermes_hook,
     default_hook_state,
+    default_petdex_home,
     read_stdin_payload,
     save_hook_state,
 )
@@ -59,6 +60,18 @@ def install_codex_pet(*args: Any, **kwargs: Any) -> dict[str, Any]:
     return _install_codex_pet(*args, **kwargs)
 
 
+def install_petdex_pet(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    from .pet_compiler import install_petdex_pet as _install_petdex_pet
+
+    return _install_petdex_pet(*args, **kwargs)
+
+
+def set_petdex_active_pet(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    from .pet_compiler import set_petdex_active_pet as _set_petdex_active_pet
+
+    return _set_petdex_active_pet(*args, **kwargs)
+
+
 def run_preview_server(*args: Any, **kwargs: Any):
     from .preview_server import run_preview_server as _run_preview_server
 
@@ -70,6 +83,10 @@ def add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--catalog-dir", help="M2.1-compatible catalog assets directory.")
     parser.add_argument("--codex-home", help="Codex home directory. Defaults to CODEX_HOME or ~/.codex.")
     parser.add_argument("--hermes-home", help="Hermes Agent home. Defaults to HERMES_HOME or ~/.hermes.")
+    parser.add_argument(
+        "--petdex-home",
+        help="Petdex *desktop* home to mirror the pet into (~/.petdex). Opt-in; default: TAMACODEX_PETDEX_HOME.",
+    )
     parser.add_argument(
         "--target",
         choices=("codex", "hermes"),
@@ -88,6 +105,21 @@ def resolve_host_home(args: argparse.Namespace) -> Path:
     if resolve_target(args) == "hermes":
         return resolve_hermes_home(getattr(args, "hermes_home", None))
     return resolve_codex_home(getattr(args, "codex_home", None))
+
+
+def resolve_petdex_home(args: argparse.Namespace) -> Path | None:
+    """The Petdex desktop home to mirror into, or None when not opted in.
+
+    Explicit ``--petdex-home`` wins; otherwise a recorded pointer (written by the
+    installer) is honoured, so the desktop copy tracks the pet without the user
+    having to export an env var on every run.
+    """
+    explicit = getattr(args, "petdex_home", None)
+    if explicit:
+        from .paths import petdex_home as _petdex_home
+
+        return _petdex_home(explicit)
+    return default_petdex_home(resolve_host_home(args))
 
 
 def select_hermes_pet(pet_id: str, home: Path | None = None) -> dict[str, Any]:
@@ -293,6 +325,19 @@ def cmd_install(args: argparse.Namespace) -> None:
     report = install_codex_pet(catalog, state, home, build_dir, force=args.force)
     record_install_metadata(state, report)
     save_state(state_path, state)
+    petdex_desktop = resolve_petdex_home(args)
+    if petdex_desktop is not None:
+        try:
+            report["petdex"] = install_petdex_pet(
+                catalog,
+                state,
+                petdex_desktop,
+                build_dir,
+                force=True,
+                source_sheet=Path(report["legacySpritesheet"]),
+            )
+        except Exception as exc:  # noqa: BLE001 - the desktop mirror is optional
+            report["petdex"] = {"ok": False, "error": str(exc)}
     if resolve_target(args) == "hermes":
         print_json({"ok": True, "statePath": str(state_path), **report, "hermesPet": select_hermes_pet(state.get("petId", "tamacodex"), home)})
         return
@@ -320,6 +365,7 @@ def cmd_setup(args: argparse.Namespace) -> None:
         machine_id=state["machineId"],
         force=args.force,
         catalog_dir=str(catalog.root) if getattr(args, "catalog_dir", None) else None,
+        petdex_home=resolve_petdex_home(args),
     )
     installed_state = load_state(state_path, catalog, line_id=state["lineId"], machine_id=state["machineId"])
     response = {
@@ -540,6 +586,45 @@ def cmd_bridge(args: argparse.Namespace) -> None:
             emit_bridge_result(result, args.json)
             if args.strict:
                 raise SystemExit(1) from exc
+
+
+def cmd_petdex(args: argparse.Namespace) -> None:
+    """Mirror the pet into a Petdex desktop home so it floats on the desktop.
+
+    The Petdex macOS app renders the same 8x9 / 192x208 atlas Hermes does, so
+    this is a copy plus a native ``pet.json`` — no sprite work, no second pet.
+    """
+    _root, home, state_path, catalog = context(args)
+    state = load_state(state_path, catalog, line_id=args.line or "toast", machine_id=args.machine or "aurora")
+    build_dir = Path(args.build_dir).expanduser().resolve() if args.build_dir else home / "tamacodex" / "build"
+    petdex_home = resolve_petdex_home(args)
+    if petdex_home is None:
+        raise SystemExit(
+            "no Petdex home given: pass --petdex-home ~/.petdex (or set TAMACODEX_PETDEX_HOME)"
+        )
+    pet_id = state.get("petId", "tamacodex")
+    # Reuse the sheet Hermes already installed instead of re-rendering it.
+    installed_sheet = home / "pets" / pet_id / "spritesheet.webp"
+    report = install_petdex_pet(
+        catalog,
+        state,
+        petdex_home,
+        build_dir,
+        force=args.force,
+        source_sheet=installed_sheet if installed_sheet.is_file() else None,
+        kind=args.kind,
+    )
+    if args.activate:
+        report["activation"] = set_petdex_active_pet(petdex_home, pet_id)
+    if args.json:
+        print_json({"ok": True, "statePath": str(state_path), **report})
+        return
+    print(f"petdex: installed {pet_id} -> {report['petDir']}")
+    if "activation" in report:
+        previous = report["activation"].get("previousPet")
+        print(f"petdex: active pet set to {pet_id}" + (f" (was {previous})" if previous else ""))
+    else:
+        print("petdex: restart Petdex.app to pick it up (it is in the rotation list)")
 
 
 def cmd_hermes_hook(args: argparse.Namespace) -> None:
@@ -834,6 +919,16 @@ def build_parser() -> argparse.ArgumentParser:
     bridge.add_argument("--strict", action="store_true", help="Exit non-zero after the first invalid JSONL record.")
     bridge.add_argument("--json", action="store_true")
     bridge.set_defaults(func=cmd_bridge)
+
+    petdex = sub.add_parser("petdex", help="Mirror the pet into a Petdex desktop home so it floats on the desktop.")
+    petdex.add_argument("--line", default="toast")
+    petdex.add_argument("--machine", default="aurora")
+    petdex.add_argument("--build-dir")
+    petdex.add_argument("--kind", help="Optional Petdex pet kind (object/person/creature/animal).")
+    petdex.add_argument("--activate", action="store_true", help="Also set active_pet in Petdex settings (app must be closed).")
+    petdex.add_argument("--force", action="store_true", help="Replace an existing Petdex pet package.")
+    petdex.add_argument("--json", action="store_true")
+    petdex.set_defaults(func=cmd_petdex)
 
     hermes_hook = sub.add_parser("hermes-hook", help="Apply one Hermes Agent hook payload (stdin JSON) to the growth ledger.")
     hermes_hook.add_argument("--line", default="toast")
