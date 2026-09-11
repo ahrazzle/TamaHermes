@@ -102,6 +102,8 @@ Open this repo in Codex App and enable the local plugin from `.agents/plugins/ma
 - Two companion lines: `toast`, `mais`
 - Two tamago shells: `aurora`, `pulse`
 - Local growth ledger: XP, stages, stats, traits, counters, recent events
+- **XP bar on the pet itself** — progress toward the next life stage, drawn on the
+  shell below the LCD so it shows on the terminal pet and the desktop pet alike
 - macOS sidecar: frosted LCD on hover, 8-bit SFX, no focus stealing
 - Custom TamaHermes hatching from small profile JSON files
 

@@ -30,8 +30,34 @@ CODEX_ROWS = [
     ("review", "review", 8, 6),
 ]
 
-VISUAL_OVERLAY_VERSION = "m9.1-status-strip-v2"
+VISUAL_OVERLAY_VERSION = "m9.2-status-strip-xp-bar-v1"
 SPRITESHEET_BASENAME = "spritesheet.webp"
+
+# The growth bar sits on the shell's face *below* the LCD viewport (aurora's screen
+# ends at y=150 and the oval keeps ~56px of empty face beneath it), so it is painted
+# outside the screen mask and clipped to the oval silhouette instead. The geometry is
+# a fixed rect on purpose: the 192x208 atlas cell is a hard contract with Hermes
+# (FRAME_W/FRAME_H), so the art cannot grow to make room -- the bar has to live in
+# space the shell already leaves empty.
+XP_BAR = {"x": 35, "y": 156, "width": 122, "height": 11}
+XP_BAR_RECT = (
+    XP_BAR["x"],
+    XP_BAR["y"],
+    XP_BAR["x"] + XP_BAR["width"] - 1,
+    XP_BAR["y"] + XP_BAR["height"] - 1,
+)
+# Growth is drawn in 1/XP_BAR_STEPS buckets (see visual_state.percent_bucket), so the
+# drawn bar matches the quantised value the rebuild decision was made on.
+XP_BAR_STEPS = 20
+
+_STAGE_BAR_FILL = {
+    "egg": (204, 142, 49, 245),
+    "hatchling": (57, 132, 85, 245),
+    "child": (58, 102, 161, 245),
+    "teen": (206, 72, 88, 245),
+    "adult": (196, 154, 66, 245),
+    "hibernation": (83, 87, 71, 200),
+}
 
 
 class PetCompileError(RuntimeError):
@@ -162,13 +188,24 @@ def _pixels_differ(left: tuple[int, int, int, int], right: tuple[int, int, int, 
     return any(abs(left[index] - right[index]) > tolerance for index in range(4))
 
 
+def _in_rects(x: int, y: int, rects: tuple[tuple[int, int, int, int], ...]) -> bool:
+    return any(x0 <= x <= x2 and y0 <= y <= y2 for x0, y0, x2, y2 in rects)
+
+
 def validate_screen_mask_clipping(
     atlas_path: Path,
     shell_path: Path,
     screen_mask_path: Path,
     tolerance: int = 0,
+    skip_rects: tuple[tuple[int, int, int, int], ...] = (),
 ) -> dict[str, Any]:
-    """Assert compiled pawn pixels never alter shell pixels outside the LCD mask."""
+    """Assert compiled pawn pixels never alter shell pixels outside the LCD mask.
+
+    *skip_rects* are regions the compiler deliberately paints outside the mask (the
+    growth bar on the shell face below the screen). Each must sit entirely inside the
+    shell's opaque silhouette, so a drifting rect is reported rather than quietly
+    floating over transparency.
+    """
 
     with Image.open(atlas_path) as opened:
         atlas = opened.convert("RGBA")
@@ -189,12 +226,22 @@ def validate_screen_mask_clipping(
             "shell": str(shell_path),
             "screenMask": str(screen_mask_path),
             "tolerance": tolerance,
+            "skipRects": [list(rect) for rect in skip_rects],
             "errors": errors,
             "cells": cells,
         }
 
     shell_pixels = shell.load()
     mask_pixels = screen_mask.load()
+    for rect in skip_rects:
+        transparent = sum(
+            1
+            for y in range(rect[1], rect[3] + 1)
+            for x in range(rect[0], rect[2] + 1)
+            if 0 <= x < CELL_WIDTH and 0 <= y < CELL_HEIGHT and shell_pixels[x, y][3] <= 8
+        )
+        if transparent:
+            errors.append(f"overlay rect {rect} covers {transparent} pixels outside the shell silhouette")
     for row_name, _motion, row_index, frame_count in CODEX_ROWS:
         for column in range(frame_count):
             cell = atlas.crop(
@@ -211,6 +258,8 @@ def validate_screen_mask_clipping(
             for y in range(CELL_HEIGHT):
                 for x in range(CELL_WIDTH):
                     if mask_pixels[x, y] != 0:
+                        continue
+                    if _in_rects(x, y, skip_rects):
                         continue
                     if _pixels_differ(cell_pixels[x, y], shell_pixels[x, y], tolerance):
                         violation_pixels += 1
@@ -233,6 +282,7 @@ def validate_screen_mask_clipping(
         "shell": str(shell_path),
         "screenMask": str(screen_mask_path),
         "tolerance": tolerance,
+        "skipRects": [list(rect) for rect in skip_rects],
         "errors": errors,
         "cells": cells,
     }
@@ -466,11 +516,59 @@ def _draw_status_strip(draw: ImageDraw.ImageDraw, x: int, y: int, visual_state: 
         _draw_status_segment(draw, x + 3 + index * 20, y + 2, key, visual_state[key])
 
 
+def _percent_value(value: Any) -> int:
+    try:
+        return max(0, min(100, int(value)))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _draw_xp_bar(draw: ImageDraw.ImageDraw, visual_state: dict[str, str]) -> None:
+    """Evolution progress, drawn in the dead space below the LCD screen.
+
+    The status strip answers "how is the pet doing" in coarse bins; this answers
+    "how close is the next stage", which is the number a Tamagotchi owner actually
+    watches. The fill colour tracks the current stage so the bar changes character as
+    the pet grows, and it fills completely on the terminal (adult) stage.
+    """
+    x, y, width, height = XP_BAR["x"], XP_BAR["y"], XP_BAR["width"], XP_BAR["height"]
+    ink = (38, 54, 44, 245)
+    track = (26, 30, 40, 205)
+    tick = (74, 86, 80, 120)
+    stage = str(visual_state.get("stage") or "egg")
+    fill = _STAGE_BAR_FILL.get(stage, _STAGE_BAR_FILL["egg"])
+    percent = _percent_value(visual_state.get("xpPercent"))
+
+    # Rounded like the LCD it sits under, and inset from the face edge, so it reads as
+    # something milled into the casing rather than a flat graphic laid on top of it.
+    radius = 3
+    frame = (x, y, x + width - 1, y + height - 1)
+    draw.rounded_rectangle(frame, radius=radius, fill=track)
+    inner_x, inner_y = x + 2, y + 2
+    inner_width, inner_height = width - 4, height - 4
+    filled = inner_width if percent >= 100 else int(round(inner_width * percent / 100))
+    if filled > 0:
+        draw.rounded_rectangle(
+            (inner_x, inner_y, inner_x + filled - 1, inner_y + inner_height - 1), radius=2, fill=fill
+        )
+    # Recessed top edge: a hairline shadow sells the depth.
+    draw.line((inner_x, inner_y - 1, inner_x + inner_width - 1, inner_y - 1), fill=(18, 20, 26, 150))
+    # Quarter ticks on the unfilled remainder so the bar reads as a gauge rather than
+    # as a short bar that happens to stop early.
+    for quarter in (1, 2, 3):
+        tick_x = inner_x + (inner_width * quarter) // 4
+        if tick_x < inner_x + filled:
+            continue
+        _rect(draw, tick_x, inner_y, 1, inner_height, tick)
+    draw.rounded_rectangle(frame, radius=radius, outline=ink)
+
+
 def apply_visual_overlay(
     cell: Image.Image,
     screen: dict[str, int],
     screen_mask: Image.Image,
     visual_state: dict[str, str],
+    shell: Image.Image | None = None,
 ) -> Image.Image:
     overlay = Image.new("RGBA", (CELL_WIDTH, CELL_HEIGHT), (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
@@ -490,6 +588,18 @@ def apply_visual_overlay(
     clipped_alpha = Image.composite(overlay.getchannel("A"), Image.new("L", (CELL_WIDTH, CELL_HEIGHT), 0), screen_mask)
     overlay.putalpha(clipped_alpha)
     cell.alpha_composite(overlay)
+
+    # The growth bar is outside the LCD, so it is clipped to the shell silhouette
+    # (the machine's own alpha) instead of the screen mask. Callers with no shell
+    # keep the LCD-only behaviour, so nothing else changes shape.
+    if shell is not None:
+        bar_layer = Image.new("RGBA", (CELL_WIDTH, CELL_HEIGHT), (0, 0, 0, 0))
+        _draw_xp_bar(ImageDraw.Draw(bar_layer), visual_state)
+        silhouette = Image.composite(
+            bar_layer.getchannel("A"), Image.new("L", (CELL_WIDTH, CELL_HEIGHT), 0), shell.getchannel("A")
+        )
+        bar_layer.putalpha(silhouette)
+        cell.alpha_composite(bar_layer)
     return cell
 
 
@@ -533,7 +643,7 @@ def build_codex_pet(
                 raise PetCompileError(f"missing pose image: {pose_path}")
             pose = Image.open(pose_path).convert("RGBA")
             cell = compose_cell(shell, pose, screen, scale, frame.get("offset", [0, 0]), screen_mask)
-            cell = apply_visual_overlay(cell, screen, screen_mask, visual_state)
+            cell = apply_visual_overlay(cell, screen, screen_mask, visual_state, shell)
             atlas.alpha_composite(cell, (column * CELL_WIDTH, row_index * CELL_HEIGHT))
             frames_written.append(
                 {
@@ -565,7 +675,9 @@ def build_codex_pet(
     manifest_path.write_text(json.dumps(pet_manifest, indent=2) + "\n", encoding="utf-8")
     validation_png = validate_atlas(png_path)
     validation_webp = validate_atlas(webp_path)
-    validation_screen_mask = validate_screen_mask_clipping(png_path, catalog.shell_path(machine), catalog.screen_mask_path(machine))
+    validation_screen_mask = validate_screen_mask_clipping(
+        png_path, catalog.shell_path(machine), catalog.screen_mask_path(machine), skip_rects=(XP_BAR_RECT,)
+    )
     validation_png_path = qa_dir / "validation-png.json"
     validation_webp_path = qa_dir / "validation-webp.json"
     validation_screen_mask_path = qa_dir / "validation-screen-mask.json"
@@ -587,6 +699,12 @@ def build_codex_pet(
         "visualOverlayVersion": VISUAL_OVERLAY_VERSION,
         "visualState": visual_state,
         "visualStateHash": visual_hash,
+        "xpBar": {
+            "rect": list(XP_BAR_RECT),
+            "steps": XP_BAR_STEPS,
+            "stage": visual_state.get("stage"),
+            "percent": visual_state.get("xpPercent"),
+        },
         "sourceHash": source_hash,
         "installHash": source_hash,
         "atlas": {
@@ -671,8 +789,8 @@ def install_petdex_pet(
         "id": pet_id,
         "displayName": display_name,
         "description": (
-            f"{display_name} — a TamaHermes companion ({state.get('lifeStage', 'egg')} stage) "
-            "that grows from Hermes agent activity."
+            f"{display_name} — {state.get('lifeStage', 'egg')} stage, grown from "
+            "Hermes agent activity. A Tamagotchi-style desktop pet for Hermes Agent."
         ),
         "spritesheetPath": SPRITESHEET_BASENAME,
     }

@@ -18,6 +18,42 @@ STAGE_THRESHOLDS = {
     "teen": 1800,
 }
 
+# Life stages in evolution order. ``STAGE_THRESHOLDS`` holds the cumulative XP that
+# *ends* each stage, so the last entry here (``adult``) is terminal: nothing left to
+# grow into. Both facts are derived from the same table so they cannot drift.
+STAGE_ORDER = ("egg", "hatchling", "child", "teen", "adult")
+
+
+def stage_xp_floor(stage: str) -> int:
+    """Cumulative XP at which *stage* began (0 for the egg, 0 for an unknown stage)."""
+    try:
+        index = STAGE_ORDER.index(stage)
+    except ValueError:
+        return 0
+    if index <= 0:
+        return 0
+    return STAGE_THRESHOLDS[STAGE_ORDER[index - 1]]
+
+
+def stage_progress(state: dict[str, Any]) -> dict[str, Any]:
+    """How far the pet has come toward its next evolution.
+
+    ``ceiling`` is ``None`` for the terminal stage (adult, reported as 100%) and for
+    hibernation, which is a dormant condition rather than a growth step and always
+    reports zero progress so its bar reads as asleep.
+    """
+    stage = state.get("lifeStage") or "egg"
+    xp = _int_value(state.get("xp"), 0)
+    floor = stage_xp_floor(stage)
+    if stage == "hibernation":
+        return {"stage": stage, "floor": 0, "ceiling": None, "percent": 0, "terminal": False, "dormant": True}
+    ceiling = STAGE_THRESHOLDS.get(stage)
+    if ceiling is None:
+        return {"stage": stage, "floor": floor, "ceiling": None, "percent": 100, "terminal": True, "dormant": False}
+    span = max(1, ceiling - floor)
+    percent = max(0, min(100, round((xp - floor) * 100 / span)))
+    return {"stage": stage, "floor": floor, "ceiling": ceiling, "percent": percent, "terminal": False, "dormant": False}
+
 EVENT_ALIASES = {
     "start": "session_start",
     "session": "session_start",

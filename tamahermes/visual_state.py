@@ -4,7 +4,13 @@ import hashlib
 import json
 from typing import Any
 
-VISUAL_STATE_SCHEMA = "tamahermes.visual_state.v1"
+from .state import stage_progress
+
+VISUAL_STATE_SCHEMA = "tamahermes.visual_state.v2"
+
+# Growth is quantised before it reaches the atlas: the sprite only needs to be
+# recomposited when the drawn bar actually moves, not on every XP tick.
+STAGE_PROGRESS_STEPS = 20
 
 ALERT_EVENTS = {
     "task_failure": "failure",
@@ -15,6 +21,12 @@ ALERT_EVENTS = {
 
 def clamp(value: int, low: int = 0, high: int = 100) -> int:
     return max(low, min(high, value))
+
+
+def percent_bucket(percent: int, steps: int = STAGE_PROGRESS_STEPS) -> int:
+    """Snap a percentage to one of *steps* even buckets (default 5% steps)."""
+    step = 100 // max(1, steps)
+    return clamp(int(round(percent / step)) * step)
 
 
 def positive_int(value: Any) -> int:
@@ -116,6 +128,7 @@ def alert_bin(state: dict[str, Any]) -> str:
 
 
 def derive_visual_state(state: dict[str, Any]) -> dict[str, str]:
+    progress = stage_progress(state)
     return {
         "schema": VISUAL_STATE_SCHEMA,
         "energy": energy_bin(stat_value(state, "energy", 82)),
@@ -124,6 +137,8 @@ def derive_visual_state(state: dict[str, Any]) -> dict[str, str]:
         "bond": bond_bin(stat_value(state, "bond", 0)),
         "health": "weak" if stat_value(state, "health", 100) <= 35 else "ok",
         "alert": alert_bin(state),
+        "stage": str(progress["stage"]),
+        "xpPercent": str(percent_bucket(int(progress["percent"]))),
     }
 
 

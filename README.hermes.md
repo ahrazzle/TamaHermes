@@ -68,6 +68,47 @@ python -m tamahermes --target hermes event rest --amount 4
 python -m tamahermes --target hermes status
 ```
 
+## The XP bar
+
+Every compiled pet carries a growth bar on its face, in the empty space below the
+LCD screen and above the button — visible on the terminal pet, in the desktop
+mirror, and in the preview, because it is baked into the sprite rather than drawn
+by any one host (Hermes renders nothing but the atlas).
+
+```
+egg 0%                 egg 50%               child ~30%            adult 100%
+▁▁▁▁▁▁▁▁▁▁▁▁▁▁          ████████▁▁▁▁▁▁          ██████▁▁▁▁▁▁▁▁          ██████████████
+```
+
+It tracks **progress toward the next life stage**, not overall XP, so it always
+means something at a glance: empty the moment a stage begins, full the moment the
+next one lands. Stages and their cumulative-XP boundaries live in one place
+(`STAGE_THRESHOLDS` / `STAGE_ORDER` in `tamahermes/state.py`):
+
+| Stage | Begins at | Bar reads |
+|---|---|---|
+| `egg` | 0 | 0–99% toward hatchling (120) |
+| `hatchling` | 120 | 0–99% toward child (320) |
+| `child` | 320 | 0–99% toward teen (900) |
+| `teen` | 900 | 0–99% toward adult (1800) |
+| `adult` | 1800 | full — terminal stage |
+
+The fill is tinted per stage (amber, green, blue, red, gold), with quarter ticks on
+the unfilled remainder so a short bar still reads as a gauge. Hibernation — a
+dormant condition, not a growth step — paints the bar dimmed and empty.
+
+Two things worth knowing:
+
+- **Growth is quantised to 5% buckets** before it reaches the atlas
+  (`visual_state.percent_bucket`). The sprite is recomposited when the drawn bar
+  *moves*, not on every XP tick, so a busy turn doesn't trigger dozens of
+  72-cell recompiles.
+- The bar is painted **outside the LCD screen mask**, which is the one region the
+  atlas contract previously kept pristine. The screen-mask validator still enforces
+  that nothing else outside the LCD changes, and additionally proves the bar rect
+  sits inside the shell silhouette — so a drifting bar is a build failure, not a
+  graphic floating in the void.
+
 ## Two ways to wire it
 
 Both feed the **same** ledger (`<HERMES_HOME>/tamahermes/state.json`). Pick one —
