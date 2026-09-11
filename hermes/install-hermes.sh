@@ -76,7 +76,17 @@ HERMES_HOME_RESOLVED="${HERMES_HOME:-$HOME/.hermes}"
 
 if [ "$INSTALL_PYTHON" = "1" ]; then
   echo "==> installing the tamacodex package into $PY" >&2
-  "$PY" -m pip install -q -e "$REPO_ROOT" >&2
+  if "$PY" -m pip --version >/dev/null 2>&1; then
+    "$PY" -m pip install -q -e "$REPO_ROOT" >&2
+  elif command -v uv >/dev/null 2>&1; then
+    # uv-created venvs ship without pip; `uv pip` is the correct tool there.
+    uv pip install -q --python "$PY" -e "$REPO_ROOT" >&2
+  else
+    # Not fatal: the CLI runs from the checkout, and the plugin resolves
+    # tamacodex via <HERMES_HOME>/tamacodex/repo-root.
+    echo "!! $PY has no pip and uv is not installed; skipping the editable install." >&2
+    echo "   Continuing — both the CLI and the plugin can run from $REPO_ROOT." >&2
+  fi
 fi
 
 echo "==> building and installing the pet into $HERMES_HOME_RESOLVED/pets" >&2
@@ -92,6 +102,11 @@ if [ -n "$RESET" ]; then
   set -- "$@" "$RESET"
 fi
 "$PY" -m tamacodex "$@"
+
+# Record the checkout next to the ledger so the plugin can import `tamacodex`
+# during an ordinary `hermes` run, where TAMACODEX_REPO_ROOT is not set.
+mkdir -p "$HERMES_HOME_RESOLVED/tamacodex"
+printf '%s\n' "$REPO_ROOT" > "$HERMES_HOME_RESOLVED/tamacodex/repo-root"
 
 if [ "$MODE" = "plugin" ]; then
   PLUGIN_SRC="$REPO_ROOT/plugins/tamacodex-hermes"

@@ -44,8 +44,37 @@ _worker: threading.Thread | None = None
 _dropped_warning_emitted = False
 
 
+def _hermes_home_for_bootstrap() -> Path:
+    """Resolve HERMES_HOME without importing tamacodex (we may not have it yet)."""
+    raw = os.environ.get("HERMES_HOME") or "~/.hermes"
+    return Path(raw).expanduser()
+
+
+def _repo_candidates() -> List[Path]:
+    """Places a node of ``tamacodex/`` might live, best first.
+
+    The installer writes ``<HERMES_HOME>/tamacodex/repo-root`` so normal Hermes
+    runs (no env vars set) still find the checkout.
+    """
+    candidates: List[Path] = []
+    env_root = os.environ.get("TAMACODEX_REPO_ROOT")
+    if env_root:
+        candidates.append(Path(env_root))
+    marker = _hermes_home_for_bootstrap() / "tamacodex" / "repo-root"
+    try:
+        if marker.is_file():
+            recorded = marker.read_text(encoding="utf-8").strip()
+            if recorded:
+                candidates.append(Path(recorded))
+    except OSError:
+        pass
+    candidates.append(Path.home() / "TamaCodex")
+    candidates.append(Path.cwd())
+    return candidates
+
+
 def _ensure_tamacodex_importable() -> bool:
-    """Import ``tamacodex`` from site-packages, else from ``TAMACODEX_REPO_ROOT``."""
+    """Import ``tamacodex`` from site-packages, else from a known checkout."""
     global _import_locked
     if _import_locked:
         return True
@@ -56,16 +85,21 @@ def _ensure_tamacodex_importable() -> bool:
         return True
     except ImportError:
         pass
-    root = os.environ.get("TAMACODEX_REPO_ROOT")
-    if root and Path(root).is_dir():
-        sys.path.insert(0, root)
+    for root in _repo_candidates():
+        try:
+            if not (root / "tamacodex" / "bridge.py").is_file():
+                continue
+        except OSError:
+            continue
+        sys.path.insert(0, str(root))
         try:
             import tamacodex  # noqa: F401
 
             _import_locked = True
+            logger.debug("tamacodex-hermes: imported tamacodex from %s", root)
             return True
         except ImportError:
-            pass
+            sys.path.remove(str(root))
     return False
 
 

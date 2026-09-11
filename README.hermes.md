@@ -130,6 +130,24 @@ what the shell-hook script calls). `--reset` clears the turn bookkeeping.
 | `TAMACODEX_LINE` / `TAMACODEX_MACHINE` | pin the companion line / tamago shell |
 | `TAMACODEX_CATALOG_DIR` | custom rendered catalog directory |
 
+## Profiles
+
+Hermes homes are **profile-scoped**: the pets dir is `<HERMES_HOME>/pets`, and
+`HERMES_HOME` is set to `<home>/.hermes/profiles/<name>` inside a named profile
+(it is unset, i.e. `~/.hermes`, for the default profile). Install once per
+profile you actually use:
+
+```bash
+HERMES_HOME=~/.hermes/profiles/you ./hermes/install-hermes.sh
+HERMES_HOME=~/.hermes                 ./hermes/install-hermes.sh
+```
+
+The installer records the checkout in `<HERMES_HOME>/tamacodex/repo-root`, which
+is how the plugin imports `tamacodex` during an ordinary `hermes` run — no
+environment variable and no site-packages install required (Pillow, the only
+dependency, already ships with Hermes). If you move the checkout, re-run the
+installer or set `TAMACODEX_REPO_ROOT`.
+
 ## Tests
 
 ```bash
