@@ -134,8 +134,11 @@ class M91NativeVisualStateTests(unittest.TestCase):
             self.assertEqual(first_manifest["spritesheetPath"], second_manifest["spritesheetPath"])
             self.assertEqual(first_sheet, (home / "pets" / "tamahermes" / second_manifest["spritesheetPath"]).read_bytes())
 
+            # Option C draws the energy chip only in the low and critical bands, so the
+            # crossing that must move pixels is the one into "low". A full -> ok crossing
+            # still moves the visual-state hash, but leaves the top row empty at both ends.
             crossed_bin = load_state(state_path, catalog)
-            crossed_bin["stats"]["energy"] = 79
+            crossed_bin["stats"]["energy"] = 30
             save_state(state_path, crossed_bin)
             third = refresh_if_needed(catalog, state_path, home, build_dir)
             self.assertTrue(third["refreshed"])
@@ -146,7 +149,7 @@ class M91NativeVisualStateTests(unittest.TestCase):
 
             stored = json.loads(state_path.read_text(encoding="utf-8"))
             self.assertEqual(stored["lastInstalledVisualHash"], third["visualStateHash"])
-            self.assertEqual(stored["lastInstalledVisualState"]["energy"], "ok")
+            self.assertEqual(stored["lastInstalledVisualState"]["energy"], "low")
 
 
 if __name__ == "__main__":

@@ -129,9 +129,11 @@ def alert_bin(state: dict[str, Any]) -> str:
 
 def derive_visual_state(state: dict[str, Any]) -> dict[str, str]:
     progress = stage_progress(state)
+    energy = stat_value(state, "energy", 82)
     return {
         "schema": VISUAL_STATE_SCHEMA,
-        "energy": energy_bin(stat_value(state, "energy", 82)),
+        "energy": energy_bin(energy),
+        "energyPercent": str(percent_bucket(energy)),
         "mess": mess_bin(mess_score(state)),
         "satiety": satiety_bin(satiety_score(state)),
         "bond": bond_bin(stat_value(state, "bond", 0)),

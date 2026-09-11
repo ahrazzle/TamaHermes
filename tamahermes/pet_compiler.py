@@ -70,7 +70,11 @@ XP_BAR_STEPS = 20
 # bar they decorate -- parking them in the cell corners reads as scattered, and there is
 # no shell left to anchor them.
 FLOATING_XP_BAR = {"x": 38, "y": 181, "width": 122, "height": 11}
-FLOATING_STATUS_XY = (43, 8)      # group of 13+4+107+4+13 = 141, centred
+# Option C: the top row stays silent unless something needs the owner. The energy chip is
+# the only escalation, drawn while energy is low or critical because that band is the one
+# that ends in hibernation. It keeps the exact footprint the retired status strip used, so
+# the alert and health glyphs flanking it do not move.
+FLOATING_ENERGY_CHIP = {"x": 43, "y": 8, "width": 106, "height": 12}
 FLOATING_ALERT_XY = (26, 8)
 FLOATING_HEALTH_XY = (154, 8)
 FLOATING_FOOD_XY = (18, 182)      # group of 16+4+122+4+9 = 155, centred
@@ -419,7 +423,12 @@ def validate_layout_geometry(layout: str, union: tuple[int, int, int, int]) -> d
     scale, (px, py) = floating_pet_placement(union)
     pet = floating_pet_rect(union, scale, (px, py))
     rects = {
-        "status": (FLOATING_STATUS_XY[0], FLOATING_STATUS_XY[1], FLOATING_STATUS_XY[0] + 106, FLOATING_STATUS_XY[1] + 12),
+        "energy": (
+            FLOATING_ENERGY_CHIP["x"],
+            FLOATING_ENERGY_CHIP["y"],
+            FLOATING_ENERGY_CHIP["x"] + FLOATING_ENERGY_CHIP["width"],
+            FLOATING_ENERGY_CHIP["y"] + FLOATING_ENERGY_CHIP["height"],
+        ),
         "xpBar": xp_bar_rect("floating"),
         "alert": (FLOATING_ALERT_XY[0], FLOATING_ALERT_XY[1], FLOATING_ALERT_XY[0] + 13, FLOATING_ALERT_XY[1] + 11),
         "food": (FLOATING_FOOD_XY[0], FLOATING_FOOD_XY[1], FLOATING_FOOD_XY[0] + 15, FLOATING_FOOD_XY[1] + 8),
@@ -654,6 +663,66 @@ def _status_level(kind: str, value: str) -> tuple[int, tuple[int, int, int, int]
     return levels[kind][value]
 
 
+def _draw_bolt(draw: ImageDraw.ImageDraw, x: int, y: int, color: tuple[int, int, int, int]) -> None:
+    """A 10x11 lightning bolt: the energy gauge's label, in place of text."""
+    points = [
+        (x + 5, y),
+        (x, y + 6),
+        (x + 4, y + 6),
+        (x + 2, y + 11),
+        (x + 9, y + 4),
+        (x + 5, y + 4),
+    ]
+    draw.polygon(points, fill=color, outline=(38, 54, 44, 245))
+
+
+def _draw_energy_chip(
+    draw: ImageDraw.ImageDraw,
+    visual_state: dict[str, str],
+    rect: dict[str, int] | None = None,
+) -> None:
+    """The top row's one escalation, and the whole of it.
+
+    Energy is the only tracker that interrupts, because it is the only band that ends in
+    hibernation: the pet sleeps at 4 and does not wake until 35. Satiety, bond and health
+    already escalate on their own (the bowl, the heart, the warning glyph) and mess is
+    legible as grime on the creature, so none of them is repeated up here.
+    """
+    band = str(visual_state.get("energy") or "ok")
+    if band not in ("low", "critical"):
+        return
+    chip = rect or FLOATING_ENERGY_CHIP
+    x, y = chip["x"], chip["y"]
+    width, height = chip["width"], chip["height"]
+    ink = (38, 54, 44, 245)
+    track = (26, 30, 40, 205)
+    tick = (74, 86, 80, 120)
+    fill = (186, 49, 52, 245) if band == "critical" else (204, 142, 49, 245)
+    percent = _percent_value(visual_state.get("energyPercent"))
+
+    _draw_bolt(draw, x, y, fill)
+
+    # The gauge mirrors the growth bar's frame, so the two read as one instrument.
+    bar_x = x + 14
+    bar_width = width - 14
+    frame = (bar_x, y + 1, bar_x + bar_width - 1, y + height - 2)
+    draw.rounded_rectangle(frame, radius=3, fill=track)
+    inner_x, inner_width = bar_x + 2, bar_width - 4
+    inner_y, inner_height = y + 3, height - 6
+    filled = inner_width if percent >= 100 else int(round(inner_width * percent / 100))
+    if filled > 0:
+        draw.rounded_rectangle(
+            (inner_x, inner_y, inner_x + filled - 1, inner_y + inner_height - 1), radius=2, fill=fill
+        )
+    draw.line((inner_x, inner_y - 1, inner_x + inner_width - 1, inner_y - 1), fill=(18, 20, 26, 150))
+    for quarter in (1, 2, 3):
+        tick_x = inner_x + (inner_width * quarter) // 4
+        if tick_x < inner_x + filled:
+            continue
+        _rect(draw, tick_x, inner_y, 1, inner_height, tick)
+    draw.rounded_rectangle(frame, radius=3, outline=ink)
+
+
 def _draw_status_segment(
     draw: ImageDraw.ImageDraw,
     x: int,
@@ -780,7 +849,7 @@ def apply_float_overlay(
     """
     overlay = Image.new("RGBA", (CELL_WIDTH, CELL_HEIGHT), (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
-    _draw_status_strip(draw, FLOATING_STATUS_XY[0], FLOATING_STATUS_XY[1], visual_state)
+    _draw_energy_chip(draw, visual_state)
     if visual_state["health"] == "weak":
         _draw_health_warning(draw, FLOATING_HEALTH_XY[0], FLOATING_HEALTH_XY[1])
     _draw_mess(

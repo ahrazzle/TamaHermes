@@ -1,272 +1,30 @@
 # TamaHermes
 
-<p align="center">
-  <img src="docs/media/hero-90s-tamahermes.png" alt="TamaHermes 90s-style hero banner" width="100%">
-</p>
+에이전트 작업과 함께 자라는 데스크톱 펫입니다. 지금은
+[Hermes Agent](https://github.com/NousResearch/hermes-agent)용 펫입니다.
 
-<p align="center">
-  <strong>Codex로 일할수록 함께 자라는 작은 데스크톱 펫.</strong><br>
-  Toast는 성공을 축하하고, 실패를 견디고, 8-bit 사운드로 반응하면서 조금씩 당신의 작은 동료가 됩니다.
-</p>
+[TamaCodex](https://github.com/Alichua/TamaCodex)(MIT, 아래 크레딧)에서 이식했고 아트와
+성장 모델은 같습니다. 성장 신호는 Hermes 자체 훅에서 들어옵니다. 원래의 Codex 대상도
+그대로 남아 있습니다.
 
-<p align="center">
-  <strong>현재는 macOS만 지원합니다.</strong><br>
-  TamaHermes는 hover status, SFX, supervised background growth에 macOS sidecar를 사용합니다.
-</p>
-
-<p align="center">
-  <strong>아직 활발히 개발 중입니다.</strong><br>
-  거친 부분, 이상한 펫 행동, 가끔 생기는 bug가 있을 수 있습니다. fork, issue, PR을 환영합니다.
-</p>
-
-<p align="center">
-  <a href="README.md">English</a> ·
-  <a href="README.zh-CN.md">简体中文</a> ·
-  <a href="README.ja.md">日本語</a> ·
-  <strong>한국어</strong>
-</p>
-
-<p align="center">
-  <a href="#빠른-시작">빠른 시작</a> ·
-  <a href="#바꾸기">바꾸기</a> ·
-  <a href="#나만의-tamahermes-부화시키기">나만의 TamaHermes</a> ·
-  <a href="#성장">성장</a>
-</p>
-
-<p align="center">
-  <img src="docs/media/tamahermes-toast-demo.gif" alt="TamaHermes animated Toast demo" width="78%">
-</p>
-
-생산성 해킹 도구가 아닙니다. 책상 위의 작은 의식에 가깝습니다.
-
-동료 라인을 고르고, tamago shell을 고르고, Codex에서 깨워 주세요. 프롬프트, 성공한 실행, 실패, 리뷰, 회복, 휴식, token 사용량, hover, drag가 모두 작은 로컬 성장 신호가 됩니다.
-
-Have fun. Fork 하세요. 이상하게도 당신다운 무언가를 부화시켜 보세요.
+문서는 영어판만 관리합니다:
+**[README.md](README.md)** / **[README.hermes.md](README.hermes.md)**
 
 ## 빠른 시작
 
-**🍎 현재 지원 플랫폼: macOS.**
-
-**🤖 에이전트에게 맡기는 한 줄 설치: 이 문장을 Codex에 붙여 넣으세요.**
-
-```text
-Install https://github.com/Alichua/TamaCodex with Toast and Aurora.
-```
-
-**🛠 수동 설치: clone 하고, 폴더로 들어가서, 설치합니다.**
-
 ```bash
-git clone https://github.com/Alichua/TamaCodex.git
-cd tamahermes
-./install.sh --line toast --machine aurora
+git clone https://github.com/ahrazzle/TamaHermes.git
+cd TamaHermes
+./hermes/install-hermes.sh --line toast --machine aurora
+hermes plugins enable tamahermes
 ```
 
-**✨ Codex App에서 펫을 깨웁니다.**
+`--petdex-activate`를 추가하면 데스크톱에도 표시됩니다.
+`./hermes/install-all-profiles.sh`는 모든 Hermes 프로필에 한 번에 설치합니다.
 
-```text
-Settings -> Appearance -> Pet -> Custom Pet -> TamaHermes
-Cmd+K -> Wake Pet
-```
+## 참고
 
-hook 기반 성장과 slash skills를 쓰고 싶다면 Codex App에서 이 repo를 열고 `.agents/plugins/marketplace.json`의 로컬 플러그인을 활성화하세요.
+이 한국어 문서는 예전 영어 README의 번역본이었습니다. 예전 판은 Codex를 전제로 했고
+내용이 오래되어 입구만 남겨 두었습니다.
 
-## 들어 있는 것
-
-- Codex custom pet package: `pet.json` + `spritesheet.webp`
-- 두 가지 동료 라인: `toast`, `mais`
-- 두 가지 tamago shell: `aurora`, `pulse`
-- 로컬 성장 ledger: XP, stage, stats, traits, counters, recent events
-- macOS sidecar: hover 시 frosted LCD, 8-bit SFX, focus를 훔치지 않음
-- 작은 profile JSON으로 나만의 TamaHermes 부화
-
-TamaHermes는 숫자화된 사용 신호만 저장합니다. 원본 프롬프트나 도구 출력 텍스트는 저장하지 않습니다.
-
-## 바꾸기
-
-terminal에 익숙하지 않아도 괜찮습니다. Codex App에서 이 repo를 열고, Composer에 아래 프롬프트를 붙여 넣으면 Codex가 대신 명령을 실행합니다. 완료 후 펫이 잠들어 있으면 `Cmd+K -> Wake Pet`으로 깨워 주세요.
-
-**🎛 tamago shell을 바꿉니다.**
-
-**Composer에 붙여 넣을 프롬프트:**
-
-```text
-이 repo에서 TamaHermes를 Toast 라인은 유지한 채 Pulse tamago shell로 바꿔 주세요. ./install.sh --line toast --machine pulse 를 실행하고, 완료되면 언제 Wake Pet을 하면 되는지 알려 주세요.
-```
-
-**Terminal 대체 명령:**
-
-```bash
-./install.sh --line toast --machine pulse
-```
-
-**🍞 동료 라인을 바꿉니다.**
-
-**Composer에 붙여 넣을 프롬프트:**
-
-```text
-이 repo에서 TamaHermes를 Mais 동료 라인 + Aurora shell로 바꿔 주세요. ./install.sh --line mais --machine aurora 를 실행하고, 완료되면 언제 Wake Pet을 하면 되는지 알려 주세요.
-```
-
-**Terminal 대체 명령:**
-
-```bash
-./install.sh --line mais --machine aurora
-```
-
-**🥚 새 알에서 다시 시작합니다.**
-
-**Composer에 붙여 넣을 프롬프트:**
-
-```text
-이 repo에서 TamaHermes를 리셋하고, 새로운 Toast 알을 Aurora shell로 설치해 주세요. ./install.sh --line toast --machine aurora --reset 를 실행하고, 완료되면 언제 Wake Pet을 하면 되는지 알려 주세요.
-```
-
-**Terminal 대체 명령:**
-
-```bash
-./install.sh --line toast --machine aurora --reset
-```
-
-**🎯 특정 성장 form을 설치합니다.**
-
-**Composer에 붙여 넣을 프롬프트:**
-
-```text
-이 repo에서 TamaHermes의 지정 form toast_adult_worker를 Pulse shell로 설치해 주세요. ./install.sh --line toast --machine pulse --form toast_adult_worker 를 실행하고, 완료되면 언제 Wake Pet을 하면 되는지 알려 주세요.
-```
-
-**Terminal 대체 명령:**
-
-```bash
-./install.sh --line toast --machine pulse --form toast_adult_worker
-```
-
-**🔎 기본 catalog에 무엇이 있는지 확인합니다.**
-
-**Composer에 붙여 넣을 프롬프트:**
-
-```text
-이 repo에서 toast와 mais의 기본 TamaHermes form을 모두 보여 주세요. tamahermes list-forms --line toast 와 tamahermes list-forms --line mais 를 실행한 뒤, 선택지를 쉬운 한국어로 요약해 주세요.
-```
-
-**Terminal 대체 명령:**
-
-```bash
-tamahermes list-forms --line toast
-tamahermes list-forms --line mais
-```
-
-## 나만의 TamaHermes 부화시키기
-
-**🐣 작은 profile을 만듭니다: `custom/ducky.json`.**
-
-```json
-{
-  "id": "ducky",
-  "displayName": "Ducky",
-  "inspiration": "a duck",
-  "description": "A duck-inspired TamaHermes companion.",
-  "family": "duck",
-  "palette": {
-    "main": "#fff4a8",
-    "shade": "#d59a3a"
-  }
-}
-```
-
-**🎨 렌더링한 뒤 hatchling을 설치합니다.**
-
-```bash
-tamahermes generate-profile --input custom/ducky.json --output custom/ducky.json
-tamahermes render-catalog --profile custom/ducky.json --output-dir build/ducky --milestone M2.1 --asset-version m2.1
-./install.sh --catalog-dir build/ducky/assets --line ducky --machine pulse --reset
-```
-
-**🧪 Codex가 먼저 profile brief를 작성하게 할 수도 있습니다.**
-
-```bash
-tamahermes generate-profile \
-  --prompt "Hatch a TamaHermes named Ducky inspired by a duck" \
-  --brief-output /tmp/ducky-profile-brief.md \
-  --output custom/ducky.json
-```
-
-**🔬 선택 QA: 배포 전에 sprite sheets를 확인합니다.**
-
-```bash
-open build/ducky/qa/pet_contact_sheet.png
-open build/ducky/qa/catalog_matrix.png
-tamahermes --catalog-dir build/ducky/assets doctor --line ducky --machine pulse
-```
-
-## 성장
-
-<p align="center">
-  <img src="docs/media/growth-map.png" alt="TamaHermes growth rules" width="92%">
-</p>
-
-단계:
-
-| Stage | Trigger |
-| --- | --- |
-| Egg | 시작 |
-| Hatchling | 120 XP |
-| Child | 320 XP |
-| Teen | 900 XP |
-| Adult | 1800 XP |
-| Hibernation | energy 낮음, health 낮음, 또는 긴 idle |
-
-신호:
-
-| Event | Effect |
-| --- | --- |
-| `prompt_sent` | 작은 XP, focus 상승, energy 감소 |
-| `task_success` | 큰 XP, mood 상승, bond 상승 |
-| `task_failure` | resilience 상승, health 감소, mess 상승 |
-| `review_opened` | focus 상승, mess 감소 |
-| `care` | energy, mood, health, bond 상승 |
-| `rest` | energy와 health 회복 |
-
-**🫶 돌보는 방법.**
-
-```bash
-# 먹이 주기, 놀아 주기, 청소, 가벼운 돌봄은 모두 care입니다.
-tamahermes event care --amount 1 --install
-tamahermes event feed --amount 1 --install
-tamahermes event play --amount 1 --install
-tamahermes event clean --amount 1 --install
-
-# energy=0으로 hibernation 상태라면 깨우려면 care가 조금 더 필요합니다.
-tamahermes event care --amount 7 --install
-```
-
-`care` 1회마다 `+3 XP`, `+5 energy`, `+5 mood`, `+4 health`, `+3 bond`, `+2 care trait`, `-2 mess`가 적용됩니다. care mistake 카운트도 줄어듭니다. `--amount N`은 이 변화량을 N배로 적용합니다. `--install`을 붙이면 Codex custom pet package를 다시 빌드하고 설치해서, 화면에 보이는 모습도 즉시 상태를 따라갑니다.
-
-**💤 rest 계산 방식.**
-
-```bash
-# 조용히 회복할 시간을 줍니다.
-tamahermes event rest --amount 1 --install
-
-# energy=0이고 health가 충분하다면 보통 rest 4회로 hibernation에서 깨어납니다.
-tamahermes event rest --amount 4 --install
-```
-
-`rest` 1회는 조용한 회복 10분을 뜻합니다. `+10 energy`, `+3 health`, `+1 mood`, `-3 restlessness`, 그리고 `quietMinutes +10`이 적용됩니다. XP는 늘지 않고, 작업 중이라는 뜻도 아닙니다. TamaHermes가 hibernation에서 깨어나는 조건은 `energy >= 35` 그리고 `health >= 35`입니다.
-
-**🎚 유용한 작은 컨트롤.**
-
-```bash
-tamahermes status
-tamahermes doctor
-tamahermes overlay status
-tamahermes overlay mute
-tamahermes overlay quiet
-tamahermes preview --port 8765
-```
-
-## 메모
-
-TamaHermes는 Codex App 내부를 patch하지 않습니다. custom pet package contract, 로컬 plugin hooks, 로컬 session-log adaptation, 그리고 supervised macOS sidecar를 사용합니다.
-
-MIT. PR과 이상하지만 귀여운 TamaHermes 부화 아이디어를 환영합니다.
+MIT.

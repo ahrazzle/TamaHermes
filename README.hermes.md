@@ -1,15 +1,15 @@
 # TamaHermes — Hermes Agent support
 
-**TamaHermes** is [Tamacodex](https://github.com/Alichua/TamaCodex) ported to
-[Hermes Agent](https://github.com/NousResearch/hermes-agent). TamaHermes is a
-Tamagotchi-style pet that grows from your agent activity; upstream it was built
-for Codex. This fork runs the same pet, with the same growth model, fed from
-Hermes' own hooks instead of Codex's.
+**TamaHermes** is [TamaCodex](https://github.com/Alichua/TamaCodex) ported to
+[Hermes Agent](https://github.com/NousResearch/hermes-agent). It is a Tamagotchi-style
+pet that grows from your agent activity. Upstream it answered to Codex; this fork runs
+the same pet, with the same growth model, fed from Hermes' own hooks. The Codex target is
+still there, and unchanged.
 
 > **Names.** Everything is **TamaHermes**: the project, the repository, the
 > Python package, the `tamahermes` CLI, and the `tamahermes` Hermes plugin. It
-> began as a fork of Tamacodex (credited below), which is why a few upstream
-> art and catalog names still read "Tamacodex" — the pet art is unchanged.
+> began as a fork of Tamacodex (credited below), so a few upstream art and
+> catalog names still read "Tamacodex". The pet art is unchanged.
 
 The port is small on purpose. TamaHermes already compiles exactly the artifact
 Hermes renders: an 8-column × 9-row atlas of 192×208 cells (1536×1872) whose row
@@ -75,15 +75,23 @@ HUD floating around it. There is no device shell, so no oval "bubble" and no LCD
 the pet is a companion on your desktop rather than a Tamagotchi you peer into.
 
 ```
-   [alert] [ ▮▮▮▮ status strip ] [health]      ← HUD row
-                 the creature
-      [food] [ ██████░░░░ growth bar ] [♥]      ← HUD row
+      [ bolt ▮▮▮▮▯▯▯▯▯▯▯▯▯ ]     <- energy chip: only while energy is low or critical
+             the creature
+      [ bowl ] [ ████░░░ growth ] [ heart ]     <- always drawn
 ```
 
-Both HUD rows are centred as groups, with the side icons sitting a 4px gap from the bar
-they decorate; the creature is scaled to the largest **integer** multiple that fits the
-band between them (integer scaling keeps pixel art crisp). Grime specks are placed with
-the creature's rect excluded, so mess never lands on the pet.
+**The top row is silent unless something needs you.** The one escalation is energy: at 45
+or below the bolt and its gauge appear, amber while energy is low and red once it is
+critical (20 or below). Energy is the only tracker that goes up there, because it is the
+only one that ends in hibernation. The alert glyph (top left) still shows a failure,
+recovery or review, and the health warning (top right) shows while health is 35 or below.
+
+The bottom row is always drawn: satiety as the bowl, growth as the centre bar, bond as the
+heart, which stays hidden until the pet is past "new". Both rows are centred as groups with
+their icons a 4px gap from the bar they decorate, and the creature is scaled to the largest
+**integer** multiple that fits the band between them (integer scaling keeps pixel art
+crisp). Grime specks are placed with the creature's rect excluded, so mess never lands on
+the pet.
 
 Set `layout="shell"` on `build_codex_pet` to get the framed look back — the creature
 inside an `aurora`/`pulse` tamago shell with the HUD drawn on the LCD. Shell geometry,

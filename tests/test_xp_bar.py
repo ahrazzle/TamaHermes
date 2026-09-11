@@ -311,7 +311,9 @@ class FloatingLayoutTests(unittest.TestCase):
     def test_floating_geometry_guard_catches_a_collision(self) -> None:
         catalog = load_catalog(ROOT)
         union = pet_compiler.union_content_bbox(catalog, "toast")
-        with mock.patch.object(pet_compiler, "FLOATING_STATUS_XY", (40, 60)):
+        with mock.patch.object(
+            pet_compiler, "FLOATING_ENERGY_CHIP", {"x": 40, "y": 60, "width": 106, "height": 12}
+        ):
             result = validate_layout_geometry("floating", union)
         self.assertFalse(result["ok"])
         self.assertTrue(any("overlaps" in error for error in result["errors"]), result["errors"])
