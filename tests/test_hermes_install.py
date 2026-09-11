@@ -1,0 +1,230 @@
+"""End-to-end: TamaCodex installs as a Hermes pet and grows from Hermes hooks."""
+
+from __future__ import annotations
+
+import importlib.util
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+from PIL import Image
+
+ROOT = Path(__file__).resolve().parents[1]
+HOOK = ROOT / "plugins" / "tamacodex" / "scripts" / "tamacodex_hermes_hook.sh"
+PLUGIN_INIT = ROOT / "plugins" / "tamacodex-hermes" / "__init__.py"
+PLUGIN_YAML = ROOT / "plugins" / "tamacodex-hermes" / "plugin.yaml"
+
+FRAME_W, FRAME_H, COLS, ROWS = 192, 208, 8, 9
+
+
+def run_cli(home: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    env = os.environ.copy()
+    env.pop("HERMES_HOME", None)  # --hermes-home must be the only home signal here
+    env["PYTHONPATH"] = str(ROOT)
+    return subprocess.run(
+        [sys.executable, "-m", "tamacodex", "--target", "hermes", "--hermes-home", str(home), *args],
+        check=True,
+        text=True,
+        capture_output=True,
+        cwd=ROOT,
+        env=env,
+    )
+
+
+def run_hermes_hook(home: Path, payload: dict) -> subprocess.CompletedProcess[str]:
+    env = os.environ.copy()
+    env["HERMES_HOME"] = str(home)
+    env["TAMACODEX_HERMES_HOME"] = str(home)
+    env["TAMACODEX_PY"] = sys.executable
+    env["PYTHONPATH"] = str(ROOT)
+    return subprocess.run(
+        [str(HOOK)],
+        input=json.dumps(payload),
+        check=True,
+        text=True,
+        capture_output=True,
+        cwd=ROOT,
+        env=env,
+    )
+
+
+def load_plugin_module():
+    spec = importlib.util.spec_from_file_location("tamacodex_hermes_plugin", PLUGIN_INIT)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+class HermesInstallTests(unittest.TestCase):
+    def test_setup_installs_a_hermes_renderable_pet(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "hermes-home"
+            completed = run_cli(home, "setup", "--line", "toast", "--machine", "aurora", "--force", "--json")
+            report = json.loads(completed.stdout)
+
+            self.assertTrue(report["ok"])
+            # Codex-side overlay supervision must not run on the Hermes target.
+            self.assertTrue(report["overlaySupervisor"]["skipped"])
+            # And the pet is not auto-selected against a non-live home.
+            self.assertTrue(report["hermesPet"]["skipped"])
+
+            pet_dir = home / "pets" / "tamacodex"
+            manifest = json.loads((pet_dir / "pet.json").read_text(encoding="utf-8"))
+            self.assertEqual(manifest["id"], "tamacodex")
+            self.assertIn("displayName", manifest)
+
+            sheet = pet_dir / manifest["spritesheetPath"]
+            self.assertTrue(sheet.is_file(), f"missing spritesheet {sheet}")
+            with Image.open(sheet) as image:
+                self.assertEqual(image.size, (FRAME_W * COLS, FRAME_H * ROWS), "atlas must be the 8x9 Hermes/Codex grid")
+
+            # The ledger lives beside the pet, under the Hermes home.
+            self.assertTrue((home / "tamacodex" / "state.json").is_file())
+
+    def test_ledger_is_shared_with_hermes_home_not_codex_home(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            hermes_home = Path(tmp) / "hermes-home"
+            run_cli(hermes_home, "setup", "--line", "toast", "--machine", "aurora", "--force", "--json")
+
+            status = run_cli(hermes_home, "status", "--json")
+            payload = json.loads(status.stdout)
+            self.assertTrue(payload["ok"])
+            self.assertEqual(payload["state"]["petId"], "tamacodex")
+
+
+class HermesHookScriptTests(unittest.TestCase):
+    def _install(self, home: Path) -> None:
+        run_cli(home, "setup", "--line", "toast", "--machine", "aurora", "--force", "--json")
+
+    def test_hook_script_grows_the_ledger_and_refreshes_the_pet(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "hermes-home"
+            self._install(home)
+            state_path = home / "tamacodex" / "state.json"
+            before = json.loads(state_path.read_text(encoding="utf-8"))
+
+            completed = run_hermes_hook(
+                home,
+                {
+                    "hook_event_name": "post_tool_call",
+                    "tool_name": "write_file",
+                    "tool_input": {"path": "/tmp/demo.txt"},
+                    "session_id": "sess-1",
+                    "turn_id": "turn-1",
+                    "extra": {"status": "ok", "duration_ms": 12},
+                },
+            )
+            self.assertEqual(completed.returncode, 0)
+            response = json.loads(completed.stdout)
+            self.assertEqual(response["tamacodex"]["events"], ["prompt_sent", "task_success"])
+
+            after = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertGreater(after["xp"], before["xp"])
+            self.assertEqual(after["counters"]["completedRuns"], 1)
+            self.assertEqual(after["recentEvents"][0]["source"], "hermes-hook")
+            self.assertTrue((home / "tamacodex" / "hermes-hook-state.json").is_file())
+
+    def test_repeated_same_turn_hook_is_idempotent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "hermes-home"
+            self._install(home)
+            state_path = home / "tamacodex" / "state.json"
+            payload = {
+                "hook_event_name": "post_tool_call",
+                "tool_name": "write_file",
+                "session_id": "sess-1",
+                "turn_id": "turn-1",
+                "extra": {"status": "ok"},
+            }
+            run_hermes_hook(home, payload)
+            run_hermes_hook(home, payload)
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(state["counters"]["completedRuns"], 1, "a turn's success must count once")
+
+    def test_failure_then_recovery_grows_the_ledger(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "hermes-home"
+            self._install(home)
+            state_path = home / "tamacodex" / "state.json"
+            run_hermes_hook(
+                home,
+                {"hook_event_name": "post_tool_call", "tool_name": "terminal", "session_id": "s", "turn_id": "t1",
+                 "extra": {"status": "error", "error_message": "exit 1"}},
+            )
+            run_hermes_hook(
+                home,
+                {"hook_event_name": "post_tool_call", "tool_name": "terminal", "session_id": "s", "turn_id": "t1",
+                 "extra": {"status": "ok"}},
+            )
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(state["counters"]["failedRuns"], 1)
+            self.assertIn("recovery", [event["event"] for event in state["recentEvents"]])
+
+    def test_hook_script_never_fails_a_turn_on_bad_input(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "hermes-home"
+            self._install(home)
+            env = os.environ.copy()
+            env["HERMES_HOME"] = str(home)
+            env["TAMACODEX_PY"] = sys.executable
+            env["PYTHONPATH"] = str(ROOT)
+            completed = subprocess.run(
+                [str(HOOK)], input="not json at all", check=True, text=True, capture_output=True, cwd=ROOT, env=env
+            )
+            self.assertEqual(completed.returncode, 0)
+
+
+class HermesPluginTests(unittest.TestCase):
+    def test_plugin_manifest_lists_valid_hooks(self) -> None:
+        text = PLUGIN_YAML.read_text(encoding="utf-8")
+        self.assertIn("name: tamacodex-hermes", text)
+        for hook in ("post_tool_call", "pre_llm_call", "post_api_request", "on_session_start", "on_session_end"):
+            with self.subTest(hook=hook):
+                self.assertIn(hook, text)
+
+    def test_register_wires_every_growth_hook(self) -> None:
+        module = load_plugin_module()
+        registered: dict[str, object] = {}
+
+        class FakeCtx:
+            def register_hook(self, name, callback):
+                registered[name] = callback
+
+        module.register(FakeCtx())
+        self.assertEqual(
+            set(registered),
+            {"on_session_start", "pre_llm_call", "post_tool_call", "post_api_request", "on_session_end"},
+        )
+
+    def test_plugin_hook_callback_applies_in_sync_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "hermes-home"
+            self._install_via_cli(home)
+            module = load_plugin_module()
+
+            os.environ["TAMACODEX_HERMES_SYNC"] = "1"
+            os.environ["TAMACODEX_REPO_ROOT"] = str(ROOT)
+            os.environ["HERMES_HOME"] = str(home)
+            os.environ["TAMACODEX_HERMES_HOME"] = str(home)
+            os.environ.pop("TAMACODEX_CATALOG_DIR", None)
+            try:
+                module._on_post_tool_call(tool_name="patch", session_id="s", turn_id="t1", status="ok", result="ok")
+            finally:
+                for key in ("TAMACODEX_HERMES_SYNC", "TAMACODEX_REPO_ROOT", "HERMES_HOME", "TAMACODEX_HERMES_HOME"):
+                    os.environ.pop(key, None)
+
+            state = json.loads((home / "tamacodex" / "state.json").read_text(encoding="utf-8"))
+            self.assertEqual(state["counters"]["completedRuns"], 1)
+
+    @staticmethod
+    def _install_via_cli(home: Path) -> None:
+        run_cli(home, "setup", "--line", "toast", "--machine", "aurora", "--force", "--json")
+
+
+if __name__ == "__main__":
+    unittest.main()

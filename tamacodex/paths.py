@@ -16,6 +16,17 @@ def codex_home(value: str | None = None) -> Path:
     return Path(raw).expanduser().resolve()
 
 
+def hermes_home(value: str | None = None) -> Path:
+    """Resolve the Hermes Agent home (``HERMES_HOME`` or ``~/.hermes``).
+
+    Hermes is profile-aware: a hosted profile sets ``HERMES_HOME`` to
+    ``~/.hermes/profiles/<name>``, so the env var wins over the default exactly
+    as Hermes' own ``get_hermes_home()`` does.
+    """
+    raw = value or os.environ.get("HERMES_HOME") or "~/.hermes"
+    return Path(raw).expanduser().resolve()
+
+
 def default_state_path(home: Path) -> Path:
     return home / "tamacodex" / "state.json"
 

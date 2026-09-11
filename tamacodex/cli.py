@@ -27,8 +27,14 @@ from .codex_events import (
     scan_session_logs,
 )
 from .feedback import apply_evolution_feedback
+from .hermes_events import (
+    apply_hermes_hook,
+    default_hook_state,
+    read_stdin_payload,
+    save_hook_state,
+)
 from .paths import codex_home as resolve_codex_home
-from .paths import default_state_path, repo_root as resolve_repo_root
+from .paths import default_state_path, hermes_home as resolve_hermes_home, repo_root as resolve_repo_root
 from .overlay_state import global_state_path, is_tamacodex_selected, load_global_state, load_overlay_state, overlay_state_path, save_overlay_state
 from .overlay_supervisor import ensure_overlay_supervisor, overlay_process_alive, pid_running, read_pid, stop_overlay_process, supervisor_pid_path
 from .state import apply_event, apply_passive_rest, default_state, load_state, record_install_metadata, save_state
@@ -63,7 +69,54 @@ def add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--repo-root", help="Tamacodex repository root. Defaults to this source checkout.")
     parser.add_argument("--catalog-dir", help="M2.1-compatible catalog assets directory.")
     parser.add_argument("--codex-home", help="Codex home directory. Defaults to CODEX_HOME or ~/.codex.")
-    parser.add_argument("--state-path", help="State ledger path. Defaults to <codex-home>/tamacodex/state.json.")
+    parser.add_argument("--hermes-home", help="Hermes Agent home. Defaults to HERMES_HOME or ~/.hermes.")
+    parser.add_argument(
+        "--target",
+        choices=("codex", "hermes"),
+        default="codex",
+        help="Host to install into and read activity from (default: codex).",
+    )
+    parser.add_argument("--state-path", help="State ledger path. Defaults to <home>/tamacodex/state.json.")
+
+
+def resolve_target(args: argparse.Namespace) -> str:
+    return getattr(args, "target", "codex") or "codex"
+
+
+def resolve_host_home(args: argparse.Namespace) -> Path:
+    """The host home the ledger and pet package live under (Codex or Hermes)."""
+    if resolve_target(args) == "hermes":
+        return resolve_hermes_home(getattr(args, "hermes_home", None))
+    return resolve_codex_home(getattr(args, "codex_home", None))
+
+
+def select_hermes_pet(pet_id: str, home: Path | None = None) -> dict[str, Any]:
+    """Point Hermes at the freshly installed pet (``hermes pets select <slug>``).
+
+    Best-effort, and deliberately scoped: ``hermes pets select`` acts on the
+    *live* profile, so it only runs when *home* is that live home. Installing
+    into a throwaway ``--hermes-home`` (tests, staging) returns the manual
+    command instead of mutating the running profile's config.
+    """
+    manual = f"hermes pets select {pet_id}"
+    if home is not None and home != resolve_hermes_home(None):
+        return {"ok": False, "skipped": True, "reason": "target home is not the live Hermes home", "manual": manual}
+    try:
+        completed = subprocess.run(
+            ["hermes", "pets", "select", pet_id],
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:  # noqa: BLE001
+        return {"ok": False, "error": str(exc), "manual": manual}
+    output = (completed.stdout or "").strip() or (completed.stderr or "").strip()
+    return {
+        "ok": completed.returncode == 0,
+        "returncode": completed.returncode,
+        "output": output[-1000:],
+        "manual": manual,
+    }
 
 
 def state_catalog_dir(state_path: Path) -> str | None:
@@ -78,7 +131,7 @@ def state_catalog_dir(state_path: Path) -> str | None:
 
 def context(args: argparse.Namespace, use_state_catalog: bool = True):
     root = resolve_repo_root(args.repo_root)
-    home = resolve_codex_home(args.codex_home)
+    home = resolve_host_home(args)
     state_path = Path(args.state_path).expanduser().resolve() if args.state_path else default_state_path(home)
     catalog_dir = args.catalog_dir or (state_catalog_dir(state_path) if use_state_catalog else None)
     catalog = load_catalog(root, catalog_dir)
@@ -240,6 +293,9 @@ def cmd_install(args: argparse.Namespace) -> None:
     report = install_codex_pet(catalog, state, home, build_dir, force=args.force)
     record_install_metadata(state, report)
     save_state(state_path, state)
+    if resolve_target(args) == "hermes":
+        print_json({"ok": True, "statePath": str(state_path), **report, "hermesPet": select_hermes_pet(state.get("petId", "tamacodex"), home)})
+        return
     print_json({"ok": True, "statePath": str(state_path), **report})
 
 
@@ -282,7 +338,16 @@ def cmd_setup(args: argparse.Namespace) -> None:
         },
         "refresh": refresh,
     }
-    if args.overlay_supervisor:
+    if resolve_target(args) == "hermes":
+        # Hermes renders the pet from <HERMES_HOME>/pets (no Codex sidecar), so
+        # overlay supervision is skipped and the pet is made active instead.
+        response["overlaySupervisor"] = {
+            "ok": True,
+            "skipped": True,
+            "reason": "not applicable on the hermes target",
+        }
+        response["hermesPet"] = select_hermes_pet(installed_state.get("petId", "tamacodex"), home)
+    elif args.overlay_supervisor:
         response["overlaySupervisor"] = setup_overlay_supervisor(home, root)
     else:
         response["overlaySupervisor"] = {
@@ -298,6 +363,12 @@ def cmd_setup(args: argparse.Namespace) -> None:
             print(f"installed: {refresh['install']['petDir']}")
         else:
             print(f"installed: already up to date in {home / 'pets' / installed_state.get('petId', 'tamacodex')}")
+        hermes_pet = response.get("hermesPet")
+        if hermes_pet is not None:
+            if hermes_pet.get("ok"):
+                print("hermes: pet selected — it will appear on the next Hermes turn")
+            else:
+                print(f"hermes: run `{hermes_pet['manual']}` to make the pet active")
 
 
 def setup_overlay_supervisor(
@@ -347,7 +418,7 @@ def cmd_preview(args: argparse.Namespace) -> None:
 
 def cmd_watch(args: argparse.Namespace) -> None:
     root = resolve_repo_root(args.repo_root)
-    home = resolve_codex_home(args.codex_home)
+    home = resolve_host_home(args)
     state_path = Path(args.state_path).expanduser().resolve() if args.state_path else default_state_path(home)
     build_dir = Path(args.build_dir).expanduser().resolve() if args.build_dir else home / "tamacodex" / "build"
     interval = max(0.2, args.interval)
@@ -378,7 +449,7 @@ def cmd_watch(args: argparse.Namespace) -> None:
 
 def cmd_overlay(args: argparse.Namespace) -> None:
     root = resolve_repo_root(args.repo_root)
-    home = resolve_codex_home(args.codex_home)
+    home = resolve_host_home(args)
     path = overlay_state_path(home)
     state = load_overlay_state(path)
     changed = False
@@ -469,6 +540,40 @@ def cmd_bridge(args: argparse.Namespace) -> None:
             emit_bridge_result(result, args.json)
             if args.strict:
                 raise SystemExit(1) from exc
+
+
+def cmd_hermes_hook(args: argparse.Namespace) -> None:
+    """Apply a single Hermes Agent hook payload (stdin JSON) to the ledger.
+
+    This is the process the ``hooks:`` shell-hook script shells out to, and the
+    CLI twin of the native plugin's in-process path.
+    """
+    _root, home, state_path, catalog = context(args)
+    build_dir = Path(args.build_dir).expanduser().resolve() if getattr(args, "build_dir", None) else home / "tamacodex" / "build"
+    hook_state_path = (
+        Path(args.hook_state).expanduser().resolve()
+        if getattr(args, "hook_state", None)
+        else home / "tamacodex" / "hermes-hook-state.json"
+    )
+    if getattr(args, "reset", False):
+        save_hook_state(hook_state_path, default_hook_state())
+    payload = read_stdin_payload(sys.stdin)
+    report = apply_hermes_hook(
+        catalog,
+        state_path,
+        hook_state_path,
+        payload,
+        home=home,
+        build_dir=build_dir,
+        line_id=args.line,
+        machine_id=args.machine,
+        catalog_dir=str(catalog.root) if getattr(args, "catalog_dir", None) else None,
+        refresh=not getattr(args, "no_refresh", False),
+    )
+    if args.json:
+        print_json(report)
+    elif report.get("applied"):
+        print(f"tamacodex: {', '.join(report['events'])}", flush=True)
 
 
 def cmd_codex_events(args: argparse.Namespace) -> None:
@@ -729,6 +834,16 @@ def build_parser() -> argparse.ArgumentParser:
     bridge.add_argument("--strict", action="store_true", help="Exit non-zero after the first invalid JSONL record.")
     bridge.add_argument("--json", action="store_true")
     bridge.set_defaults(func=cmd_bridge)
+
+    hermes_hook = sub.add_parser("hermes-hook", help="Apply one Hermes Agent hook payload (stdin JSON) to the growth ledger.")
+    hermes_hook.add_argument("--line", default="toast")
+    hermes_hook.add_argument("--machine", default="aurora")
+    hermes_hook.add_argument("--build-dir")
+    hermes_hook.add_argument("--hook-state", help="Hook bookkeeping path. Defaults to <home>/tamacodex/hermes-hook-state.json.")
+    hermes_hook.add_argument("--no-refresh", dest="no_refresh", action="store_true", help="Update the ledger without rebuilding the pet package.")
+    hermes_hook.add_argument("--reset", action="store_true", help="Clear the seen-turn bookkeeping before applying.")
+    hermes_hook.add_argument("--json", action="store_true")
+    hermes_hook.set_defaults(func=cmd_hermes_hook)
 
     codex_events = sub.add_parser("codex-events", help="Consume Codex session rollout logs through the bridge contract.")
     codex_events.add_argument("--input", action="append", help="Specific rollout JSONL file or sessions directory. Defaults to <codex-home>/sessions.")

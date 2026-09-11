@@ -1,0 +1,23 @@
+# Tamacodex → Hermes Agent shell-hook config.
+#
+# Alternative to the native plugin (plugins/tamacodex-hermes). Both feed the
+# SAME growth ledger; pick one, not both (double-feeding inflates growth).
+#
+# 1. Copy the `hooks:` block below into <HERMES_HOME>/config.yaml.
+# 2. Replace __REPO__ with the absolute path to your TamaCodex checkout.
+# 3. Run `hermes hooks list` — each (event, command) pair must be allowlisted
+#    before Hermes will execute it.
+#
+# Every event here is an observer: none can block a tool call or change a turn.
+
+hooks:
+  - event: on_session_start
+    command: "__REPO__/plugins/tamacodex/scripts/tamacodex_hermes_hook.sh"
+  - event: pre_llm_call
+    command: "__REPO__/plugins/tamacodex/scripts/tamacodex_hermes_hook.sh"
+  - event: post_tool_call
+    command: "__REPO__/plugins/tamacodex/scripts/tamacodex_hermes_hook.sh"
+  - event: post_api_request
+    command: "__REPO__/plugins/tamacodex/scripts/tamacodex_hermes_hook.sh"
+  - event: on_session_end
+    command: "__REPO__/plugins/tamacodex/scripts/tamacodex_hermes_hook.sh"

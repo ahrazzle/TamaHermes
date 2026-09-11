@@ -15,6 +15,12 @@
 </p>
 
 <p align="center">
+  <strong>Also runs on Hermes Agent.</strong><br>
+  This fork installs Tamacodex as a Hermes pet and grows it from Hermes hooks —
+  no macOS sidecar needed. See <a href="README.hermes.md">README.hermes.md</a>.
+</p>
+
+<p align="center">
   <strong>Still in active development.</strong><br>
   Expect rough edges, weird pet behavior, and occasional bugs. Forks, issues, and contributions are very welcome.
 </p>

@@ -1,0 +1,10 @@
+name: tamacodex-hermes
+version: 0.1.0
+description: "Grow a Tamacodex Hermes pet from real agent activity — prompts, tool runs, failures, recoveries, reviews, and token usage. Hermes-native port of Alichua/TamaCodex."
+author: "ahrazzle (Hermes port of Alichua/TamaCodex)"
+hooks:
+  - on_session_start
+  - pre_llm_call
+  - post_tool_call
+  - post_api_request
+  - on_session_end
