@@ -1,10 +1,6 @@
 # TamaHermes
 
 <p align="center">
-  <img src="docs/media/hero-90s-tamahermes.png" alt="TamaHermes 90s-style hero banner" width="100%">
-</p>
-
-<p align="center">
   <strong>A tiny agent desktop pet that grows while you work.</strong><br>
   Toast celebrates your runs, survives your failures, chirps in 8-bit, and slowly becomes yours.
 </p>
