@@ -1,12 +1,19 @@
-# Tamacodex
+# TamaHermes
 
 <p align="center">
-  <img src="docs/media/hero-90s-tamacodex.png" alt="Tamacodex 90s-style hero banner" width="100%">
+  <img src="docs/media/hero-90s-tamacodex.png" alt="TamaHermes 90s-style hero banner" width="100%">
 </p>
 
 <p align="center">
-  <strong>A tiny Codex desktop pet that grows while you work.</strong><br>
+  <strong>A tiny agent desktop pet that grows while you work.</strong><br>
   Toast celebrates your runs, survives your failures, chirps in 8-bit, and slowly becomes yours.
+</p>
+
+<p align="center">
+  <strong>TamaHermes is <a href="https://github.com/Alichua/TamaCodex">Tamacodex</a> ported to
+  <a href="https://github.com/NousResearch/hermes-agent">Hermes Agent</a>.</strong><br>
+  Same pet, same growth model — fed by Hermes' own hooks, and it still works with Codex.
+  Read <a href="README.hermes.md">README.hermes.md</a>.
 </p>
 
 <p align="center">
@@ -46,19 +53,37 @@ Have fun. Fork it. Hatch something strangely yours.
 
 ## Quick Start
 
+### Hermes Agent (this fork)
+
+```bash
+git clone https://github.com/ahrazzle/TamaHermes.git
+cd TamaHermes
+./hermes/install-hermes.sh --line toast --machine aurora
+hermes plugins enable tamacodex-hermes
+```
+
+Add `--petdex-activate` to float the pet on your desktop as well as in the
+terminal. `./hermes/install-all-profiles.sh` covers every Hermes profile at once.
+
+The pet installs into `<HERMES_HOME>/pets/tamacodex` and grows from prompts, tool
+runs, failures and recoveries, image reviews, and token usage. Full guide:
+**[README.hermes.md](README.hermes.md)**.
+
+### Codex (upstream behaviour, retained)
+
 **🍎 Currently supported platform: macOS.**
 
 **🤖 One-line agent install: paste this into Codex.**
 
 ```text
-Install https://github.com/Alichua/TamaCodex with Toast and Aurora.
+Install https://github.com/ahrazzle/TamaHermes with Toast and Aurora.
 ```
 
 **🛠 Manual install: clone, enter, install.**
 
 ```bash
-git clone https://github.com/Alichua/TamaCodex.git
-cd tamacodex
+git clone https://github.com/ahrazzle/TamaHermes.git
+cd TamaHermes
 ./install.sh --line toast --machine aurora
 ```
 

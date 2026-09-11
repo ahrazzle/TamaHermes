@@ -1,8 +1,15 @@
-# Tamacodex on Hermes Agent
+# TamaHermes — Hermes Agent support
 
-TamaCodex is a Tamagotchi-style desktop pet that grows from your agent activity.
-It was built for Codex; this fork adds first-class **Hermes Agent** support — the
-same pet, the same growth model, fed from Hermes' own hooks instead of Codex's.
+**TamaHermes** is [Tamacodex](https://github.com/Alichua/TamaCodex) ported to
+[Hermes Agent](https://github.com/NousResearch/hermes-agent). Tamacodex is a
+Tamagotchi-style pet that grows from your agent activity; upstream it was built
+for Codex. This fork runs the same pet, with the same growth model, fed from
+Hermes' own hooks instead of Codex's.
+
+> **Names.** The project, the repository, and the releases are **TamaHermes**.
+> The Python import package and the CLI command stay `tamacodex`, deliberately:
+> it keeps this fork mergeable with upstream and avoids breaking existing
+> installs. Where this document says `tamacodex`, read "the CLI/package pin".
 
 The port is small on purpose. TamaCodex already compiles exactly the artifact
 Hermes renders: an 8-column × 9-row atlas of 192×208 cells (1536×1872) whose row
@@ -223,5 +230,7 @@ macOS sidecar overlay supervisor. The overlay is Codex-only and is skipped on
 
 ## Credits
 
-Upstream: [Alichua/TamaCodex](https://github.com/Alichua/TamaCodex) (MIT).
-Hermes port: this fork.
+Upstream project, pet art, and growth model:
+[Alichua/TamaCodex](https://github.com/Alichua/TamaCodex) (MIT).
+Hermes Agent port, desktop mirroring, and the 1.0 release: this fork
+([ahrazzle/TamaHermes](https://github.com/ahrazzle/TamaHermes)).
