@@ -1,13 +1,13 @@
 #!/usr/bin/env sh
-# Install TamaHermes (the TamaCodex pet) as a Hermes Agent pet, wired to grow
+# Install TamaHermes (the TamaHermes pet) as a Hermes Agent pet, wired to grow
 # from live agent activity.
 #
 #   ./hermes/install-hermes.sh --line toast --machine aurora
 #
 # What it does:
-#   1. pip-installs the tamacodex package (so the plugin can import it)
-#   2. builds and installs the pet package into <HERMES_HOME>/pets/tamacodex
-#   3. copies the native Hermes plugin into <HERMES_HOME>/plugins/tamacodex-hermes
+#   1. pip-installs the tamahermes package (so the plugin can import it)
+#   2. builds and installs the pet package into <HERMES_HOME>/pets/tamahermes
+#   3. copies the native Hermes plugin into <HERMES_HOME>/plugins/tamahermes
 #   4. selects the pet (when the target home is the live Hermes home)
 #
 # Use --shell-hooks instead of the plugin if you prefer the config.yaml route
@@ -26,7 +26,7 @@ MODE="plugin"
 INSTALL_PYTHON="1"
 PETDEX=""
 PETDEX_ACTIVATE=""
-PETDEX_HOME_DIR="${TAMACODEX_PETDEX_HOME:-$HOME/.petdex}"
+PETDEX_HOME_DIR="${TAMAHERMES_PETDEX_HOME:-$HOME/.petdex}"
 
 usage() {
   cat <<'USAGE'
@@ -39,7 +39,7 @@ Options:
   --display-name NAME        Visible pet display name
   --reset                    Reset the local growth ledger first
   --shell-hooks              Only print the shell-hook config; skip the plugin copy
-  --no-python-install        Assume the tamacodex package is already importable
+  --no-python-install        Assume the tamahermes package is already importable
   --petdex                   Also mirror the pet into the Petdex desktop home,
                              so it floats on the desktop and not just the terminal
   --petdex-activate          With --petdex, also make it the active desktop pet
@@ -49,7 +49,7 @@ Options:
 
 Environment:
   HERMES_HOME                Target Hermes home (default: ~/.hermes)
-  TAMACODEX_PY               Python interpreter to use (default: repo .venv, then python3)
+  TAMAHERMES_PY               Python interpreter to use (default: repo .venv, then python3)
 USAGE
 }
 
@@ -75,8 +75,8 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-if [ -n "${TAMACODEX_PY:-}" ]; then
-  PY="$TAMACODEX_PY"
+if [ -n "${TAMAHERMES_PY:-}" ]; then
+  PY="$TAMAHERMES_PY"
 elif [ -x "$REPO_ROOT/.venv/bin/python" ]; then
   PY="$REPO_ROOT/.venv/bin/python"
 elif [ -x "$REPO_ROOT/venv/bin/python" ]; then
@@ -88,7 +88,7 @@ fi
 HERMES_HOME_RESOLVED="${HERMES_HOME:-$HOME/.hermes}"
 
 if [ "$INSTALL_PYTHON" = "1" ]; then
-  echo "==> installing the tamacodex package into $PY" >&2
+  echo "==> installing the tamahermes package into $PY" >&2
   if "$PY" -m pip --version >/dev/null 2>&1; then
     "$PY" -m pip install -q -e "$REPO_ROOT" >&2
   elif command -v uv >/dev/null 2>&1; then
@@ -96,7 +96,7 @@ if [ "$INSTALL_PYTHON" = "1" ]; then
     uv pip install -q --python "$PY" -e "$REPO_ROOT" >&2
   else
     # Not fatal: the CLI runs from the checkout, and the plugin resolves
-    # tamacodex via <HERMES_HOME>/tamacodex/repo-root.
+    # tamahermes via <HERMES_HOME>/tamahermes/repo-root.
     echo "!! $PY has no pip and uv is not installed; skipping the editable install." >&2
     echo "   Continuing — both the CLI and the plugin can run from $REPO_ROOT." >&2
   fi
@@ -114,12 +114,12 @@ fi
 if [ -n "$RESET" ]; then
   set -- "$@" "$RESET"
 fi
-"$PY" -m tamacodex "$@"
+"$PY" -m tamahermes "$@"
 
-# Record the checkout next to the ledger so the plugin can import `tamacodex`
-# during an ordinary `hermes` run, where TAMACODEX_REPO_ROOT is not set.
-mkdir -p "$HERMES_HOME_RESOLVED/tamacodex"
-printf '%s\n' "$REPO_ROOT" > "$HERMES_HOME_RESOLVED/tamacodex/repo-root"
+# Record the checkout next to the ledger so the plugin can import `tamahermes`
+# during an ordinary `hermes` run, where TAMAHERMES_REPO_ROOT is not set.
+mkdir -p "$HERMES_HOME_RESOLVED/tamahermes"
+printf '%s\n' "$REPO_ROOT" > "$HERMES_HOME_RESOLVED/tamahermes/repo-root"
 
 if [ -n "$PETDEX" ]; then
   echo "==> mirroring the pet into the Petdex desktop home ($PETDEX_HOME_DIR)" >&2
@@ -128,14 +128,14 @@ if [ -n "$PETDEX" ]; then
   if [ -n "$PETDEX_ACTIVATE" ]; then
     set -- "$@" --activate
   fi
-  "$PY" -m tamacodex "$@" >/dev/null
+  "$PY" -m tamahermes "$@" >/dev/null
   # Opt-in marker: the Hermes plugin mirrors every rebuild into the desktop home.
-  printf '%s\n' "$PETDEX_HOME_DIR" > "$HERMES_HOME_RESOLVED/tamacodex/petdex-home"
+  printf '%s\n' "$PETDEX_HOME_DIR" > "$HERMES_HOME_RESOLVED/tamahermes/petdex-home"
 fi
 
 if [ "$MODE" = "plugin" ]; then
-  PLUGIN_SRC="$REPO_ROOT/plugins/tamacodex-hermes"
-  PLUGIN_DST="$HERMES_HOME_RESOLVED/plugins/tamacodex-hermes"
+  PLUGIN_SRC="$REPO_ROOT/plugins/tamahermes"
+  PLUGIN_DST="$HERMES_HOME_RESOLVED/plugins/tamahermes"
   echo "==> installing the Hermes plugin into $PLUGIN_DST" >&2
   mkdir -p "$HERMES_HOME_RESOLVED/plugins"
   rm -rf "$PLUGIN_DST"
@@ -143,12 +143,12 @@ if [ "$MODE" = "plugin" ]; then
   cat >&2 <<EOF
 
 Next steps:
-  1. Enable the plugin:   hermes plugins enable tamacodex-hermes
-  2. Select the pet:      hermes pets select tamacodex
+  1. Enable the plugin:   hermes plugins enable tamahermes
+  2. Select the pet:      hermes pets select tamahermes
   3. Confirm the wiring:  hermes pets doctor && hermes plugins list
 
 The pet grows from prompts, tool runs, failures/recoveries, image reviews and
-token usage. Ledger: $HERMES_HOME_RESOLVED/tamacodex/state.json
+token usage. Ledger: $HERMES_HOME_RESOLVED/tamahermes/state.json
 EOF
 else
   cat >&2 <<EOF

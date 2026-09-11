@@ -1,17 +1,17 @@
 # TamaHermes — Hermes Agent support
 
 **TamaHermes** is [Tamacodex](https://github.com/Alichua/TamaCodex) ported to
-[Hermes Agent](https://github.com/NousResearch/hermes-agent). Tamacodex is a
+[Hermes Agent](https://github.com/NousResearch/hermes-agent). TamaHermes is a
 Tamagotchi-style pet that grows from your agent activity; upstream it was built
 for Codex. This fork runs the same pet, with the same growth model, fed from
 Hermes' own hooks instead of Codex's.
 
-> **Names.** The project, the repository, and the releases are **TamaHermes**.
-> The Python import package and the CLI command stay `tamacodex`, deliberately:
-> it keeps this fork mergeable with upstream and avoids breaking existing
-> installs. Where this document says `tamacodex`, read "the CLI/package pin".
+> **Names.** Everything is **TamaHermes**: the project, the repository, the
+> Python package, the `tamahermes` CLI, and the `tamahermes` Hermes plugin. It
+> began as a fork of Tamacodex (credited below), which is why a few upstream
+> art and catalog names still read "Tamacodex" — the pet art is unchanged.
 
-The port is small on purpose. TamaCodex already compiles exactly the artifact
+The port is small on purpose. TamaHermes already compiles exactly the artifact
 Hermes renders: an 8-column × 9-row atlas of 192×208 cells (1536×1872) whose row
 order — `idle, running-right, running-left, waving, jumping, failed, waiting,
 running, review` — is byte-identical to Hermes' `CODEX_STATE_ROWS`. So no sprite
@@ -22,15 +22,15 @@ growth events come from**.
 
 ```bash
 git clone <this fork>
-cd TamaCodex
+cd TamaHermes
 ./hermes/install-hermes.sh --line toast --machine aurora
 ```
 
 Then enable the plugin and select the pet:
 
 ```bash
-hermes plugins enable tamacodex-hermes
-hermes pets select tamacodex
+hermes plugins enable tamahermes
+hermes pets select tamahermes
 hermes pets doctor        # should report ✓ ready
 ```
 
@@ -39,10 +39,10 @@ app, and starts reacting to what the agent is doing.
 
 ## What grows the pet
 
-Hermes fires observer hooks; this port maps them onto TamaCodex's existing event
-taxonomy (`tamacodex/state.py`), so the deltas are identical to the Codex side:
+Hermes fires observer hooks; this port maps them onto TamaHermes's existing event
+taxonomy (`tamahermes/state.py`), so the deltas are identical to the Codex side:
 
-| Hermes hook | TamaCodex event | Effect |
+| Hermes hook | TamaHermes event | Effect |
 |---|---|---|
 | `on_session_start` | `session_start` | small XP, focus up, energy down |
 | `pre_llm_call` | `prompt_sent` | XP, focus, work counter (once per turn) |
@@ -63,21 +63,21 @@ Two invariants the adapter enforces so the ledger stays honest:
 Care and rest work exactly as documented upstream:
 
 ```bash
-python -m tamacodex --target hermes event care --amount 1 --install
-python -m tamacodex --target hermes event rest --amount 4
-python -m tamacodex --target hermes status
+python -m tamahermes --target hermes event care --amount 1 --install
+python -m tamahermes --target hermes event rest --amount 4
+python -m tamahermes --target hermes status
 ```
 
 ## Two ways to wire it
 
-Both feed the **same** ledger (`<HERMES_HOME>/tamacodex/state.json`). Pick one —
+Both feed the **same** ledger (`<HERMES_HOME>/tamahermes/state.json`). Pick one —
 wiring both double-feeds growth.
 
 ### 1. Native plugin (recommended)
 
-`plugins/tamacodex-hermes/` is a Hermes plugin (`plugin.yaml` + `register(ctx)`).
-The installer copies it to `<HERMES_HOME>/plugins/tamacodex-hermes/`; enable it
-with `hermes plugins enable tamacodex-hermes`.
+`plugins/tamahermes/` is a Hermes plugin (`plugin.yaml` + `register(ctx)`).
+The installer copies it to `<HERMES_HOME>/plugins/tamahermes/`; enable it
+with `hermes plugins enable tamahermes`.
 
 It runs in-process, so there is nothing to allowlist, and it is careful about the
 hot path: hook callbacks only enqueue a payload on a background worker thread, and
@@ -90,18 +90,18 @@ rebuild is logged and dropped; a mascot must never break an agent turn.
 If you'd rather not run a plugin, add the block in
 `hermes/hooks.snippet.yaml` to `<HERMES_HOME>/config.yaml` (replace `__REPO__`
 with your checkout path), then allowlist each entry with `hermes hooks list`.
-The hook shells out to `plugins/tamacodex/scripts/tamacodex_hermes_hook.sh`,
+The hook shells out to `plugins/tamahermes/scripts/hermes_hook.sh`,
 which reads the same Hermes payload and applies it identically.
 
 ## Where things live
 
 | Path | What |
 |---|---|
-| `<HERMES_HOME>/pets/tamacodex/pet.json` | the pet manifest Hermes reads |
-| `<HERMES_HOME>/pets/tamacodex/spritesheet-<hash>.webp` | the compiled 8×9 atlas |
-| `<HERMES_HOME>/tamacodex/state.json` | the growth ledger |
-| `<HERMES_HOME>/tamacodex/hermes-hook-state.json` | per-turn bookkeeping (turn ids only) |
-| `<HERMES_HOME>/plugins/tamacodex-hermes/` | the native plugin |
+| `<HERMES_HOME>/pets/tamahermes/pet.json` | the pet manifest Hermes reads |
+| `<HERMES_HOME>/pets/tamahermes/spritesheet-<hash>.webp` | the compiled 8×9 atlas |
+| `<HERMES_HOME>/tamahermes/state.json` | the growth ledger |
+| `<HERMES_HOME>/tamahermes/hermes-hook-state.json` | per-turn bookkeeping (turn ids only) |
+| `<HERMES_HOME>/plugins/tamahermes/` | the native plugin |
 
 `HERMES_HOME` is honoured everywhere, including hosted profiles
 (`~/.hermes/profiles/<name>`), so each profile keeps its own pet and its own
@@ -115,11 +115,11 @@ Every command takes `--target {codex,hermes}` (default `codex`) and
 `--hermes-home PATH` (default `HERMES_HOME` or `~/.hermes`):
 
 ```bash
-python -m tamacodex --target hermes --hermes-home ~/.hermes setup --line mais --machine pulse --force --json
-python -m tamacodex --target hermes status --json
-python -m tamacodex --target hermes install --force
+python -m tamahermes --target hermes --hermes-home ~/.hermes setup --line mais --machine pulse --force --json
+python -m tamahermes --target hermes status --json
+python -m tamahermes --target hermes install --force
 echo '{"hook_event_name":"post_tool_call","tool_name":"write_file","extra":{"status":"ok"},"turn_id":"t1"}' \
-  | python -m tamacodex --target hermes hermes-hook --json
+  | python -m tamahermes --target hermes hermes-hook --json
 ```
 
 New subcommand: `hermes-hook` applies one Hermes hook payload from stdin (this is
@@ -130,19 +130,19 @@ what the shell-hook script calls). `--reset` clears the turn bookkeeping.
 | Variable | Purpose |
 |---|---|
 | `HERMES_HOME` | target Hermes home (profile-aware) |
-| `TAMACODEX_HERMES_HOME` | overrides `HERMES_HOME` for the hook script/plugin |
-| `TAMACODEX_PETDEX_HOME` | Petdex desktop home to mirror into; unset = no desktop mirror |
-| `TAMACODEX_REPO_ROOT` | lets the plugin/script import `tamacodex` without an install |
-| `TAMACODEX_PY` | interpreter for the shell-hook wrapper |
-| `TAMACODEX_HERMES_SYNC=1` | run the plugin inline instead of on the worker thread (tests) |
-| `TAMACODEX_LINE` / `TAMACODEX_MACHINE` | pin the companion line / tamago shell |
-| `TAMACODEX_CATALOG_DIR` | custom rendered catalog directory |
+| `TAMAHERMES_HOME` | overrides `HERMES_HOME` for the hook script/plugin |
+| `TAMAHERMES_PETDEX_HOME` | Petdex desktop home to mirror into; unset = no desktop mirror |
+| `TAMAHERMES_REPO_ROOT` | lets the plugin/script import `tamahermes` without an install |
+| `TAMAHERMES_PY` | interpreter for the shell-hook wrapper |
+| `TAMAHERMES_SYNC=1` | run the plugin inline instead of on the worker thread (tests) |
+| `TAMAHERMES_LINE` / `TAMAHERMES_MACHINE` | pin the companion line / tamago shell |
+| `TAMAHERMES_CATALOG_DIR` | custom rendered catalog directory |
 
 ## Floating it on the desktop (Petdex)
 
 Hermes draws pets inside the terminal/TUI. If you also run **Petdex.app** — the
 macOS desktop pet host (`/Applications/Petdex.app`, pets in `~/.petdex/pets/`) —
-TamaCodex can float there too, off the same ledger:
+TamaHermes can float there too, off the same ledger:
 
 ```bash
 ./hermes/install-hermes.sh --petdex-activate     # close Petdex.app first
@@ -151,15 +151,15 @@ TamaCodex can float there too, off the same ledger:
 
 This is a copy, not a second pet. The Petdex desktop app consumes the same
 8&times;9 / 192&times;208 atlas Hermes does, so the mirror writes
-`~/.petdex/pets/tamacodex/` (`pet.json` + `spritesheet.webp`) and optionally
+`~/.petdex/pets/tamahermes/` (`pet.json` + `spritesheet.webp`) and optionally
 points `active_pet` at it.
 
-Once the opt-in marker is recorded at `<HERMES_HOME>/tamacodex/petdex-home`,
+Once the opt-in marker is recorded at `<HERMES_HOME>/tamahermes/petdex-home`,
 every growth refresh re-mirrors the sheet, so the floating pet evolves with the
 terminal one instead of freezing at whatever it looked like on install day.
 
 ```bash
-tamacodex petdex --petdex-home ~/.petdex --force [--activate] [--kind creature]
+tamahermes petdex --petdex-home ~/.petdex --force [--activate] [--kind creature]
 ```
 
 Honest caveats:
@@ -203,11 +203,11 @@ plugins:
     - petdex-desktop
 ```
 
-The installer records the checkout in `<HERMES_HOME>/tamacodex/repo-root`, which
-is how the plugin imports `tamacodex` during an ordinary `hermes` run — no
+The installer records the checkout in `<HERMES_HOME>/tamahermes/repo-root`, which
+is how the plugin imports `tamahermes` during an ordinary `hermes` run — no
 environment variable and no site-packages install required (Pillow, the only
 dependency, already ships with Hermes). If you move the checkout, re-run the
-installer or set `TAMACODEX_REPO_ROOT`.
+installer or set `TAMAHERMES_REPO_ROOT`.
 
 ## Tests
 

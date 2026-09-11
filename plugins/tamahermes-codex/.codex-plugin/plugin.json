@@ -1,0 +1,42 @@
+{
+  "name": "tamahermes",
+  "version": "1.0.0",
+  "description": "Codex-native TamaHermes pet installer and growth hooks.",
+  "author": {
+    "name": "ahrazzle",
+    "url": "https://github.com/ahrazzle"
+  },
+  "homepage": "https://github.com/ahrazzle/TamaHermes",
+  "repository": "https://github.com/ahrazzle/TamaHermes",
+  "license": "MIT",
+  "keywords": [
+    "codex",
+    "custom-pet",
+    "desktop-pet",
+    "tamagotchi",
+    "hermes-agent"
+  ],
+  "skills": "./skills/",
+  "hooks": "./hooks.json",
+  "interface": {
+    "displayName": "TamaHermes",
+    "shortDescription": "Install and grow a Codex-native desktop pet.",
+    "longDescription": "TamaHermes installs a Codex custom pet package, then uses Codex hooks to update its growth ledger as you work. Fork of Alichua/TamaCodex.",
+    "developerName": "ahrazzle",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/ahrazzle/TamaHermes",
+    "privacyPolicyURL": "https://github.com/ahrazzle/TamaHermes",
+    "termsOfServiceURL": "https://github.com/ahrazzle/TamaHermes",
+    "defaultPrompt": [
+      "Install TamaHermes with Mais and Pulse",
+      "Show my TamaHermes status",
+      "Switch TamaHermes to Toast and Aurora"
+    ],
+    "brandColor": "#6FD8D6",
+    "screenshots": []
+  }
+}

@@ -10,16 +10,16 @@ from datetime import datetime
 from pathlib import Path
 from unittest import mock
 
-from tamacodex.catalog import load_catalog
-from tamacodex.cli import setup_overlay_supervisor
-from tamacodex.feedback import (
+from tamahermes.catalog import load_catalog
+from tamahermes.cli import setup_overlay_supervisor
+from tamahermes.feedback import (
     active_evolution_announcement,
     apply_evolution_feedback,
     evolution_message,
     queue_evolution_announcement,
     request_avatar_reload,
 )
-from tamacodex.overlay import (
+from tamahermes.overlay import (
     apply_native_interaction_audio,
     apply_progress_audio_for_records,
     queue_native_sfx_request,
@@ -32,7 +32,7 @@ from tamacodex.overlay import (
     tamago_palette,
     write_native_overlay_config,
 )
-from tamacodex.overlay_audio import (
+from tamahermes.overlay_audio import (
     DEFAULT_VOLUME,
     INTERACTION_VOLUME,
     QUIET_VOLUME,
@@ -41,10 +41,10 @@ from tamacodex.overlay_audio import (
     afplay,
     decide_audio,
 )
-from tamacodex.overlay_state import (
+from tamahermes.overlay_state import (
     avatar_overlay_open,
     default_overlay_state,
-    is_tamacodex_selected,
+    is_tamahermes_selected,
     load_global_state,
     load_overlay_state,
     overlay_state_path,
@@ -53,8 +53,8 @@ from tamacodex.overlay_state import (
     status_snapshot,
     update_surface_activity,
 )
-from tamacodex.state import default_state, save_state
-from tamacodex.overlay_supervisor import claim_pid_file, launch_agent_plist, pid_running, start_overlay_process, supervise_once, write_pid
+from tamahermes.state import default_state, save_state
+from tamahermes.overlay_supervisor import claim_pid_file, launch_agent_plist, pid_running, start_overlay_process, supervise_once, write_pid
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -65,10 +65,10 @@ def rollout_line(timestamp: str, payload: dict[str, object]) -> str:
 
 class M10OverlayStateTests(unittest.TestCase):
     def test_selected_avatar_detection_accepts_native_nested_and_flat_keys(self) -> None:
-        self.assertTrue(is_tamacodex_selected({"electron-persisted-atom-state": {"selected-avatar-id": "custom:tamacodex"}}))
-        self.assertTrue(is_tamacodex_selected({"electron-persisted-atom-state.selected-avatar-id": "custom:tamacodex"}))
-        self.assertFalse(is_tamacodex_selected({"electron-persisted-atom-state": {"selected-avatar-id": "custom:other"}}))
-        self.assertFalse(is_tamacodex_selected({}))
+        self.assertTrue(is_tamahermes_selected({"electron-persisted-atom-state": {"selected-avatar-id": "custom:tamahermes"}}))
+        self.assertTrue(is_tamahermes_selected({"electron-persisted-atom-state.selected-avatar-id": "custom:tamahermes"}))
+        self.assertFalse(is_tamahermes_selected({"electron-persisted-atom-state": {"selected-avatar-id": "custom:other"}}))
+        self.assertFalse(is_tamahermes_selected({}))
 
     def test_missing_or_corrupt_global_state_is_inactive(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -76,7 +76,7 @@ class M10OverlayStateTests(unittest.TestCase):
             self.assertEqual(load_global_state(home), {})
             (home / ".codex-global-state.json").write_text("{not-json", encoding="utf-8")
             self.assertEqual(load_global_state(home), {})
-            self.assertFalse(is_tamacodex_selected(load_global_state(home)))
+            self.assertFalse(is_tamahermes_selected(load_global_state(home)))
 
     def test_overlay_bounds_parse_root_anchor_mascot_tray_and_placement(self) -> None:
         bounds = parse_overlay_bounds(
@@ -122,7 +122,7 @@ class M10OverlayStateTests(unittest.TestCase):
 
     def test_surface_activity_requires_open_or_recently_changed_bounds(self) -> None:
         global_state = {
-            "electron-persisted-atom-state": {"selected-avatar-id": "custom:tamacodex"},
+            "electron-persisted-atom-state": {"selected-avatar-id": "custom:tamahermes"},
             "electron-avatar-overlay-open": False,
             "electron-avatar-overlay-bounds": {
                 "x": 100,
@@ -169,7 +169,7 @@ class M10OverlayStateTests(unittest.TestCase):
         self.assertEqual(tamago_palette("unknown")["body"], "#68c6b5")
 
     def test_overlay_source_does_not_use_focus_stealing_calls(self) -> None:
-        source = (ROOT / "tamacodex" / "overlay.py").read_text(encoding="utf-8")
+        source = (ROOT / "tamahermes" / "overlay.py").read_text(encoding="utf-8")
         self.assertNotIn(".lift(", source)
         self.assertNotIn("focus_force", source)
 
@@ -198,11 +198,11 @@ class M10OverlayStateTests(unittest.TestCase):
             self.assertIsNone(active_evolution_announcement(overlay, now_epoch=13.1))
             self.assertIn("I&#x27;m toast teen focused now!", render_evolution_announcement_html("I'm toast teen focused now!"))
 
-    def test_avatar_reload_nudges_selected_tamacodex_state(self) -> None:
+    def test_avatar_reload_nudges_selected_tamahermes_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp)
             (home / ".codex-global-state.json").write_text(
-                json.dumps({"electron-persisted-atom-state": {"selected-avatar-id": "custom:tamacodex"}, "electron-avatar-overlay-open": True}) + "\n",
+                json.dumps({"electron-persisted-atom-state": {"selected-avatar-id": "custom:tamahermes"}, "electron-avatar-overlay-open": True}) + "\n",
                 encoding="utf-8",
             )
 
@@ -210,7 +210,7 @@ class M10OverlayStateTests(unittest.TestCase):
             global_state = load_global_state(home)
 
             self.assertTrue(report["attempted"])
-            self.assertTrue(is_tamacodex_selected(global_state))
+            self.assertTrue(is_tamahermes_selected(global_state))
             self.assertTrue(global_state["electron-avatar-overlay-open"])
 
     def test_evolution_feedback_reloads_announces_and_plays_sfx(self) -> None:
@@ -218,7 +218,7 @@ class M10OverlayStateTests(unittest.TestCase):
             home = Path(tmp)
             played: list[tuple[str, float]] = []
             (home / ".codex-global-state.json").write_text(
-                json.dumps({"electron-persisted-atom-state": {"selected-avatar-id": "custom:tamacodex"}}) + "\n",
+                json.dumps({"electron-persisted-atom-state": {"selected-avatar-id": "custom:tamahermes"}}) + "\n",
                 encoding="utf-8",
             )
 
@@ -234,7 +234,7 @@ class M10OverlayStateTests(unittest.TestCase):
             self.assertEqual(report["audio"]["filename"], "evolve.wav")
             self.assertEqual(played, [("evolve.wav", 1.0)])
             self.assertEqual(active_evolution_announcement(overlay, now_epoch=time.time())["message"], "I'm toast teen focused now!")
-            self.assertTrue(is_tamacodex_selected(load_global_state(home)))
+            self.assertTrue(is_tamahermes_selected(load_global_state(home)))
 
     def test_evolution_overlay_frame_tracks_anchor(self) -> None:
         bounds = parse_overlay_bounds(
@@ -342,7 +342,7 @@ class M10OverlayAudioTests(unittest.TestCase):
         self.assertGreater(INTERACTION_VOLUME, QUIET_VOLUME)
 
     def test_afplay_default_uses_full_scale_volume(self) -> None:
-        with mock.patch("tamacodex.overlay_audio.shutil.which", return_value="/usr/bin/afplay"), mock.patch("tamacodex.overlay_audio.subprocess.Popen") as popen:
+        with mock.patch("tamahermes.overlay_audio.shutil.which", return_value="/usr/bin/afplay"), mock.patch("tamahermes.overlay_audio.subprocess.Popen") as popen:
             popen.return_value.wait.side_effect = subprocess.TimeoutExpired(["afplay"], 0.08)
             self.assertTrue(afplay("task_success.wav"))
 
@@ -350,7 +350,7 @@ class M10OverlayAudioTests(unittest.TestCase):
         self.assertEqual(command[0:3], ["/usr/bin/afplay", "-v", "1.00"])
 
     def test_afplay_reports_fast_start_failure(self) -> None:
-        with mock.patch("tamacodex.overlay_audio.shutil.which", return_value="/usr/bin/afplay"), mock.patch("tamacodex.overlay_audio.subprocess.Popen") as popen:
+        with mock.patch("tamahermes.overlay_audio.shutil.which", return_value="/usr/bin/afplay"), mock.patch("tamahermes.overlay_audio.subprocess.Popen") as popen:
             popen.return_value.wait.return_value = 1
             self.assertFalse(afplay("task_success.wav"))
 
@@ -395,11 +395,11 @@ class M10OverlayAudioTests(unittest.TestCase):
             home = Path(tmp)
 
             self.assertTrue(queue_native_sfx_request(home, "care.wav", 2.0))
-            request = json.loads((home / "tamacodex" / "native-overlay" / "overlay-sfx-request.json").read_text(encoding="utf-8"))
+            request = json.loads((home / "tamahermes" / "native-overlay" / "overlay-sfx-request.json").read_text(encoding="utf-8"))
 
-        self.assertEqual(request["schema"], "tamacodex.native_overlay.sfx_request.v1")
+        self.assertEqual(request["schema"], "tamahermes.native_overlay.sfx_request.v1")
         self.assertEqual(request["filename"], "care.wav")
-        self.assertTrue(request["filePath"].endswith("tamacodex/sfx/care.wav"))
+        self.assertTrue(request["filePath"].endswith("tamahermes/sfx/care.wav"))
         self.assertEqual(request["volume"], 1.0)
         self.assertGreater(request["expiresAt"], request["updatedAt"])
 
@@ -440,7 +440,7 @@ class M10SupervisorGuardTests(unittest.TestCase):
             self.assertEqual(path.read_text(encoding="utf-8").strip(), "222")
 
     def test_pid_running_treats_zombie_process_as_stopped(self) -> None:
-        with mock.patch("tamacodex.overlay_supervisor.os.kill") as kill:
+        with mock.patch("tamahermes.overlay_supervisor.os.kill") as kill:
             kill.return_value = None
             self.assertFalse(pid_running(123, stat_reader=lambda _pid: "Z"))
             self.assertFalse(pid_running(123, stat_reader=lambda _pid: "Z+"))
@@ -460,7 +460,7 @@ class M10SupervisorGuardTests(unittest.TestCase):
             starts: list[int] = []
             stops: list[bool] = []
 
-            self.write_global_state(home, "custom:tamacodex", bounds=True)
+            self.write_global_state(home, "custom:tamahermes", bounds=True)
             first = supervise_once(home, is_running=lambda pid: True, starter=lambda _home, _root, _python: starts.append(777) or 777)
             second = supervise_once(home, is_running=lambda pid: pid == 777, starter=lambda _home, _root, _python: starts.append(888) or 888)
             self.assertEqual(first["startedPid"], 777)
@@ -528,13 +528,13 @@ class M10SupervisorGuardTests(unittest.TestCase):
             self.assertEqual(report["globalStatePath"], str(home / ".codex-global-state.json"))
 
     def test_plugin_hook_does_not_gate_supervisor_self_heal_on_global_state_presence(self) -> None:
-        source = (ROOT / "plugins" / "tamacodex" / "scripts" / "tamacodex_hook.py").read_text(encoding="utf-8")
+        source = (ROOT / "plugins" / "tamahermes-codex" / "scripts" / "codex_hook.py").read_text(encoding="utf-8")
         self.assertNotIn("global_state_path(home).exists()", source)
 
     def test_native_overlay_html_is_transparent_tamago_frontend(self) -> None:
         html = render_native_overlay_html(
             {
-                "displayName": "Tamacodex",
+                "displayName": "TamaHermes",
                 "lineId": "toast",
                 "machineId": "aurora",
                 "formId": "toast",
@@ -554,7 +554,7 @@ class M10SupervisorGuardTests(unittest.TestCase):
         self.assertIn("background: transparent", html)
         self.assertIn("backdrop-filter: blur", html)
         self.assertIn("class=\"lcd\"", html)
-        self.assertIn("Tamacodex L3 CHILD", html)
+        self.assertIn("TamaHermes L3 CHILD", html)
         self.assertIn("WORK 7 / OK 4 / FAIL 1 / REV 2", html)
         self.assertIn("TOKENS 1234 / SAMPLES 0 / IDLE 0M", html)
         self.assertIn("SAT HUNGRY / ENG OK / HP OK / ALERT REVIEW", html)
@@ -562,8 +562,8 @@ class M10SupervisorGuardTests(unittest.TestCase):
         self.assertIn("grid-template-columns: repeat(3, minmax(0, 1fr));", html)
         self.assertNotIn(".footer {\n  position: absolute;", html)
         self.assertNotIn("clip-path: ellipse", html)
-        self.assertIn("WKWebView", (ROOT / "tamacodex" / "native_overlay" / "TamacodexOverlay.swift").read_text(encoding="utf-8"))
-        swift = (ROOT / "tamacodex" / "native_overlay" / "TamacodexOverlay.swift").read_text(encoding="utf-8")
+        self.assertIn("WKWebView", (ROOT / "tamahermes" / "native_overlay" / "TamaHermesOverlay.swift").read_text(encoding="utf-8"))
+        swift = (ROOT / "tamahermes" / "native_overlay" / "TamaHermesOverlay.swift").read_text(encoding="utf-8")
         self.assertIn(".nonactivatingPanel", swift)
         self.assertIn("ignoresMouseEvents = true", swift)
         self.assertIn("hoverReady", swift)
@@ -582,7 +582,7 @@ class M10SupervisorGuardTests(unittest.TestCase):
                 frame={"x": 100, "y": 200, "width": 376, "height": 226},
                 hover={"x": 1186, "y": 622, "width": 80, "height": 87},
             )
-            config = json.loads((home / "tamacodex" / "native-overlay" / "overlay-config.json").read_text(encoding="utf-8"))
+            config = json.loads((home / "tamahermes" / "native-overlay" / "overlay-config.json").read_text(encoding="utf-8"))
             self.assertTrue(config["visible"])
             self.assertEqual(config["hoverX"], 1186)
             self.assertEqual(config["hoverY"], 622)
@@ -597,7 +597,7 @@ class M10SupervisorGuardTests(unittest.TestCase):
             log.write_text(rollout_line("2026-05-07T02:00:00Z", {"type": "task_started", "turn_id": "old-turn"}) + "\n", encoding="utf-8")
 
             catalog = load_catalog(ROOT)
-            state_path = home / "tamacodex" / "state.json"
+            state_path = home / "tamahermes" / "state.json"
 
             self.assertEqual(sync_codex_session_events(home, catalog, state_path), [])
             self.assertFalse(state_path.exists())
@@ -620,20 +620,20 @@ class M10SupervisorGuardTests(unittest.TestCase):
             return {"ok": True, "refreshed": True}
 
         home = Path("/tmp/codex-home")
-        state_path = home / "tamacodex" / "state.json"
+        state_path = home / "tamahermes" / "state.json"
         report = refresh_installed_pet_for_records([{"event": "prompt_sent"}], object(), state_path, home, refresher=refresher)
 
         self.assertEqual(report, {"ok": True, "refreshed": True})
         self.assertEqual(calls[0][1], state_path)
         self.assertEqual(calls[0][2], home)
-        self.assertEqual(calls[0][3], home / "tamacodex" / "build")
+        self.assertEqual(calls[0][3], home / "tamahermes" / "build")
         self.assertIsNone(refresh_installed_pet_for_records([], object(), state_path, home, refresher=refresher))
         self.assertEqual(len(calls), 1)
 
         with tempfile.TemporaryDirectory() as tmp:
             catalog = load_catalog(ROOT)
             rest_home = Path(tmp) / "codex-home"
-            rest_state_path = rest_home / "tamacodex" / "state.json"
+            rest_state_path = rest_home / "tamahermes" / "state.json"
             state = default_state(catalog, line_id="toast", machine_id="aurora")
             state["updatedAt"] = "2026-05-07T10:00:00Z"
             state["stats"]["energy"] = 50
@@ -651,7 +651,7 @@ class M10OverlayCliTests(unittest.TestCase):
             [
                 sys.executable,
                 "-m",
-                "tamacodex",
+                "tamahermes",
                 "--codex-home",
                 str(home),
                 "overlay",

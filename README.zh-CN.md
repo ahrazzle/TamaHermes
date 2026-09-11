@@ -1,7 +1,7 @@
-# Tamacodex
+# TamaHermes
 
 <p align="center">
-  <img src="docs/media/hero-90s-tamacodex.png" alt="Tamacodex 90s-style hero banner" width="100%">
+  <img src="docs/media/hero-90s-tamahermes.png" alt="TamaHermes 90s-style hero banner" width="100%">
 </p>
 
 <p align="center">
@@ -11,7 +11,7 @@
 
 <p align="center">
   <strong>目前仅支持 macOS。</strong><br>
-  Tamacodex 使用 macOS sidecar 来提供悬停状态、SFX 和受监督的后台成长。
+  TamaHermes 使用 macOS sidecar 来提供悬停状态、SFX 和受监督的后台成长。
 </p>
 
 <p align="center">
@@ -29,12 +29,12 @@
 <p align="center">
   <a href="#快速开始">快速开始</a> ·
   <a href="#切换配置">切换配置</a> ·
-  <a href="#孵化你自己的-tamacodex">孵化你自己的 Tamacodex</a> ·
+  <a href="#孵化你自己的-tamahermes">孵化你自己的 TamaHermes</a> ·
   <a href="#成长">成长</a>
 </p>
 
 <p align="center">
-  <img src="docs/media/tamacodex-toast-demo.gif" alt="Tamacodex animated Toast demo" width="78%">
+  <img src="docs/media/tamahermes-toast-demo.gif" alt="TamaHermes animated Toast demo" width="78%">
 </p>
 
 它不是效率工具。它是一个小小的桌面仪式。
@@ -57,14 +57,14 @@ Install https://github.com/Alichua/TamaCodex with Toast and Aurora.
 
 ```bash
 git clone https://github.com/Alichua/TamaCodex.git
-cd tamacodex
+cd tamahermes
 ./install.sh --line toast --machine aurora
 ```
 
 **✨ 在 Codex App 里唤醒它。**
 
 ```text
-Settings -> Appearance -> Pet -> Custom Pet -> Tamacodex
+Settings -> Appearance -> Pet -> Custom Pet -> TamaHermes
 Cmd+K -> Wake Pet
 ```
 
@@ -77,9 +77,9 @@ Cmd+K -> Wake Pet
 - 两个 tamago 外壳：`aurora`、`pulse`
 - 本地成长账本：XP、阶段、数值、特质、计数器、最近事件
 - macOS sidecar：悬停时显示毛玻璃 LCD、8-bit SFX、不抢焦点
-- 用小型 profile JSON 孵化自定义 Tamacodex
+- 用小型 profile JSON 孵化自定义 TamaHermes
 
-Tamacodex 只保存数值化使用信号，不保存原始提示词或工具输出文本。
+TamaHermes 只保存数值化使用信号，不保存原始提示词或工具输出文本。
 
 ## 切换配置
 
@@ -90,7 +90,7 @@ Tamacodex 只保存数值化使用信号，不保存原始提示词或工具输�
 **Composer 里直接粘贴：**
 
 ```text
-在这个 repo 里，把 Tamacodex 切换成 Toast + Pulse 外壳。请运行 ./install.sh --line toast --machine pulse，完成后告诉我什么时候需要 Wake Pet。
+在这个 repo 里，把 TamaHermes 切换成 Toast + Pulse 外壳。请运行 ./install.sh --line toast --machine pulse，完成后告诉我什么时候需要 Wake Pet。
 ```
 
 **Terminal 备用命令：**
@@ -104,7 +104,7 @@ Tamacodex 只保存数值化使用信号，不保存原始提示词或工具输�
 **Composer 里直接粘贴：**
 
 ```text
-在这个 repo 里，把 Tamacodex 切换成 Mais 伙伴线 + Aurora 外壳。请运行 ./install.sh --line mais --machine aurora，完成后告诉我什么时候需要 Wake Pet。
+在这个 repo 里，把 TamaHermes 切换成 Mais 伙伴线 + Aurora 外壳。请运行 ./install.sh --line mais --machine aurora，完成后告诉我什么时候需要 Wake Pet。
 ```
 
 **Terminal 备用命令：**
@@ -118,7 +118,7 @@ Tamacodex 只保存数值化使用信号，不保存原始提示词或工具输�
 **Composer 里直接粘贴：**
 
 ```text
-在这个 repo 里，重置 Tamacodex，并安装一颗新的 Toast + Aurora 蛋。请运行 ./install.sh --line toast --machine aurora --reset，完成后告诉我什么时候需要 Wake Pet。
+在这个 repo 里，重置 TamaHermes，并安装一颗新的 Toast + Aurora 蛋。请运行 ./install.sh --line toast --machine aurora --reset，完成后告诉我什么时候需要 Wake Pet。
 ```
 
 **Terminal 备用命令：**
@@ -146,17 +146,17 @@ Tamacodex 只保存数值化使用信号，不保存原始提示词或工具输�
 **Composer 里直接粘贴：**
 
 ```text
-在这个 repo 里，列出 toast 和 mais 的所有内置 Tamacodex 形态。请运行 tamacodex list-forms --line toast 和 tamacodex list-forms --line mais，然后用普通中文总结可选项。
+在这个 repo 里，列出 toast 和 mais 的所有内置 TamaHermes 形态。请运行 tamahermes list-forms --line toast 和 tamahermes list-forms --line mais，然后用普通中文总结可选项。
 ```
 
 **Terminal 备用命令：**
 
 ```bash
-tamacodex list-forms --line toast
-tamacodex list-forms --line mais
+tamahermes list-forms --line toast
+tamahermes list-forms --line mais
 ```
 
-## 孵化你自己的 Tamacodex
+## 孵化你自己的 TamaHermes
 
 **🐣 创建一个小 profile：`custom/ducky.json`。**
 
@@ -165,7 +165,7 @@ tamacodex list-forms --line mais
   "id": "ducky",
   "displayName": "Ducky",
   "inspiration": "a duck",
-  "description": "A duck-inspired Tamacodex companion.",
+  "description": "A duck-inspired TamaHermes companion.",
   "family": "duck",
   "palette": {
     "main": "#fff4a8",
@@ -177,16 +177,16 @@ tamacodex list-forms --line mais
 **🎨 渲染它，然后安装这个 hatchling。**
 
 ```bash
-tamacodex generate-profile --input custom/ducky.json --output custom/ducky.json
-tamacodex render-catalog --profile custom/ducky.json --output-dir build/ducky --milestone M2.1 --asset-version m2.1
+tamahermes generate-profile --input custom/ducky.json --output custom/ducky.json
+tamahermes render-catalog --profile custom/ducky.json --output-dir build/ducky --milestone M2.1 --asset-version m2.1
 ./install.sh --catalog-dir build/ducky/assets --line ducky --machine pulse --reset
 ```
 
 **🧪 想先让 Codex 起草 profile brief？**
 
 ```bash
-tamacodex generate-profile \
-  --prompt "Hatch a Tamacodex named Ducky inspired by a duck" \
+tamahermes generate-profile \
+  --prompt "Hatch a TamaHermes named Ducky inspired by a duck" \
   --brief-output /tmp/ducky-profile-brief.md \
   --output custom/ducky.json
 ```
@@ -196,13 +196,13 @@ tamacodex generate-profile \
 ```bash
 open build/ducky/qa/pet_contact_sheet.png
 open build/ducky/qa/catalog_matrix.png
-tamacodex --catalog-dir build/ducky/assets doctor --line ducky --machine pulse
+tamahermes --catalog-dir build/ducky/assets doctor --line ducky --machine pulse
 ```
 
 ## 成长
 
 <p align="center">
-  <img src="docs/media/growth-map.png" alt="Tamacodex growth rules" width="92%">
+  <img src="docs/media/growth-map.png" alt="TamaHermes growth rules" width="92%">
 </p>
 
 阶段：
@@ -231,13 +231,13 @@ tamacodex --catalog-dir build/ducky/assets doctor --line ducky --machine pulse
 
 ```bash
 # 喂一下、陪玩、清理、拍拍，都算 care。
-tamacodex event care --amount 1 --install
-tamacodex event feed --amount 1 --install
-tamacodex event play --amount 1 --install
-tamacodex event clean --amount 1 --install
+tamahermes event care --amount 1 --install
+tamahermes event feed --amount 1 --install
+tamahermes event play --amount 1 --install
+tamahermes event clean --amount 1 --install
 
 # 如果已经休眠，energy=0 时通常需要多一点 care 才能醒。
-tamacodex event care --amount 7 --install
+tamahermes event care --amount 7 --install
 ```
 
 `care` 每次会给：`+3 XP`、`+5 energy`、`+5 mood`、`+4 health`、`+3 bond`、`+2 care trait`、`-2 mess`，并减少 care mistake 计数。`--amount N` 会把这些数值乘以 N。`--install` 会顺手重建并安装 Codex custom pet package，让你看到的形态立即跟着状态更新。
@@ -246,27 +246,27 @@ tamacodex event care --amount 7 --install
 
 ```bash
 # 让它安静恢复一段时间。
-tamacodex event rest --amount 1 --install
+tamahermes event rest --amount 1 --install
 
 # energy=0 且 health 还正常时，4 次 rest 通常足够从 hibernation 醒来。
-tamacodex event rest --amount 4 --install
+tamahermes event rest --amount 4 --install
 ```
 
-`rest` 每次代表 10 分钟安静恢复：`+10 energy`、`+3 health`、`+1 mood`、`-3 restlessness`，同时 `quietMinutes +10`。它不加 XP，也不代表你正在工作。Tamacodex 从 hibernation 醒来需要 `energy >= 35` 且 `health >= 35`。
+`rest` 每次代表 10 分钟安静恢复：`+10 energy`、`+3 health`、`+1 mood`、`-3 restlessness`，同时 `quietMinutes +10`。它不加 XP，也不代表你正在工作。TamaHermes 从 hibernation 醒来需要 `energy >= 35` 且 `health >= 35`。
 
 **🎚 常用小控制。**
 
 ```bash
-tamacodex status
-tamacodex doctor
-tamacodex overlay status
-tamacodex overlay mute
-tamacodex overlay quiet
-tamacodex preview --port 8765
+tamahermes status
+tamahermes doctor
+tamahermes overlay status
+tamahermes overlay mute
+tamahermes overlay quiet
+tamahermes preview --port 8765
 ```
 
 ## 备注
 
-Tamacodex 不会 patch Codex App 内部。它使用 custom pet package contract、本地 plugin hooks、本地 session-log adaptation，以及一个受监督的 macOS sidecar。
+TamaHermes 不会 patch Codex App 内部。它使用 custom pet package contract、本地 plugin hooks、本地 session-log adaptation，以及一个受监督的 macOS sidecar。
 
-MIT。欢迎 PR，也欢迎奇怪但可爱的 Tamacodex 孵化点子。
+MIT。欢迎 PR，也欢迎奇怪但可爱的 TamaHermes 孵化点子。

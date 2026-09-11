@@ -3,34 +3,34 @@ requires = ["setuptools>=69", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "tamacodex"
+name = "tamahermes"
 version = "1.0.0"
-description = "TamaHermes: a Tamacodex desktop pet for Hermes Agent. Grows from real agent activity — in the terminal, and floating on the desktop."
+description = "TamaHermes: a Tamagotchi-style desktop pet for Hermes Agent, forked from Tamacodex. Grows from real agent activity — in the terminal, and floating on the desktop."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = ["Pillow>=10"]
-authors = [{ name = "Alichua" }]
+authors = [{ name = "ahrazzle" }, { name = "Alichua (upstream Tamacodex)" }]
 license = { text = "MIT" }
-keywords = ["codex", "desktop-pet", "pixel-art", "tamagotchi"]
+keywords = ["hermes-agent", "desktop-pet", "pixel-art", "tamagotchi", "codex"]
 
 [project.scripts]
-tamacodex = "tamacodex.cli:main"
+tamahermes = "tamahermes.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["tamacodex*"]
+include = ["tamahermes*"]
 
 [tool.setuptools]
 include-package-data = true
 
 [tool.setuptools.package-data]
-tamacodex = [
+tamahermes = [
   "catalog_assets/**/*",
   "sfx/*.wav",
   "sfx/*.md",
   "native_overlay/*.swift",
 ]
-tamacodex_gen = [
+tamahermes_gen = [
   "SKILL.md",
   "profiles/*.json",
   "references/*.md",

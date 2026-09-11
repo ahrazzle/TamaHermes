@@ -2,7 +2,7 @@
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-PY=${TAMACODEX_PY:-}
+PY=${TAMAHERMES_PY:-}
 
 if [ -z "$PY" ]; then
   if [ -x "$HOME/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3" ]; then
@@ -24,7 +24,7 @@ usage() {
   cat <<'USAGE'
 Usage: ./install.sh [options]
 
-Install or switch Tamacodex for Codex App.
+Install or switch TamaHermes for Codex App.
 
 Options:
   --line LINE_ID             Companion line to install (default: toast)
@@ -111,7 +111,7 @@ done
 
 "$PY" -m pip install -q -e "$ROOT" >&2
 cd "$ROOT"
-set -- -m tamacodex
+set -- -m tamahermes
 if [ -n "$CATALOG_DIR" ]; then
   set -- "$@" --catalog-dir "$CATALOG_DIR"
 fi

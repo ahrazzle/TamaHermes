@@ -7,10 +7,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tamacodex.bridge import apply_bridge_event
-from tamacodex.catalog import load_catalog
-from tamacodex.codex_events import default_cursor, scan_session_logs
-from tamacodex.state import default_state, load_state, save_state
+from tamahermes.bridge import apply_bridge_event
+from tamahermes.catalog import load_catalog
+from tamahermes.codex_events import default_cursor, scan_session_logs
+from tamahermes.state import default_state, load_state, save_state
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -136,7 +136,7 @@ class M7CodexEventAdapterTests(unittest.TestCase):
             command = [
                 sys.executable,
                 "-m",
-                "tamacodex",
+                "tamahermes",
                 "--codex-home",
                 str(home),
                 "codex-events",
@@ -149,7 +149,7 @@ class M7CodexEventAdapterTests(unittest.TestCase):
             events = [json.loads(line)["event"] for line in completed.stdout.splitlines()]
             self.assertEqual(events, ["session_start", "prompt_sent", "review_opened", "task_success"])
 
-            state = json.loads((home / "tamacodex" / "state.json").read_text(encoding="utf-8"))
+            state = json.loads((home / "tamahermes" / "state.json").read_text(encoding="utf-8"))
             self.assertEqual(state["lifeStage"], "egg")
             self.assertEqual(state["xp"], 25)
             self.assertEqual(state["counters"]["reviews"], 1)
@@ -168,7 +168,7 @@ class M7CodexEventAdapterTests(unittest.TestCase):
             command = [
                 sys.executable,
                 "-m",
-                "tamacodex",
+                "tamahermes",
                 "--codex-home",
                 str(home),
                 "codex-events",
@@ -180,8 +180,8 @@ class M7CodexEventAdapterTests(unittest.TestCase):
             ]
             completed = subprocess.run(command, check=True, text=True, capture_output=True, cwd=ROOT)
             self.assertEqual(json.loads(completed.stdout)["event"], "session_start")
-            self.assertFalse((home / "tamacodex" / "state.json").exists())
-            self.assertFalse((home / "tamacodex" / "codex-events-cursor.json").exists())
+            self.assertFalse((home / "tamahermes" / "state.json").exists())
+            self.assertFalse((home / "tamahermes" / "codex-events-cursor.json").exists())
 
 
 if __name__ == "__main__":

@@ -10,15 +10,15 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PLUGIN_ROOT = ROOT / "plugins" / "tamacodex"
-HOOK = PLUGIN_ROOT / "scripts" / "tamacodex_hook.sh"
+PLUGIN_ROOT = ROOT / "plugins" / "tamahermes-codex"
+HOOK = PLUGIN_ROOT / "scripts" / "codex_hook.sh"
 
 
 def run_hook(home: Path, payload: dict[str, object]) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env["CODEX_HOME"] = str(home)
-    env["TAMACODEX_PY"] = sys.executable
-    env["TAMACODEX_DISABLE_OVERLAY_SUPERVISOR"] = "1"
+    env["TAMAHERMES_PY"] = sys.executable
+    env["TAMAHERMES_DISABLE_OVERLAY_SUPERVISOR"] = "1"
     return subprocess.run(
         [str(HOOK)],
         input=json.dumps(payload),
@@ -36,24 +36,26 @@ class M7PluginHookTests(unittest.TestCase):
         hooks = json.loads((PLUGIN_ROOT / "hooks.json").read_text(encoding="utf-8"))
         marketplace = json.loads((ROOT / ".agents" / "plugins" / "marketplace.json").read_text(encoding="utf-8"))
 
-        self.assertEqual(manifest["name"], "tamacodex")
+        self.assertEqual(manifest["name"], "tamahermes")
         self.assertEqual(manifest["hooks"], "./hooks.json")
         self.assertIn("PostToolUse", hooks["hooks"])
-        self.assertEqual(marketplace["plugins"][0]["source"]["path"], "./plugins/tamacodex")
+        # The Codex marketplace entry points at the Codex plugin, not the Hermes one.
+        self.assertEqual(marketplace["plugins"][0]["source"]["path"], "./plugins/tamahermes-codex")
+        self.assertEqual(marketplace["plugins"][0]["name"], "tamahermes-codex")
 
     def test_desktop_slash_skill_aliases_exist(self) -> None:
-        install_skill = PLUGIN_ROOT / "skills" / "install-tamacodex" / "SKILL.md"
-        status_skill = PLUGIN_ROOT / "skills" / "tamacodex-status" / "SKILL.md"
+        install_skill = PLUGIN_ROOT / "skills" / "install-tamahermes" / "SKILL.md"
+        status_skill = PLUGIN_ROOT / "skills" / "tamahermes-status" / "SKILL.md"
 
-        self.assertIn("name: install-tamacodex", install_skill.read_text(encoding="utf-8"))
-        self.assertIn("/install-tamacodex", install_skill.read_text(encoding="utf-8"))
-        self.assertIn("name: tamacodex-status", status_skill.read_text(encoding="utf-8"))
-        self.assertIn("/tamacodex-status", status_skill.read_text(encoding="utf-8"))
+        self.assertIn("name: install-tamahermes", install_skill.read_text(encoding="utf-8"))
+        self.assertIn("/install-tamahermes", install_skill.read_text(encoding="utf-8"))
+        self.assertIn("name: tamahermes-status", status_skill.read_text(encoding="utf-8"))
+        self.assertIn("/tamahermes-status", status_skill.read_text(encoding="utf-8"))
 
     def test_hook_does_not_overwrite_existing_pet_without_prior_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp) / "codex-home"
-            pet_dir = home / "pets" / "tamacodex"
+            pet_dir = home / "pets" / "tamahermes"
             pet_dir.mkdir(parents=True)
             manifest_path = pet_dir / "pet.json"
             manifest_path.write_text('{"id":"foreign"}\n', encoding="utf-8")
@@ -69,10 +71,10 @@ class M7PluginHookTests(unittest.TestCase):
             )
 
             self.assertEqual(manifest_path.read_text(encoding="utf-8"), '{"id":"foreign"}\n')
-            state = json.loads((home / "tamacodex" / "state.json").read_text(encoding="utf-8"))
+            state = json.loads((home / "tamahermes" / "state.json").read_text(encoding="utf-8"))
             self.assertIsNone(state["lastInstallHash"])
             self.assertEqual(state["recentEvents"][0]["event"], "task_success")
-            self.assertTrue((home / "tamacodex" / "plugin-hook-state.json").exists())
+            self.assertTrue((home / "tamahermes" / "plugin-hook-state.json").exists())
 
     def test_setup_plus_hook_updates_pet_without_watcher_process(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -81,7 +83,7 @@ class M7PluginHookTests(unittest.TestCase):
                 [
                     sys.executable,
                     "-m",
-                    "tamacodex",
+                    "tamahermes",
                     "--codex-home",
                     str(home),
                     "setup",
@@ -100,11 +102,11 @@ class M7PluginHookTests(unittest.TestCase):
             )
             setup_payload = json.loads(setup.stdout)
             self.assertTrue(setup_payload["refresh"]["refreshed"])
-            manifest_path = home / "pets" / "tamacodex" / "pet.json"
+            manifest_path = home / "pets" / "tamahermes" / "pet.json"
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             self.assertTrue(manifest_path.exists())
-            self.assertTrue((home / "pets" / "tamacodex" / "spritesheet.webp").exists())
-            self.assertTrue((home / "pets" / "tamacodex" / manifest["spritesheetPath"]).exists())
+            self.assertTrue((home / "pets" / "tamahermes" / "spritesheet.webp").exists())
+            self.assertTrue((home / "pets" / "tamahermes" / manifest["spritesheetPath"]).exists())
 
             run_hook(
                 home,
@@ -116,7 +118,7 @@ class M7PluginHookTests(unittest.TestCase):
                 },
             )
 
-            state = json.loads((home / "tamacodex" / "state.json").read_text(encoding="utf-8"))
+            state = json.loads((home / "tamahermes" / "state.json").read_text(encoding="utf-8"))
             self.assertEqual(state["lineId"], "mais")
             self.assertEqual(state["machineId"], "pulse")
             self.assertEqual(state["counters"]["workRuns"], 1)

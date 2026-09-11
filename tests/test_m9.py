@@ -5,12 +5,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tamacodex.bridge import apply_bridge_event
-from tamacodex.catalog import load_catalog
-from tamacodex.codex_events import default_cursor, scan_session_logs
-from tamacodex.preview_server import PreviewRuntime, html
-from tamacodex.sfx import SFX_EVENT_MAP, read_sfx_bytes, sfx_payload
-from tamacodex.state import load_state
+from tamahermes.bridge import apply_bridge_event
+from tamahermes.catalog import load_catalog
+from tamahermes.codex_events import default_cursor, scan_session_logs
+from tamahermes.preview_server import PreviewRuntime, html
+from tamahermes.sfx import SFX_EVENT_MAP, read_sfx_bytes, sfx_payload
+from tamahermes.state import load_state
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -40,8 +40,8 @@ class M9PreviewSfxTests(unittest.TestCase):
         self.assertTrue(required.issubset(SFX_EVENT_MAP))
 
         payload = sfx_payload()
-        self.assertEqual(payload["schema"], "tamacodex.preview_sfx.v1")
-        self.assertIn("shared Tamacodex SFX", payload["boundary"])
+        self.assertEqual(payload["schema"], "tamahermes.preview_sfx.v1")
+        self.assertIn("shared TamaHermes SFX", payload["boundary"])
         for event in required:
             url = payload["events"][event]
             self.assertTrue(url.startswith("/sfx/"))

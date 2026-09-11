@@ -8,11 +8,11 @@ from pathlib import Path
 
 from PIL import Image, ImageChops
 
-from tamacodex.catalog import load_catalog
-from tamacodex.pet_compiler import ATLAS_HEIGHT, ATLAS_WIDTH, build_codex_pet, validate_atlas
-from tamacodex.state import default_state, load_state, save_state
-from tamacodex.visual_state import derive_visual_state
-from tamacodex.watcher import refresh_if_needed
+from tamahermes.catalog import load_catalog
+from tamahermes.pet_compiler import ATLAS_HEIGHT, ATLAS_WIDTH, build_codex_pet, validate_atlas
+from tamahermes.state import default_state, load_state, save_state
+from tamahermes.visual_state import derive_visual_state
+from tamahermes.watcher import refresh_if_needed
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -112,15 +112,15 @@ class M91NativeVisualStateTests(unittest.TestCase):
         catalog = load_catalog(ROOT)
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp) / "codex-home"
-            state_path = home / "tamacodex" / "state.json"
-            build_dir = home / "tamacodex" / "build"
+            state_path = home / "tamahermes" / "state.json"
+            build_dir = home / "tamahermes" / "build"
             state = default_state(catalog, line_id="toast", machine_id="aurora")
             save_state(state_path, state)
 
             first = refresh_if_needed(catalog, state_path, home, build_dir, force=True)
             self.assertTrue(first["refreshed"])
-            first_manifest = json.loads((home / "pets" / "tamacodex" / "pet.json").read_text(encoding="utf-8"))
-            first_sheet_path = home / "pets" / "tamacodex" / first_manifest["spritesheetPath"]
+            first_manifest = json.loads((home / "pets" / "tamahermes" / "pet.json").read_text(encoding="utf-8"))
+            first_sheet_path = home / "pets" / "tamahermes" / first_manifest["spritesheetPath"]
             first_sheet = first_sheet_path.read_bytes()
 
             same_bin = load_state(state_path, catalog)
@@ -128,9 +128,9 @@ class M91NativeVisualStateTests(unittest.TestCase):
             save_state(state_path, same_bin)
             second = refresh_if_needed(catalog, state_path, home, build_dir)
             self.assertFalse(second["refreshed"])
-            second_manifest = json.loads((home / "pets" / "tamacodex" / "pet.json").read_text(encoding="utf-8"))
+            second_manifest = json.loads((home / "pets" / "tamahermes" / "pet.json").read_text(encoding="utf-8"))
             self.assertEqual(first_manifest["spritesheetPath"], second_manifest["spritesheetPath"])
-            self.assertEqual(first_sheet, (home / "pets" / "tamacodex" / second_manifest["spritesheetPath"]).read_bytes())
+            self.assertEqual(first_sheet, (home / "pets" / "tamahermes" / second_manifest["spritesheetPath"]).read_bytes())
 
             crossed_bin = load_state(state_path, catalog)
             crossed_bin["stats"]["energy"] = 79
@@ -138,9 +138,9 @@ class M91NativeVisualStateTests(unittest.TestCase):
             third = refresh_if_needed(catalog, state_path, home, build_dir)
             self.assertTrue(third["refreshed"])
             self.assertEqual(third["reasons"], ["visualState"])
-            third_manifest = json.loads((home / "pets" / "tamacodex" / "pet.json").read_text(encoding="utf-8"))
+            third_manifest = json.loads((home / "pets" / "tamahermes" / "pet.json").read_text(encoding="utf-8"))
             self.assertNotEqual(first_manifest["spritesheetPath"], third_manifest["spritesheetPath"])
-            self.assertNotEqual(first_sheet, (home / "pets" / "tamacodex" / third_manifest["spritesheetPath"]).read_bytes())
+            self.assertNotEqual(first_sheet, (home / "pets" / "tamahermes" / third_manifest["spritesheetPath"]).read_bytes())
 
             stored = json.loads(state_path.read_text(encoding="utf-8"))
             self.assertEqual(stored["lastInstalledVisualHash"], third["visualStateHash"])

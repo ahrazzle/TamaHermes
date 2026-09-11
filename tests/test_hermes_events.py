@@ -1,4 +1,4 @@
-"""Hermes Agent activity → Tamacodex growth-event mapping."""
+"""Hermes Agent activity → TamaHermes growth-event mapping."""
 
 from __future__ import annotations
 
@@ -6,8 +6,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tamacodex.catalog import load_catalog
-from tamacodex.hermes_events import (
+from tamahermes.catalog import load_catalog
+from tamahermes.hermes_events import (
     HERMES_HOOK_SCHEMA,
     apply_hermes_hook,
     choose_hermes_events,
@@ -17,7 +17,7 @@ from tamacodex.hermes_events import (
     normalize_hermes_payload,
     save_hook_state,
 )
-from tamacodex.state import load_state
+from tamahermes.state import load_state
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -153,8 +153,8 @@ class ApplyHermesHookTests(unittest.TestCase):
         catalog = load_catalog(ROOT)
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp) / "hermes-home"
-            state_path = home / "tamacodex" / "state.json"
-            hook_path = home / "tamacodex" / "hermes-hook-state.json"
+            state_path = home / "tamahermes" / "state.json"
+            hook_path = home / "tamahermes" / "hermes-hook-state.json"
 
             report = apply_hermes_hook(
                 catalog,
@@ -162,7 +162,7 @@ class ApplyHermesHookTests(unittest.TestCase):
                 hook_path,
                 {"hook_event_name": "pre_llm_call", "turn_id": "t1", "user_message": "hello there"},
                 home=home,
-                build_dir=home / "tamacodex" / "build",
+                build_dir=home / "tamahermes" / "build",
                 refresh=False,
             )
             self.assertEqual(report["events"], ["prompt_sent"])
@@ -179,7 +179,7 @@ class ApplyHermesHookTests(unittest.TestCase):
         )
         self.assertTrue(records)
         for record in records:
-            self.assertEqual(record["schema"], "tamacodex.bridge.event.v1")
+            self.assertEqual(record["schema"], "tamahermes.bridge.event.v1")
             self.assertEqual(record["source"], "hermes-hook")
 
 

@@ -7,13 +7,13 @@ from pathlib import Path
 
 from PIL import Image
 
-from tamacodex.catalog import load_catalog
-from tamacodex.pet_compiler import build_codex_pet, validate_screen_mask_clipping
-from tamacodex.state import default_state
+from tamahermes.catalog import load_catalog
+from tamahermes.pet_compiler import build_codex_pet, validate_screen_mask_clipping
+from tamahermes.state import default_state
 
 
 ROOT = Path(__file__).resolve().parents[1]
-ASSETS = ROOT / "tamacodex" / "catalog_assets"
+ASSETS = ROOT / "tamahermes" / "catalog_assets"
 
 
 def luminance(color: tuple[int, int, int, int]) -> float:

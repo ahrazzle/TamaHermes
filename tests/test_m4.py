@@ -5,11 +5,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tamacodex.catalog import load_catalog
-from tamacodex.pet_compiler import PetCompileError, install_codex_pet, validate_atlas
-from tamacodex.state import apply_event, apply_passive_rest, default_state, load_state, maybe_evolve, record_install_metadata, save_state
-from tamacodex.watcher import refresh_if_needed
-from tamacodex_gen.scripts.render_catalog import load_profiles, render
+from tamahermes.catalog import load_catalog
+from tamahermes.pet_compiler import PetCompileError, install_codex_pet, validate_atlas
+from tamahermes.state import apply_event, apply_passive_rest, default_state, load_state, maybe_evolve, record_install_metadata, save_state
+from tamahermes.watcher import refresh_if_needed
+from tamahermes_gen.scripts.render_catalog import load_profiles, render
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -66,7 +66,7 @@ class M4RuntimeTests(unittest.TestCase):
         self.assertEqual(result["state"]["stats"]["energy"], 100)
         self.assertEqual(result["state"]["counters"]["quietMinutes"], 30)
         self.assertEqual(result["state"]["recentEvents"][0]["event"], "rest")
-        self.assertEqual(result["state"]["recentEvents"][0]["source"], "tamacodex-passive-rest")
+        self.assertEqual(result["state"]["recentEvents"][0]["source"], "tamahermes-passive-rest")
 
     def test_passive_rest_wakes_hibernating_pet(self) -> None:
         catalog = load_catalog(ROOT)
@@ -88,8 +88,8 @@ class M4RuntimeTests(unittest.TestCase):
         catalog = load_catalog(ROOT)
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp) / "codex-home"
-            state_path = home / "tamacodex" / "state.json"
-            build_dir = home / "tamacodex" / "build"
+            state_path = home / "tamahermes" / "state.json"
+            build_dir = home / "tamahermes" / "build"
             save_state(state_path, default_state(catalog, line_id="toast", machine_id="aurora"))
 
             first = refresh_if_needed(catalog, state_path, home, build_dir, force=True)
@@ -97,10 +97,10 @@ class M4RuntimeTests(unittest.TestCase):
             self.assertEqual(first["formId"], "toast_egg")
             self.assertTrue(Path(first["install"]["qa"]["validationWebp"]).exists())
             self.assertTrue(Path(first["install"]["qa"]["contactSheet"]).exists())
-            manifest = json.loads((home / "pets" / "tamacodex" / "pet.json").read_text(encoding="utf-8"))
+            manifest = json.loads((home / "pets" / "tamahermes" / "pet.json").read_text(encoding="utf-8"))
             self.assertTrue(manifest["spritesheetPath"].startswith("spritesheet-"))
-            self.assertTrue(validate_atlas(home / "pets" / "tamacodex" / manifest["spritesheetPath"])["ok"])
-            self.assertTrue(validate_atlas(home / "pets" / "tamacodex" / "spritesheet.webp")["ok"])
+            self.assertTrue(validate_atlas(home / "pets" / "tamahermes" / manifest["spritesheetPath"])["ok"])
+            self.assertTrue(validate_atlas(home / "pets" / "tamahermes" / "spritesheet.webp")["ok"])
 
             state = load_state(state_path, catalog)
             evolved = apply_event(state, catalog, "care", amount=300)
@@ -126,8 +126,8 @@ class M4RuntimeTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp) / "codex-home"
-            state_path = home / "tamacodex" / "state.json"
-            build_dir = home / "tamacodex" / "build"
+            state_path = home / "tamahermes" / "state.json"
+            build_dir = home / "tamahermes" / "build"
             save_state(state_path, default_state(catalog, line_id="toast", machine_id="aurora"))
             refresh_if_needed(catalog, state_path, home, build_dir, force=True, feedbacker=feedbacker)
             self.assertEqual(calls, [])
@@ -160,13 +160,13 @@ class M4RuntimeTests(unittest.TestCase):
             custom_assets = Path(tmp) / "ducky" / "assets"
             catalog = load_catalog(ROOT, custom_assets)
             home = Path(tmp) / "codex-home"
-            build_dir = home / "tamacodex" / "build"
+            build_dir = home / "tamahermes" / "build"
             state = default_state(catalog, line_id="ducky", machine_id="pulse", display_name="Ducky")
             state["catalogDir"] = str(catalog.root)
             report = install_codex_pet(catalog, state, home, build_dir, force=True)
             record_install_metadata(state, report)
 
-            manifest = json.loads((home / "pets" / "tamacodex" / "pet.json").read_text(encoding="utf-8"))
+            manifest = json.loads((home / "pets" / "tamahermes" / "pet.json").read_text(encoding="utf-8"))
             self.assertEqual(manifest["displayName"], "Ducky")
             self.assertEqual(manifest["spritesheetPath"], Path(report["spritesheet"]).name)
             self.assertEqual(report["formId"], "ducky_egg")
@@ -177,10 +177,10 @@ class M4RuntimeTests(unittest.TestCase):
         catalog = load_catalog(ROOT)
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp) / "codex-home"
-            existing = home / "pets" / "tamacodex"
+            existing = home / "pets" / "tamahermes"
             existing.mkdir(parents=True)
-            (existing / "pet.json").write_text('{"id":"tamacodex"}\n', encoding="utf-8")
-            build_dir = home / "tamacodex" / "build"
+            (existing / "pet.json").write_text('{"id":"tamahermes"}\n', encoding="utf-8")
+            build_dir = home / "tamahermes" / "build"
             state = default_state(catalog, line_id="toast", machine_id="aurora")
 
             with self.assertRaises(PetCompileError):

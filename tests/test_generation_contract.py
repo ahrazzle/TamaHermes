@@ -9,7 +9,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = ROOT / "tamacodex_gen" / "scripts" / "prompt_to_profile.py"
+SCRIPT = ROOT / "tamahermes_gen" / "scripts" / "prompt_to_profile.py"
 
 
 class GenerationContractTests(unittest.TestCase):
@@ -51,7 +51,7 @@ class GenerationContractTests(unittest.TestCase):
                     sys.executable,
                     str(SCRIPT),
                     "--prompt",
-                    "生成一个叫 Ducky 的 tamacodex，灵感来自鸭子",
+                    "生成一个叫 Ducky 的 tamahermes，灵感来自鸭子",
                     "--brief-output",
                     str(brief),
                     "--output",
@@ -64,7 +64,7 @@ class GenerationContractTests(unittest.TestCase):
             )
             result = json.loads(completed.stdout)
             self.assertTrue(result["needsAgentProfile"])
-            self.assertIn("Tamacodex Profile Agent Brief", brief.read_text(encoding="utf-8"))
+            self.assertIn("TamaHermes Profile Agent Brief", brief.read_text(encoding="utf-8"))
 
     def test_prompt_without_agent_json_is_not_silent_generation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

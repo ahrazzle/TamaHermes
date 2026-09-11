@@ -1,14 +1,14 @@
 {
-  "name": "tamacodex-marketplace",
+  "name": "tamahermes-marketplace",
   "interface": {
-    "displayName": "Tamacodex Local"
+    "displayName": "TamaHermes Local"
   },
   "plugins": [
     {
-      "name": "tamacodex",
+      "name": "tamahermes-codex",
       "source": {
         "source": "local",
-        "path": "./plugins/tamacodex"
+        "path": "./plugins/tamahermes-codex"
       },
       "policy": {
         "installation": "AVAILABLE",

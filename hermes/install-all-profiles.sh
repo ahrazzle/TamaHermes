@@ -6,7 +6,7 @@
 #   ./hermes/install-all-profiles.sh --keep-selection
 #
 # Hermes pets are profile-scoped, so each profile needs its own install:
-# <HERMES_HOME>/pets/tamacodex plus <HERMES_HOME>/plugins/tamacodex-hermes.
+# <HERMES_HOME>/pets/tamahermes plus <HERMES_HOME>/plugins/tamahermes.
 # The default profile lives at ~/.hermes; named profiles at
 # ~/.hermes/profiles/<name>.
 #
@@ -96,12 +96,12 @@ for home in $(collect_homes); do
   fi
   if [ -n "$KEEP_SELECTION" ]; then
     :
-  elif HERMES_HOME="$home" hermes pets select tamacodex >/dev/null 2>&1; then
+  elif HERMES_HOME="$home" hermes pets select tamahermes >/dev/null 2>&1; then
     :
   else
     echo "!! could not select the pet for $name (install it manually)" >&2
   fi
-  if HERMES_HOME="$home" hermes plugins enable tamacodex-hermes >/dev/null 2>&1; then
+  if HERMES_HOME="$home" hermes plugins enable tamahermes >/dev/null 2>&1; then
     OK_LIST="$OK_LIST $name"
   else
     echo "!! plugin enable failed for $name" >&2

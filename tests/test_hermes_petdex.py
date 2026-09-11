@@ -20,9 +20,9 @@ FRAME_W, FRAME_H, COLS, ROWS = 192, 208, 8, 9
 def run_cli(home: Path, petdex: Path | None, *args: str) -> dict:
     env = os.environ.copy()
     env.pop("HERMES_HOME", None)
-    env.pop("TAMACODEX_PETDEX_HOME", None)
+    env.pop("TAMAHERMES_PETDEX_HOME", None)
     env["PYTHONPATH"] = str(ROOT)
-    cmd = [sys.executable, "-m", "tamacodex", "--target", "hermes", "--hermes-home", str(home)]
+    cmd = [sys.executable, "-m", "tamahermes", "--target", "hermes", "--hermes-home", str(home)]
     if petdex is not None:
         cmd += ["--petdex-home", str(petdex)]
     completed = subprocess.run(cmd + list(args), check=True, text=True, capture_output=True, cwd=ROOT, env=env)
@@ -31,16 +31,16 @@ def run_cli(home: Path, petdex: Path | None, *args: str) -> dict:
 
 class PetdexMirrorTests(unittest.TestCase):
     def test_petdex_home_is_opt_in(self) -> None:
-        from tamacodex.paths import petdex_home
+        from tamahermes.paths import petdex_home
 
-        saved = os.environ.pop("TAMACODEX_PETDEX_HOME", None)
+        saved = os.environ.pop("TAMAHERMES_PETDEX_HOME", None)
         try:
             # Never guesses ~/.petdex: an unconfigured run must not write outside
             # the Hermes home it was pointed at.
             self.assertIsNone(petdex_home(None))
         finally:
             if saved is not None:
-                os.environ["TAMACODEX_PETDEX_HOME"] = saved
+                os.environ["TAMAHERMES_PETDEX_HOME"] = saved
         # Compare resolved: /tmp is a symlink to /private/tmp on macOS.
         expected = Path("/tmp/somewhere").resolve()
         self.assertEqual(petdex_home("/tmp/somewhere"), expected)
@@ -52,13 +52,13 @@ class PetdexMirrorTests(unittest.TestCase):
             run_cli(home, None, "setup", "--line", "toast", "--machine", "aurora", "--force", "--json")
             report = run_cli(home, petdex, "petdex", "--line", "toast", "--machine", "aurora", "--force", "--json")
 
-            pet_dir = petdex / "pets" / "tamacodex"
+            pet_dir = petdex / "pets" / "tamahermes"
             self.assertEqual(sorted(p.name for p in pet_dir.iterdir()), ["pet.json", "spritesheet.webp"])
 
             manifest = json.loads((pet_dir / "pet.json").read_text(encoding="utf-8"))
             # Petdex wants the conventional unversioned name, unlike a Hermes home.
             self.assertEqual(manifest["spritesheetPath"], "spritesheet.webp")
-            self.assertEqual(manifest["id"], "tamacodex")
+            self.assertEqual(manifest["id"], "tamahermes")
             self.assertNotIn("kind", manifest, "kind is optional in Petdex; only write it when asked")
 
             with Image.open(pet_dir / "spritesheet.webp") as atlas:
@@ -71,7 +71,7 @@ class PetdexMirrorTests(unittest.TestCase):
             petdex = Path(tmp) / "petdex"
             run_cli(home, None, "setup", "--line", "toast", "--machine", "aurora", "--force", "--json")
             run_cli(home, petdex, "petdex", "--force", "--kind", "creature", "--json")
-            manifest = json.loads((petdex / "pets" / "tamacodex" / "pet.json").read_text(encoding="utf-8"))
+            manifest = json.loads((petdex / "pets" / "tamahermes" / "pet.json").read_text(encoding="utf-8"))
             self.assertEqual(manifest["kind"], "creature")
 
     def test_activation_preserves_the_rest_of_the_settings(self) -> None:
@@ -87,7 +87,7 @@ class PetdexMirrorTests(unittest.TestCase):
 
             self.assertEqual(report["activation"]["previousPet"], "luffy")
             settings = json.loads((petdex / "desktop-native-settings.json").read_text(encoding="utf-8"))
-            self.assertEqual(settings["active_pet"], "tamacodex")
+            self.assertEqual(settings["active_pet"], "tamahermes")
             self.assertEqual(settings["scale"], 1.18)
             self.assertEqual(settings["pet_x"], 1534)
             self.assertIs(settings["rotate_pets"], True)
@@ -102,19 +102,19 @@ class PetdexMirrorTests(unittest.TestCase):
             run_cli(home, None, "setup", "--line", "toast", "--machine", "aurora", "--force", "--json")
             run_cli(home, petdex, "petdex", "--force", "--json")
 
-            sheet = petdex / "pets" / "tamacodex" / "spritesheet.webp"
+            sheet = petdex / "pets" / "tamahermes" / "spritesheet.webp"
             before = sheet.read_bytes()
 
             # The installer records the opt-in next to the ledger; no env needed.
-            (home / "tamacodex" / "petdex-home").write_text(f"{petdex}\n", encoding="utf-8")
+            (home / "tamahermes" / "petdex-home").write_text(f"{petdex}\n", encoding="utf-8")
 
             env = os.environ.copy()
-            env.pop("TAMACODEX_PETDEX_HOME", None)
+            env.pop("TAMAHERMES_PETDEX_HOME", None)
             env["HERMES_HOME"] = str(home)
-            env["TAMACODEX_HERMES_HOME"] = str(home)
-            env["TAMACODEX_PY"] = sys.executable
+            env["TAMAHERMES_HOME"] = str(home)
+            env["TAMAHERMES_PY"] = sys.executable
             env["PYTHONPATH"] = str(ROOT)
-            hook = ROOT / "plugins" / "tamacodex" / "scripts" / "tamacodex_hermes_hook.sh"
+            hook = ROOT / "plugins" / "tamahermes" / "scripts" / "hermes_hook.sh"
             for payload in (
                 {"hook_event_name": "pre_llm_call", "session_id": "s", "turn_id": "t1", "user_message": "grow"},
                 {"hook_event_name": "post_tool_call", "session_id": "s", "turn_id": "t1", "tool_name": "write_file", "status": "ok", "result": "ok"},
@@ -125,7 +125,7 @@ class PetdexMirrorTests(unittest.TestCase):
                 )
                 self.assertEqual(completed.returncode, 0)
 
-            state = json.loads((home / "tamacodex" / "state.json").read_text(encoding="utf-8"))
+            state = json.loads((home / "tamahermes" / "state.json").read_text(encoding="utf-8"))
             self.assertGreater(state["xp"], 0)
             self.assertNotEqual(before, sheet.read_bytes(), "desktop sheet was not refreshed after growth")
 

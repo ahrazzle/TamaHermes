@@ -1,6 +1,6 @@
-recursive-include tamacodex/catalog_assets *
-recursive-include tamacodex/sfx *.wav *.md
-recursive-include tamacodex/native_overlay *.swift
-recursive-include tamacodex_gen *.md *.json *.py
+recursive-include tamahermes/catalog_assets *
+recursive-include tamahermes/sfx *.wav *.md
+recursive-include tamahermes/native_overlay *.swift
+recursive-include tamahermes_gen *.md *.json *.py
 recursive-include tests *.py
 recursive-include docs/media *.png *.gif

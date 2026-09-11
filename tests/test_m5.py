@@ -7,9 +7,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tamacodex.bridge import apply_bridge_event, parse_bridge_event
-from tamacodex.catalog import load_catalog
-from tamacodex.state import load_state
+from tamahermes.bridge import apply_bridge_event, parse_bridge_event
+from tamahermes.catalog import load_catalog
+from tamahermes.state import load_state
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -67,7 +67,7 @@ class M5BridgeTests(unittest.TestCase):
             command = [
                 sys.executable,
                 "-m",
-                "tamacodex",
+                "tamahermes",
                 "--codex-home",
                 str(home),
                 "bridge",
@@ -80,7 +80,7 @@ class M5BridgeTests(unittest.TestCase):
             self.assertEqual([line["ok"] for line in lines], [True, False, True])
             self.assertEqual(lines[2]["event"], "recovery")
 
-            state = json.loads((home / "tamacodex" / "state.json").read_text(encoding="utf-8"))
+            state = json.loads((home / "tamahermes" / "state.json").read_text(encoding="utf-8"))
             self.assertEqual(state["recentEvents"][0]["event"], "recovery")
             self.assertEqual(state["recentEvents"][1]["event"], "prompt_sent")
 
@@ -89,12 +89,12 @@ class M5BridgeTests(unittest.TestCase):
             home = Path(tmp) / "codex-home"
             restored_home = Path(tmp) / "restored-home"
             bundle = Path(tmp) / "bundle.json"
-            base = [sys.executable, "-m", "tamacodex", "--codex-home", str(home)]
+            base = [sys.executable, "-m", "tamahermes", "--codex-home", str(home)]
 
             subprocess.run(base + ["event", "task_success", "--amount", "3", "--json"], check=True, text=True, capture_output=True, cwd=ROOT)
             subprocess.run(base + ["export", "--output", str(bundle)], check=True, text=True, capture_output=True, cwd=ROOT)
 
-            restored = [sys.executable, "-m", "tamacodex", "--codex-home", str(restored_home)]
+            restored = [sys.executable, "-m", "tamahermes", "--codex-home", str(restored_home)]
             subprocess.run(restored + ["import", "--input", str(bundle)], check=True, text=True, capture_output=True, cwd=ROOT)
             status = subprocess.run(restored + ["status", "--json"], check=True, text=True, capture_output=True, cwd=ROOT)
             state = json.loads(status.stdout)["state"]
