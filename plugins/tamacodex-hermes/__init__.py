@@ -73,6 +73,8 @@ def _repo_candidates() -> List[Path]:
                 candidates.append(Path(recorded))
     except OSError:
         pass
+    # Conventional checkout locations, current name first.
+    candidates.append(Path.home() / "TamaHermes")
     candidates.append(Path.home() / "TamaCodex")
     return candidates
 
@@ -164,7 +166,7 @@ def record(hook_event_name: str, **payload: Any) -> None:
             _dropped_warning_emitted = True
             logger.warning(
                 "tamacodex-hermes: the 'tamacodex' package is not importable — "
-                "run `pip install -e /path/to/TamaCodex` (or set TAMACODEX_REPO_ROOT). Plugin inert."
+                "run `pip install -e /path/to/TamaHermes` (or set TAMACODEX_REPO_ROOT). Plugin inert."
             )
         return
     entry = {"hook_event_name": hook_event_name, **payload}

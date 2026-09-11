@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# Install (or refresh) TamaCodex as the pet in every Hermes profile on this machine.
+# Install (or refresh) TamaHermes as the pet in every Hermes profile on this machine.
 #
 #   ./hermes/install-all-profiles.sh
 #   ./hermes/install-all-profiles.sh --only halakukhan,lugia

@@ -1,5 +1,6 @@
 #!/usr/bin/env sh
-# Install TamaCodex as a Hermes Agent pet, wired to grow from live agent activity.
+# Install TamaHermes (the TamaCodex pet) as a Hermes Agent pet, wired to grow
+# from live agent activity.
 #
 #   ./hermes/install-hermes.sh --line toast --machine aurora
 #
