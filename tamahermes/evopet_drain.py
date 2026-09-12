@@ -236,9 +236,9 @@ def desktop_pet_state(combined: Dict[str, Any], catalog: Any) -> Dict[str, Any]:
     state["petId"] = str(claim.get("petId") or "tamahermes")
     state["xp"] = int(combined.get("xp") or 0)
     state["lifeStage"] = combined.get("lifeStage") or "egg"
-    state["stats"] = dict(combined.get("stats") or {})
-    state["traits"] = dict(combined.get("traits") or {})
-    state["counters"] = dict(combined.get("counters") or {})
+    state["stats"] = {**state["stats"], **dict(combined.get("stats") or {})}
+    state["traits"] = {**state["traits"], **dict(combined.get("traits") or {})}
+    state["counters"] = {**state["counters"], **dict(combined.get("counters") or {})}
     gates = (combined.get("levels") or {}).get("evolutionGates") or levels.DEFAULT_EVOLUTION_GATES
     state["evolutionGates"] = list(gates)
     normalize_ledger(state, catalog)
