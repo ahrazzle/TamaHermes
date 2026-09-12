@@ -1,13 +1,22 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
 from .catalog import Catalog
 from .feedback import apply_evolution_feedback
-from .pet_compiler import install_codex_pet, install_petdex_pet, package_source_hash
+from .pet_compiler import (
+    MIRROR_OWNER,
+    MirrorOwnershipError,
+    install_codex_pet,
+    install_petdex_pet,
+    package_source_hash,
+)
 from .state import apply_passive_rest, load_state, record_install_metadata, save_state
 from .visual_state import derive_visual_state, visual_state_hash
+
+logger = logging.getLogger(__name__)
 
 
 def refresh_reasons(
@@ -43,6 +52,10 @@ def _mirror_to_petdex(
 
     Returns a report dict, or ``{"ok": False, "error": ...}``. Mirroring is a
     convenience: it must never fail the growth path that triggered it.
+
+    One refusal is not a failure to swallow: when the combined ledger owns the mirror, a
+    per-profile build must not write it, and the message says which file and which writer --
+    logged as well as reported, because a silent skip is exactly how a session used to win.
     """
     try:
         return install_petdex_pet(
@@ -53,6 +66,9 @@ def _mirror_to_petdex(
             force=force,
             source_sheet=source_sheet,
         )
+    except MirrorOwnershipError as exc:
+        logger.warning("tamahermes: desktop mirror left alone: %s", exc)
+        return {"ok": False, "refused": True, "owner": MIRROR_OWNER, "error": str(exc)}
     except Exception as exc:  # noqa: BLE001 - a mirror must never break growth
         return {"ok": False, "error": str(exc)}
 

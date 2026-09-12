@@ -12,9 +12,13 @@ VISUAL_STATE_SCHEMA = "tamahermes.visual_state.v2"
 # recomposited when the drawn bar actually moves, not on every XP tick.
 STAGE_PROGRESS_STEPS = 20
 
+# This table drives the HUD's escalation row, which stays silent unless something actually
+# needs the owner, so only such events belong here: task_failure (red "!") and review_opened
+# (blue diamond). The "recovery" *event* is untouched -- it still earns its XP, its sound and
+# its recentEvents record -- it simply has no HUD signal, because good news is not an
+# escalation and must not paint a glyph in the top row.
 ALERT_EVENTS = {
     "task_failure": "failure",
-    "recovery": "recovery",
     "review_opened": "review",
 }
 
@@ -62,20 +66,17 @@ def energy_bin(value: int) -> str:
 
 
 def mess_score(state: dict[str, Any]) -> int:
-    unresolved_work = max(
-        0,
-        counter_value(state, "workRuns")
-        - counter_value(state, "completedRuns")
-        - counter_value(state, "reviews"),
-    )
-    score = (
-        stat_value(state, "mess")
-        + counter_value(state, "failedRuns") * 6
-        + counter_value(state, "careMistakes") * 4
-        + min(24, counter_value(state, "idleMinutes") // 10)
-        + unresolved_work * 3
-    )
-    return clamp(score)
+    """How grubby the pet is right now, 0-100 (high is bad).
+
+    Only *current* signals may raise the gauge. ``failedRuns`` and the unresolved backlog
+    derived from ``workRuns`` are lifetime counters -- they never go down -- so weighting them
+    here pinned any used pet at 100 and no amount of care could clean it (the D1 defect; on the
+    combined ledger those counters are summed across every profile). ``careMistakes`` is already
+    charged once through the ``mess`` stat when a turn fails, so charging it again here
+    double-counted one failure as +10 (the D2 defect). Idle neglect still counts, but it is
+    bounded and cleared by care, so the gauge always falls back toward clean.
+    """
+    return clamp(stat_value(state, "mess") + min(24, counter_value(state, "idleMinutes") // 10))
 
 
 def mess_bin(value: int) -> str:
@@ -140,6 +141,7 @@ def derive_visual_state(state: dict[str, Any]) -> dict[str, str]:
         "health": "weak" if stat_value(state, "health", 100) <= 35 else "ok",
         "alert": alert_bin(state),
         "stage": str(progress["stage"]),
+        "level": str(progress["level"]),
         "xpPercent": str(percent_bucket(int(progress["percent"]))),
     }
 

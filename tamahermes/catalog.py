@@ -47,6 +47,20 @@ class Catalog:
             forms = [(form_id, pet) for form_id, pet in forms if pet.get("lineId") == line_id]
         return sorted(form_id for form_id, _pet in forms)
 
+    def stages_for_line(self, line_id: str | None = None) -> list[str]:
+        """The stages the catalogue actually ships for *line_id* (or for every line).
+
+        A declaration can ask for more stages than a line has forms for
+        (``levels.forms_for_gates`` names one form per gate plus the starting form), so the
+        install-time cross-check needs the line's real stages, not just its form ids.
+        """
+        stages = {
+            str(info["stage"])
+            for _form_id, info in self.pets.items()
+            if (line_id is None or info.get("lineId") == line_id) and info.get("stage")
+        }
+        return sorted(stages)
+
     def form_info(self, form_id: str) -> dict[str, Any]:
         try:
             return self.pets[form_id]

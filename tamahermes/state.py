@@ -6,39 +6,96 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .catalog import Catalog
+from . import levels
+from .catalog import Catalog, CatalogError
 from .paths import now_iso
 
 SCHEMA_VERSION = 1
 
-STAGE_THRESHOLDS = {
-    "egg": 120,
-    "hatchling": 320,
-    "child": 900,
-    "teen": 1800,
-}
+# Evolution is a CREATOR decision, expressed as LEVEL gates (see tamahermes/levels.py). The XP
+# thresholds the ledger actually evolves on are derived from those gates on the fixed EvoPet
+# curve, so the creator-facing setting and the runtime table cannot drift apart.
+EVOLUTION_GATES = tuple(levels.DEFAULT_EVOLUTION_GATES)
 
 # Life stages in evolution order. ``STAGE_THRESHOLDS`` holds the cumulative XP that
 # *ends* each stage, so the last entry here (``adult``) is terminal: nothing left to
 # grow into. Both facts are derived from the same table so they cannot drift.
-STAGE_ORDER = ("egg", "hatchling", "child", "teen", "adult")
+#
+# ``STAGE_THRESHOLDS`` stays the DEFAULT pet's table: it is the constant callers import and
+# the fallback an older ledger gets. A running pet evolves on
+# ``evolution_thresholds(state)`` -- the gates its own ledger carries.
+STAGE_ORDER = levels.STAGE_ORDER
+
+STAGE_THRESHOLDS = levels.ledger_thresholds(EVOLUTION_GATES)
+
+# The stage each form grows into, read straight off ``STAGE_ORDER`` so the evolution walk and the
+# load-time derivation below advance in exactly the same order. ``adult`` is terminal and has no
+# successor.
+_STAGE_SUCCESSOR = dict(zip(STAGE_ORDER, STAGE_ORDER[1:]))
+
+# The fields the evolution walk may move. Snapshotted before the walk so a stage it cannot render
+# can be undone without disturbing anything else (see ``maybe_evolve``).
+_EVOLUTION_FIELDS = ("lifeStage", "branch", "previousActiveStage", "previousActiveBranch")
 
 
-def stage_xp_floor(stage: str) -> int:
-    """Cumulative XP at which *stage* began (0 for the egg, 0 for an unknown stage)."""
+def evolution_gates(state: dict[str, Any]) -> list[int]:
+    """The gates this pet evolves on: the list its ledger carries, or the default pet's.
+
+    The ledger carries the list because a running pet must be self-contained -- install copies
+    the creator's declaration in (``pet_compiler.sync_ledger_gates``), so nothing re-reads a
+    manifest mid-run. Every ledger written before gates rode in the ledger has no key, and must
+    behave exactly as it always has: the default pet's gates.
+
+    A list that is present but unusable falls back to the default instead of raising. An invalid
+    declaration is refused loudly at install, where it can still be fixed; mid-run there is
+    nobody to ask, and a growth event that throws would strand the whole tracker.
+    """
+    raw = state.get("evolutionGates")
+    if raw is None:
+        return list(EVOLUTION_GATES)
+    try:
+        return levels.validate_gates(raw)
+    except (TypeError, ValueError):
+        return list(EVOLUTION_GATES)
+
+
+def evolution_thresholds(state: dict[str, Any]) -> dict[str, int]:
+    """The ``{stage: cumulative XP that ends it}`` table ``maybe_evolve`` walks.
+
+    Derived from the ledger's own gates, so a creator's ``evolutionGates`` really does change
+    when their pet changes form. With no gate list this is exactly the table
+    ``STAGE_THRESHOLDS`` has always held.
+    """
+    return levels.ledger_thresholds(evolution_gates(state))
+
+
+def stage_xp_floor(stage: str, state: dict[str, Any] | None = None) -> int:
+    """Cumulative XP at which *stage* began (0 for the egg, 0 for an unknown stage).
+
+    Pass *state* to answer against the pet's own gates; without it the default pet's table is
+    used, which is what the module constant has always held.
+    """
     try:
         index = STAGE_ORDER.index(stage)
     except ValueError:
         return 0
     if index <= 0:
         return 0
-    return STAGE_THRESHOLDS[STAGE_ORDER[index - 1]]
+    thresholds = evolution_thresholds(state) if state is not None else STAGE_THRESHOLDS
+    return thresholds.get(STAGE_ORDER[index - 1], 0)
 
 
 def stage_progress(state: dict[str, Any]) -> dict[str, Any]:
-    """How far the pet has come toward its next evolution.
+    """Progress toward the next LEVEL — what the growth bar fills against — plus the stage.
 
-    ``ceiling`` is ``None`` for the terminal stage (adult, reported as 100%).
+    The ladder is fixed by EvoPet (``levels.py``): 99 levels, 100,000 XP at the top, fast early
+    and slow late. The pet *evolves* only when it reaches a creator-declared level gate, so the
+    bar fills roughly a hundred times per lifetime instead of once per stage.
+
+    ``ceiling`` is the cumulative XP that ends the current *stage* (``None`` for the terminal
+    stage, reported as 100%). ``percent`` is the position inside the current *level*. Both the
+    stage ceiling and the level ladder come from the pet's own gates, so a pet that evolves
+    later than the default pet fills its bar against the stage it actually ends.
 
     Hibernation is a dormant *condition*, not a growth step, so it reports the progress
     the pet has genuinely made against the stage it will wake into, plus ``dormant`` so
@@ -48,31 +105,28 @@ def stage_progress(state: dict[str, Any]) -> dict[str, Any]:
     """
     stage = state.get("lifeStage") or "egg"
     xp = _int_value(state.get("xp"), 0)
-    floor = stage_xp_floor(stage)
-    if stage == "hibernation":
-        underlying = str(state.get("previousActiveStage") or "child")
-        dormant_floor = stage_xp_floor(underlying)
-        dormant_ceiling = STAGE_THRESHOLDS.get(underlying)
-        if dormant_ceiling is None:
-            dormant_percent = 100
-        else:
-            span = max(1, dormant_ceiling - dormant_floor)
-            dormant_percent = max(0, min(100, round((xp - dormant_floor) * 100 / span)))
-        return {
-            "stage": stage,
-            "underlyingStage": underlying,
-            "floor": dormant_floor,
-            "ceiling": dormant_ceiling,
-            "percent": dormant_percent,
-            "terminal": False,
-            "dormant": True,
-        }
-    ceiling = STAGE_THRESHOLDS.get(stage)
-    if ceiling is None:
-        return {"stage": stage, "floor": floor, "ceiling": None, "percent": 100, "terminal": True, "dormant": False}
-    span = max(1, ceiling - floor)
-    percent = max(0, min(100, round((xp - floor) * 100 / span)))
-    return {"stage": stage, "floor": floor, "ceiling": ceiling, "percent": percent, "terminal": False, "dormant": False}
+    ladder = levels.level_progress(xp)
+    dormant = stage == "hibernation"
+    if dormant:
+        stage = str(state.get("previousActiveStage") or "child")
+    floor = stage_xp_floor(stage, state)
+    ceiling = evolution_thresholds(state).get(stage)
+    percent = int(ladder["percent"]) if ceiling is not None else 100
+    return {
+        "stage": "hibernation" if dormant else stage,
+        "underlyingStage": stage if dormant else None,
+        "floor": floor,
+        "ceiling": ceiling,
+        "percent": percent,
+        "terminal": ceiling is None,
+        "dormant": dormant,
+        "level": ladder["level"],
+        "levelFloor": ladder["floor"],
+        "levelCeiling": ladder["ceiling"],
+        "levelMaxed": ladder["maxed"],
+        "xpIntoLevel": ladder["into"],
+        "xpToNextLevel": ladder["span"],
+    }
 
 EVENT_ALIASES = {
     "start": "session_start",
@@ -260,6 +314,9 @@ def default_state(catalog: Catalog, line_id: str = "toast", machine_id: str = "a
         "previousActiveBranch": None,
         "level": 1,
         "xp": 0,
+        # A new pet carries its gates from birth, so the ledger is the one place a running
+        # pet reads them; install replaces this list with the creator's declaration.
+        "evolutionGates": list(EVOLUTION_GATES),
         "stats": {
             "energy": 82,
             "mood": 72,
@@ -307,6 +364,9 @@ def load_state(path: Path, catalog: Catalog, line_id: str = "toast", machine_id:
         return default_state(catalog, line_id=line_id, machine_id=machine_id, display_name=display_name)
     state = json.loads(path.read_text(encoding="utf-8"))
     migrate_state(state, catalog)
+    # A ledger is the pet's whole truth, and it may have been written under an older curve. Load
+    # is where stage/level get re-derived from XP, so the drawn form matches the number.
+    normalize_ledger(state, catalog)
     return state
 
 
@@ -431,12 +491,96 @@ def restore_branch_for_stage(state: dict[str, Any], catalog: Catalog, stage: str
     return None
 
 
+def derived_stage(state: dict[str, Any], xp: int | None = None) -> str:
+    """The stage this pet's own gates imply at *xp* — the evolution walk, read at one XP value.
+
+    ``maybe_evolve`` advances the walk one event at a time; this runs the identical walk (over the
+    same table, ``evolution_thresholds``, with the same successor order) straight from the XP. The
+    first form when no gate is passed, otherwise the last gate the XP has cleared. No second
+    formula: the table and the order both come from ``levels``.
+
+    Never returns ``hibernation``: dormancy is a condition, not a rung on the ladder.
+    """
+    table = evolution_thresholds(state)
+    points = _int_value(state.get("xp") if xp is None else xp, 0)
+    stage = STAGE_ORDER[0]
+    while stage in table and points >= table[stage]:
+        stage = _STAGE_SUCCESSOR[stage]
+    return stage
+
+
+def _branch_for_line(catalog: Catalog, line_id: str, stage: str, branch: Any) -> str | None:
+    """*branch* when the catalogue really ships that line/stage/branch, otherwise ``None``."""
+    if not isinstance(branch, str) or not branch:
+        return None
+    try:
+        catalog.find_form(line_id, stage, branch)
+    except CatalogError:
+        return None
+    return branch
+
+
+def active_branch_for_stage(state: dict[str, Any], catalog: Catalog, stage: str) -> str | None:
+    """The branch a pet in *stage* should wear: the one it has, else the runtime's own choice.
+
+    Only ``teen`` and ``adult`` carry branch variants; earlier forms are branchless, which is what
+    ``resolve_form_id`` already assumes. When the pet's current branch no longer fits the stage it
+    actually earned, the fallback is the one the runtime uses when a pet wakes: the branch it was
+    last active with, then the trait/stat rule that names a teen or adult form.
+    """
+    if stage not in {"teen", "adult"}:
+        return None
+    line_id = state["lineId"]
+    current = _branch_for_line(catalog, line_id, stage, state.get("branch"))
+    if current:
+        return current
+    previous = _branch_for_line(catalog, line_id, stage, state.get("previousActiveBranch"))
+    if previous:
+        return previous
+    return choose_teen_branch(state) if stage == "teen" else choose_adult_branch(state)
+
+
+def normalize_ledger(state: dict[str, Any], catalog: Catalog) -> dict[str, Any]:
+    """Correct a loaded ledger's stage, level, branch and form to what its XP actually earns.
+
+    A ledger written under the old ``1 + xp // 25`` ladder keeps the label it grew up with:
+    ``maybe_evolve`` re-derives ``level`` every event but only ever walks stages *forward*, so a
+    pet mislabelled once can never walk back down — it sits on the desktop saying "teen" at an XP
+    that means "hatchling". Load is the moment nobody is watching and nothing can be broken by
+    telling the truth, so the label is re-derived from XP here.
+
+    Hibernation is a condition, not a stage. A dormant pet stays dormant; the stage its XP earns
+    is recorded in ``previousActiveStage`` (and its branch in ``previousActiveBranch``), which is
+    the stage it wakes into — it is never written over the top of ``lifeStage``.
+
+    ``formId`` is resolved last through the same ``resolve_form_id`` the runtime uses, so the
+    ledger and the drawn form cannot disagree. A ledger that is already right is left untouched.
+    """
+    state["level"] = levels.level_for_xp(_int_value(state.get("xp"), 0))
+    stage = derived_stage(state)
+    branch = active_branch_for_stage(state, catalog, stage)
+    if state.get("lifeStage") == "hibernation":
+        state["previousActiveStage"] = stage
+        state["previousActiveBranch"] = branch
+    else:
+        state["lifeStage"] = stage
+        state["branch"] = branch
+    state["formId"] = resolve_form_id(state, catalog)
+    return state
+
+
 def maybe_evolve(state: dict[str, Any], catalog: Catalog) -> dict[str, Any]:
     before = state.get("formId")
     stage = state["lifeStage"]
+    # Fields the walk below may move; snapshotted so a catalogue miss can be undone exactly
+    # without disturbing XP, level or any counter (see the fallback at the end).
+    held = {key: (key in state, state.get(key)) for key in _EVOLUTION_FIELDS}
     stats = state["stats"]
     counters = state["counters"]
     xp = state["xp"]
+    # The gates are the creator's, carried by the ledger (see evolution_gates): a pet whose
+    # ledger predates the gate list gets the default table and evolves exactly as before.
+    thresholds = evolution_thresholds(state)
 
     if stage != "hibernation" and (stats["energy"] <= 4 or stats["health"] <= 12 or counters["idleMinutes"] >= 240):
         state["previousActiveStage"] = stage
@@ -447,7 +591,7 @@ def maybe_evolve(state: dict[str, Any], catalog: Catalog) -> dict[str, Any]:
         state["lifeStage"] = state.get("previousActiveStage") or "child"
         state["branch"] = restore_branch_for_stage(state, catalog, state["lifeStage"])
     else:
-        while state["lifeStage"] in STAGE_THRESHOLDS and xp >= STAGE_THRESHOLDS[state["lifeStage"]]:
+        while state["lifeStage"] in thresholds and xp >= thresholds[state["lifeStage"]]:
             stage = state["lifeStage"]
             if stage == "egg":
                 state["lifeStage"] = "hatchling"
@@ -462,8 +606,23 @@ def maybe_evolve(state: dict[str, Any], catalog: Catalog) -> dict[str, Any]:
                 state["lifeStage"] = "adult"
                 state["branch"] = choose_adult_branch(state)
 
-    state["formId"] = resolve_form_id(state, catalog)
-    state["level"] = 1 + min(99, state["xp"] // 25)
+    try:
+        state["formId"] = resolve_form_id(state, catalog)
+    except CatalogError:
+        # The stage we advanced into has no form in the catalogue. Mid-run nobody can be asked,
+        # and a growth event that raises strands the whole tracker, so the pet is held where it
+        # was: its stage, branch and wake-up fields are restored to the ones it entered with.
+        # XP, level and every counter keep the growth they just earned — only the form that
+        # cannot be drawn is refused. The loud refusal lives at install, where a creator can
+        # still fix the declaration (pet_compiler.check_gates_against_catalog).
+        for key, (present, value) in held.items():
+            if present:
+                state[key] = value
+            else:
+                state.pop(key, None)
+        state["formId"] = before
+    # The ladder is EvoPet's, not the creator's: 99 levels, 100,000 XP at the top.
+    state["level"] = levels.level_for_xp(state["xp"])
     return {"evolved": before != state["formId"], "from": before, "to": state["formId"]}
 
 
