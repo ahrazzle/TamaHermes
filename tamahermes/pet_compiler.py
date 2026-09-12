@@ -68,7 +68,7 @@ XP_BAR_STEPS = 20
 #     y  8..20   [alert] [ energy chip ] [health]
 #     y 33..176  the creature
 #     y181..192  [food] [ growth bar ] [heart]
-#     y195..207  [ level readout ]
+#     y192..207  [ level number, free-floating ]
 # Each row is centred as a *group*, with the side icons sitting a 4px gap away from the
 # bar they decorate -- parking them in the cell corners reads as scattered, and there is
 # no shell left to anchor them.
@@ -82,7 +82,12 @@ FLOATING_XP_BAR = {"x": 38, "y": 181, "width": 122, "height": 11}
 FLOATING_ENERGY_CHIP = {"x": 43, "y": 8, "width": 106, "height": 12}
 # The level readout is persistent: it is drawn under the growth bar at every level, so the
 # owner always sees which rung of the 99-level ladder the pet stands on. Two digits max.
-FLOATING_LEVEL_BOX = {"x": 56, "y": 195, "width": 80, "height": 12}
+# It is a free-floating number, not a badge: no bubble or container, just enlarged pixel-art
+# digits (glyph scale 3) in a fixed bright ink with a near-black halo, so the number stays
+# legible when the pet is downsized instead of shrinking inside a box. The stage-colored
+# caret beside the digits is decoration only. The rect below is the maximum painted extent
+# (two digits + caret + halo) used by the collision guard and the build report.
+FLOATING_LEVEL_RECT = {"x": 78, "y": 192, "width": 36, "height": 16}
 FLOATING_ALERT_XY = (26, 8)
 FLOATING_HEALTH_XY = (154, 8)
 FLOATING_FOOD_XY = (18, 182)      # group of 16+4+122+4+9 = 155, centred
@@ -386,7 +391,7 @@ def level_badge_rect(layout: str | None = None) -> tuple[int, int, int, int] | N
     """
     if resolve_layout(layout) != "floating":
         return None
-    box = FLOATING_LEVEL_BOX
+    box = FLOATING_LEVEL_RECT
     return (box["x"], box["y"], box["x"] + box["width"] - 1, box["y"] + box["height"] - 1)
 
 
@@ -463,10 +468,10 @@ def validate_layout_geometry(layout: str, union: tuple[int, int, int, int]) -> d
         "heart": (FLOATING_HEART_XY[0], FLOATING_HEART_XY[1], FLOATING_HEART_XY[0] + 9, FLOATING_HEART_XY[1] + 8),
         "health": (FLOATING_HEALTH_XY[0], FLOATING_HEALTH_XY[1], FLOATING_HEALTH_XY[0] + 13, FLOATING_HEALTH_XY[1] + 11),
         "level": (
-            FLOATING_LEVEL_BOX["x"],
-            FLOATING_LEVEL_BOX["y"],
-            FLOATING_LEVEL_BOX["x"] + FLOATING_LEVEL_BOX["width"] - 1,
-            FLOATING_LEVEL_BOX["y"] + FLOATING_LEVEL_BOX["height"] - 1,
+            FLOATING_LEVEL_RECT["x"],
+            FLOATING_LEVEL_RECT["y"],
+            FLOATING_LEVEL_RECT["x"] + FLOATING_LEVEL_RECT["width"] - 1,
+            FLOATING_LEVEL_RECT["y"] + FLOATING_LEVEL_RECT["height"] - 1,
         ),
     }
     for name, rect in rects.items():
@@ -830,6 +835,17 @@ def _draw_xp_bar(draw: ImageDraw.ImageDraw, visual_state: dict[str, str], rect: 
 # A level readout needs real numerals and the cell carries no font: these are 3x5 pixel-art
 # digits drawn with the same ``_rect`` primitive as every other glyph in the strip, so the
 # readout belongs to the same visual language instead of being a bitmap pasted on top.
+# They are drawn free-floating at 3x (9x15 sprite px per digit) with no container: a fixed
+# bright ink plus a 1px near-black halo carries the contrast on any desktop, so the number
+# survives pet downsizing that used to mush the old bubble's outline first. The only
+# stage-tinted element is the small caret, which is decoration and never load-bearing.
+_LEVEL_GLYPH_SCALE = 3
+_LEVEL_DIGIT_GAP = 3
+_LEVEL_CARET_W, _LEVEL_CARET_H = 9, 9
+_LEVEL_CARET_GAP = 4
+_LEVEL_INK = (232, 240, 232, 255)
+_LEVEL_HALO = (12, 14, 16, 235)
+_LEVEL_DESKTOP_GREY = (128, 132, 140)
 _LEVEL_GLYPHS = {
     "0": ("111", "101", "101", "101", "111"),
     "1": ("010", "110", "010", "010", "111"),
@@ -855,49 +871,53 @@ def level_text(value: Any) -> str:
     return str(max(1, min(_LEVEL_MAX, number)))
 
 
-def _draw_level_badge(
-    draw: ImageDraw.ImageDraw, visual_state: dict[str, str], box: dict[str, int] | None = None
+def _draw_level_number(
+    draw: ImageDraw.ImageDraw, visual_state: dict[str, str], rect: dict[str, int] | None = None
 ) -> None:
-    """The persistent level readout, drawn under the growth bar.
+    """The persistent level readout, free-floating under the growth bar.
 
     The number is the shared ledger's level (``visual_state['level']``, from ``state.level``),
     so it is the same rung the growth bar fills toward and the manifest describes. It is drawn
-    whenever the pet is on screen -- level 1 as much as level 99.
-    """
-    rect = box or FLOATING_LEVEL_BOX
-    x, y, width, height = rect["x"], rect["y"], rect["width"], rect["height"]
-    track = (26, 30, 40, 205)
-    ink = (38, 54, 44, 245)
-    stage = str(visual_state.get("stage") or "egg")
-    fill = _STAGE_BAR_FILL.get(stage, _STAGE_BAR_FILL["egg"])
+    whenever the pet is on screen -- level 1 as much as level 99 -- with no bubble or
+    container around it: enlarged 3x digits in a fixed bright ink, each lit pixel backed by
+    a 1px near-black halo, so the number carries its own contrast on any desktop instead of
+    borrowing a container's. The stage-colored caret is decoration only.
 
-    radius = 3
-    frame = (x, y, x + width - 1, y + height - 1)
-    draw.rounded_rectangle(frame, radius=radius, fill=track)
+    The content is centered in *rect* (which reserves the two-digit maximum): a one-digit
+    level leaves transparent margins, which is what makes "no container" observable.
+    A 1px halo fringe may kiss the growth bar's bottom edge directly above the rect; both
+    are near-black, so it reads as one shadow, not an overlap.
+    """
+    box = rect or FLOATING_LEVEL_RECT
+    x, y, width, height = box["x"], box["y"], box["width"], box["height"]
+    stage = str(visual_state.get("stage") or "egg")
+    caret_fill = _STAGE_BAR_FILL.get(stage, _STAGE_BAR_FILL["egg"])
 
     digits = level_text(visual_state.get("level"))
-    scale = 2
+    scale = _LEVEL_GLYPH_SCALE
     digit_w, digit_h = _LEVEL_GLYPH_W * scale, _LEVEL_GLYPH_H * scale
-    gap = scale
-    caret_w, caret_gap = 3, 4
-    text_w = len(digits) * digit_w + (len(digits) - 1) * gap
-    total_w = caret_w + caret_gap + text_w
+    text_w = len(digits) * digit_w + (len(digits) - 1) * _LEVEL_DIGIT_GAP
+    total_w = _LEVEL_CARET_W + _LEVEL_CARET_GAP + text_w
     left = x + (width - total_w) // 2
     top = y + (height - digit_h) // 2
 
-    # An upward caret says "this is how high you have climbed", not "here is a stat".
-    for step in range(caret_w):
-        _rect(draw, left + step, top + scale * 2 + step, caret_w - step, 1, fill)
-
-    cursor = left + caret_w + caret_gap
+    lit: list[tuple[int, int, int, int, tuple[int, int, int, int]]] = []
+    # The caret keeps the pre-scale motif (a small downward triangle), enlarged 3x.
+    for step in range(_LEVEL_CARET_W):
+        lit.append((left + step, top + scale * 2 + step, _LEVEL_CARET_W - step, 1, caret_fill))
+    cursor = left + _LEVEL_CARET_W + _LEVEL_CARET_GAP
     for index, char in enumerate(digits):
         glyph = _LEVEL_GLYPHS.get(char, _LEVEL_GLYPHS["0"])
-        gx = cursor + index * (digit_w + gap)
+        gx = cursor + index * (digit_w + _LEVEL_DIGIT_GAP)
         for row, bits in enumerate(glyph):
             for column, bit in enumerate(bits):
                 if bit == "1":
-                    _rect(draw, gx + column * scale, top + row * scale, scale, scale, fill)
-    draw.rounded_rectangle(frame, radius=radius, outline=ink)
+                    lit.append((gx + column * scale, top + row * scale, scale, scale, _LEVEL_INK))
+    # Halo first (a 1px dilation behind every lit pixel), then the inks on top.
+    for px, py, w, h, _fill in lit:
+        _rect(draw, px - 1, py - 1, w + 2, h + 2, _LEVEL_HALO)
+    for px, py, w, h, fill in lit:
+        _rect(draw, px, py, w, h, fill)
 
 
 def apply_visual_overlay(
@@ -968,7 +988,7 @@ def apply_float_overlay(
     _draw_heart(draw, FLOATING_HEART_XY[0], FLOATING_HEART_XY[1], visual_state["bond"])
     _draw_alert(draw, FLOATING_ALERT_XY[0], FLOATING_ALERT_XY[1], visual_state["alert"])
     _draw_xp_bar(draw, visual_state, FLOATING_XP_BAR)
-    _draw_level_badge(draw, visual_state, FLOATING_LEVEL_BOX)
+    _draw_level_number(draw, visual_state, FLOATING_LEVEL_RECT)
     cell.alpha_composite(overlay)
     return cell
 
