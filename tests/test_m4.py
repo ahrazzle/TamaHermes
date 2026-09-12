@@ -5,14 +5,30 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from tamahermes import levels
 from tamahermes.catalog import load_catalog
 from tamahermes.pet_compiler import PetCompileError, install_codex_pet, validate_atlas
-from tamahermes.state import apply_event, apply_passive_rest, default_state, load_state, maybe_evolve, record_install_metadata, save_state
+from tamahermes.state import (
+    EVENT_DELTAS,
+    apply_event,
+    apply_passive_rest,
+    default_state,
+    load_state,
+    maybe_evolve,
+    record_install_metadata,
+    save_state,
+)
 from tamahermes.watcher import refresh_if_needed
 from tamahermes_gen.scripts.render_catalog import load_profiles, render
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+# Evolution is a LEVEL gate now, so a fixture has to spend enough XP to clear the gate
+# instead of assuming the old per-stage thresholds. ``care`` pays 3 XP per event.
+TEEN_GATE_XP = levels.xp_for_level(levels.DEFAULT_EVOLUTION_GATES[2])  # child -> teen: level 32
+ADULT_GATE_XP = levels.xp_for_level(levels.DEFAULT_EVOLUTION_GATES[-1])  # teen -> adult: level 45
+CARE_AMOUNT = TEEN_GATE_XP // EVENT_DELTAS["care"]["xp"] + 1
 
 
 class M4RuntimeTests(unittest.TestCase):
@@ -22,7 +38,9 @@ class M4RuntimeTests(unittest.TestCase):
         self.assertIn("aurora", catalog.machine_ids())
 
         state = default_state(catalog, line_id="toast", machine_id="aurora")
-        result = apply_event(state, catalog, "care", amount=300)
+        # ``care`` pays 3 XP, so this many ticks clear the level-32 teen gate (10,006 XP).
+        result = apply_event(state, catalog, "care", amount=CARE_AMOUNT)
+        self.assertGreaterEqual(result["state"]["xp"], TEEN_GATE_XP)
         self.assertEqual(result["state"]["lifeStage"], "teen")
         self.assertEqual(result["state"]["formId"], "toast_teen_focused")
 
@@ -32,7 +50,7 @@ class M4RuntimeTests(unittest.TestCase):
         self.assertNotEqual(recovered["state"]["lifeStage"], "hibernation")
 
         adult = default_state(catalog, line_id="mais", machine_id="aurora")
-        adult["xp"] = 1800
+        adult["xp"] = ADULT_GATE_XP
         adult["counters"]["completedRuns"] = 4
         adult["traits"]["focus"] = 12
         maybe_evolve(adult, catalog)
@@ -103,7 +121,7 @@ class M4RuntimeTests(unittest.TestCase):
             self.assertTrue(validate_atlas(home / "pets" / "tamahermes" / "spritesheet.webp")["ok"])
 
             state = load_state(state_path, catalog)
-            evolved = apply_event(state, catalog, "care", amount=300)
+            evolved = apply_event(state, catalog, "care", amount=CARE_AMOUNT)
             save_state(state_path, evolved["state"])
             second = refresh_if_needed(catalog, state_path, home, build_dir)
 
@@ -133,7 +151,7 @@ class M4RuntimeTests(unittest.TestCase):
             self.assertEqual(calls, [])
 
             state = load_state(state_path, catalog)
-            evolved = apply_event(state, catalog, "care", amount=300)
+            evolved = apply_event(state, catalog, "care", amount=CARE_AMOUNT)
             save_state(state_path, evolved["state"])
             second = refresh_if_needed(catalog, state_path, home, build_dir, feedbacker=feedbacker)
 

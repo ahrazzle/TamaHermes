@@ -16,10 +16,12 @@ from unittest import mock
 
 from PIL import Image, ImageChops
 
+from tamahermes import levels
 from tamahermes.catalog import load_catalog
 from tamahermes import pet_compiler
 from tamahermes.pet_compiler import (
     DEFAULT_LAYOUT,
+    FLOATING_LEVEL_BOX,
     FLOATING_XP_BAR,
     LAYOUTS,
     XP_BAR,
@@ -53,6 +55,16 @@ def grown(xp: int):
     return catalog, state
 
 
+def xp_mid_level(level: int) -> int:
+    """The XP halfway through *level*'s band — the middle of a level, not of a stage.
+
+    Levels are the unit the bar fills against now, so a pet that has made real progress
+    inside its current level has to be expressed as an XP inside that level's band.
+    """
+    floor = levels.xp_for_level(level)
+    return floor + (levels.xp_for_level(level + 1) - floor) // 2
+
+
 def cell_at(sheet: Path, column: int = 0, row: int = 0) -> Image.Image:
     return Image.open(sheet).convert("RGBA").crop((column * CELL, row * 208, (column + 1) * CELL, (row + 1) * 208))
 
@@ -77,25 +89,59 @@ def changed_pixels(path_a: Path, path_b: Path, box: tuple[int, int, int, int]) -
 
 class StageProgressTests(unittest.TestCase):
     def test_progress_is_measured_within_the_current_stage(self) -> None:
+        """The bar fills against the current LEVEL band; the stage only picks the form.
+
+        The ladder is EvoPet's (99 levels, 100,000 XP at the top) and a pet evolves only at
+        the creator's level gates, so the bar moves ~100 times per lifetime. The anchors below
+        are level-relative: a level's floor is 0%, the middle of its band is ~50%, and the XP
+        just before the next level is 90-100% depending on how wide that level's band is. The
+        stage column is the creator's gates, so a pet in the child form still fills per level.
+        """
         cases = [
-            (0, "egg", 0), (60, "egg", 50), (119, "egg", 99),
-            (120, "hatchling", 0), (220, "hatchling", 50),
-            (320, "child", 0), (610, "child", 50),
-            (900, "teen", 0), (1350, "teen", 50),
-            (1800, "adult", 100), (9000, "adult", 100),
+            (0, "egg", 1, 0),
+            (9, "egg", 1, 90),
+            (10, "egg", 2, 0),
+            (843, "egg", 10, 0),
+            (1040, "egg", 10, 99),
+            (1041, "hatchling", 11, 0),
+            (2000, "hatchling", 14, 85),
+            (5040, "child", 23, 0),
+            (7877, "child", 28, 50),
+            (10006, "teen", 32, 0),
+            (20158, "adult", 45, 100),
         ]
-        for xp, stage, percent in cases:
+        for xp, stage, level, percent in cases:
             with self.subTest(xp=xp):
                 _catalog, state = grown(xp)
+                progress = stage_progress(state)
                 self.assertEqual(state["lifeStage"], stage)
-                self.assertEqual(stage_progress(state)["percent"], percent)
+                self.assertEqual(progress["stage"], stage)
+                self.assertEqual(state["level"], level)
+                self.assertEqual(progress["level"], level)
+                self.assertEqual(progress["levelFloor"], levels.xp_for_level(level))
+                if level < levels.MAX_LEVEL:
+                    self.assertEqual(progress["levelCeiling"], levels.xp_for_level(level + 1))
+                self.assertEqual(progress["percent"], percent)
 
     def test_terminal_stages_do_not_pretend_to_progress(self) -> None:
-        _catalog, adult = grown(2000)
+        """The top of the ladder is terminal; the adult form is where the ladder stops mattering.
+
+        ``adult`` is the terminal form, so the stage has no ceiling to fill and the bar reports
+        a full stage. ``levelMaxed`` is the ladder's own end: level 99 at the cap.
+        """
+        _catalog, adult = grown(levels.CAP_XP)
         progress = stage_progress(adult)
         self.assertTrue(progress["terminal"])
         self.assertIsNone(progress["ceiling"])
         self.assertEqual(progress["percent"], 100)
+        self.assertTrue(progress["levelMaxed"])
+        self.assertEqual(progress["level"], levels.MAX_LEVEL)
+
+        # Terminal means the adult form, which arrives at the last gate -- not the old 1,800 XP.
+        _catalog_b, at_gate = grown(levels.xp_for_level(levels.DEFAULT_EVOLUTION_GATES[-1]))
+        self.assertEqual(at_gate["lifeStage"], "adult")
+        self.assertTrue(stage_progress(at_gate)["terminal"])
+        self.assertFalse(stage_progress(at_gate)["levelMaxed"])
 
     def test_a_dormant_pet_still_shows_the_progress_it_has_made(self) -> None:
         """Sleeping is a condition, not a reset.
@@ -104,7 +150,7 @@ class StageProgressTests(unittest.TestCase):
         pinned at zero is indistinguishable from a broken bar, and dormancy lands
         exactly when the owner is looking at the pet.
         """
-        _catalog, state = grown(830)
+        _catalog, state = grown(xp_mid_level(28))
         self.assertEqual(state["lifeStage"], "child")
         awake = stage_progress(state)
 
@@ -168,11 +214,11 @@ class BucketTests(unittest.TestCase):
         self.assertLessEqual(len({percent_bucket(p) for p in range(101)}), XP_BAR_STEPS + 1)
 
     def test_visual_state_carries_stage_and_bucketed_percent(self) -> None:
-        _catalog, state = grown(500)
+        _catalog, state = grown(xp_mid_level(28))
         visual = derive_visual_state(state)
         self.assertEqual(visual["schema"], VISUAL_STATE_SCHEMA)
         self.assertEqual(visual["stage"], "child")
-        self.assertEqual(visual["xpPercent"], "30")
+        self.assertEqual(visual["xpPercent"], "50")
 
 
 class RebuildDisciplineTests(unittest.TestCase):
@@ -180,22 +226,37 @@ class RebuildDisciplineTests(unittest.TestCase):
 
     def test_tiny_xp_change_does_not_rebuild_but_a_bucket_crossing_does(self) -> None:
         catalog = load_catalog(ROOT)
+        # Level 10 is a wide band inside the egg stage (843 XP up to the hatch gate at 1,041),
+        # so a one-XP step stays inside a 5% bucket while the middle of the band crosses one.
+        floor = levels.xp_for_level(10)
+        ceiling = levels.xp_for_level(11)
+        tiny = floor
+        a_touch_more = floor + 1
+        across = floor + (ceiling - floor) // 2
+        self.assertEqual(
+            percent_bucket(levels.level_progress(tiny)["percent"]),
+            percent_bucket(levels.level_progress(a_touch_more)["percent"]),
+        )
+        self.assertNotEqual(
+            percent_bucket(levels.level_progress(a_touch_more)["percent"]),
+            percent_bucket(levels.level_progress(across)["percent"]),
+        )
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp) / "home"
             state_path = home / "tamahermes" / "state.json"
             build_dir = home / "tamahermes" / "build"
-            _c, state = grown(60)
-            state["lifeStage"] = "egg"
+            _c, state = grown(tiny)
+            self.assertEqual(state["lifeStage"], "egg")
             save_state(state_path, state)
             self.assertTrue(refresh_if_needed(catalog, state_path, home, build_dir, force=True)["refreshed"])
 
             same = load_state(state_path, catalog)
-            same["xp"] = 62
+            same["xp"] = a_touch_more
             save_state(state_path, same)
             self.assertFalse(refresh_if_needed(catalog, state_path, home, build_dir)["refreshed"])
 
             crossed = load_state(state_path, catalog)
-            crossed["xp"] = 78
+            crossed["xp"] = across
             save_state(state_path, crossed)
             third = refresh_if_needed(catalog, state_path, home, build_dir)
             self.assertTrue(third["refreshed"])
@@ -210,11 +271,30 @@ class RebuildDisciplineTests(unittest.TestCase):
 
 class BarRenderingTests(unittest.TestCase):
     def test_bar_is_the_only_thing_that_moves_when_progress_moves(self) -> None:
-        """Holds for both layouts: each row's diff must stay inside that row's bar."""
+        """Each row's diff must stay inside that row's bar -- or its level readout.
+
+        The floating HUD now prints the level number under the bar, so XP that crosses a level
+        boundary legitimately repaints that badge too. Nothing else may move. The shell layout
+        has no readout, so for it the bar stays the only thing that moves.
+        """
         for layout in LAYOUTS:
             with self.subTest(layout=layout):
                 catalog = load_catalog(ROOT)
                 rect = xp_bar_rect(layout)
+                allowed = [rect]
+                if layout == "floating":
+                    box = FLOATING_LEVEL_BOX
+                    allowed.append(
+                        (box["x"], box["y"], box["x"] + box["width"] - 1, box["y"] + box["height"] - 1)
+                    )
+                # One diff bbox can span the bar row and the readout row at once, so the
+                # guard is the union of the surfaces allowed to move, not each one alone.
+                zone = (
+                    min(item[0] for item in allowed),
+                    min(item[1] for item in allowed),
+                    max(item[2] for item in allowed),
+                    max(item[3] for item in allowed),
+                )
                 with tempfile.TemporaryDirectory() as tmp:
                     root = Path(tmp)
                     _c, low = grown(60)
@@ -227,12 +307,19 @@ class BarRenderingTests(unittest.TestCase):
                     self.assertEqual(low_report["xpBar"]["rect"], list(rect))
 
                     moved = [b for b in band_diff_boxes(root / "low" / "spritesheet.png", root / "high" / "spritesheet.png") if b]
-                    self.assertTrue(moved, "the bar should have moved between 50% and 90%")
+                    self.assertTrue(
+                        moved,
+                        f"the bar should have moved between {low_report['xpBar']['percent']}% "
+                        f"and {high_report['xpBar']['percent']}%",
+                    )
                     for box in moved:
-                        self.assertGreaterEqual(box[0] % CELL, rect[0])
-                        self.assertGreaterEqual(box[1], rect[1])
-                        self.assertLessEqual(box[2] % CELL, rect[2] + 1)
-                        self.assertLessEqual(box[3], rect[3] + 1)
+                        self.assertTrue(
+                            box[0] % CELL >= zone[0]
+                            and box[1] >= zone[1]
+                            and box[2] % CELL <= zone[2] + 1
+                            and box[3] <= zone[3] + 1,
+                            f"a pixel moved outside the bar and level readout: {box}",
+                        )
 
     def test_full_bar_saturates_on_the_terminal_stage(self) -> None:
         catalog = load_catalog(ROOT)
@@ -240,7 +327,7 @@ class BarRenderingTests(unittest.TestCase):
         bar = FLOATING_XP_BAR if DEFAULT_LAYOUT == "floating" else XP_BAR
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            _c, adult = grown(2000)
+            _c, adult = grown(levels.CAP_XP)
             report = build_codex_pet(catalog, adult, root / "adult", layout=DEFAULT_LAYOUT)
             self.assertEqual(report["xpBar"]["percent"], "100")
             cell = cell_at(root / "adult" / "spritesheet.png")

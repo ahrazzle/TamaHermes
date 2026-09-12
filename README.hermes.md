@@ -83,8 +83,8 @@ the pet is a companion on your desktop rather than a Tamagotchi you peer into.
 **The top row is silent unless something needs you.** The one escalation is energy: at 45
 or below the bolt and its gauge appear, amber while energy is low and red once it is
 critical (20 or below). Energy is the only tracker that goes up there, because it is the
-only one that ends in hibernation. The alert glyph (top left) still shows a failure,
-recovery or review, and the health warning (top right) shows while health is 35 or below.
+only one that ends in hibernation. The alert glyph (top left) still shows a failure or a
+review, and the health warning (top right) shows while health is 35 or below.
 
 The bottom row is always drawn: satiety as the bowl, growth as the centre bar, bond as the
 heart, which stays hidden until the pet is past "new". Both rows are centred as groups with

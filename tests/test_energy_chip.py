@@ -11,11 +11,18 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Any
+
 from PIL import Image, ImageDraw
 
 from tamahermes import pet_compiler
 from tamahermes.catalog import load_catalog
-from tamahermes.pet_compiler import FLOATING_ENERGY_CHIP, build_codex_pet, validate_layout_geometry
+from tamahermes.pet_compiler import (
+    FLOATING_ALERT_XY,
+    FLOATING_ENERGY_CHIP,
+    build_codex_pet,
+    validate_layout_geometry,
+)
 from tamahermes.state import default_state, maybe_evolve
 from tamahermes.visual_state import derive_visual_state
 
@@ -23,6 +30,8 @@ ROOT = Path(__file__).resolve().parents[1]
 CELL_WIDTH, CELL_HEIGHT = 192, 208
 CRITICAL = (186, 49, 52)
 LOW = (204, 142, 49)
+# The green the retired recovery glyph used to paint; nothing in the top row may use it.
+RECOVERY_GREEN = (57, 132, 85, 245)
 
 
 def state_at(energy: int):
@@ -59,6 +68,11 @@ def painted(layer: Image.Image, color: tuple[int, int, int] | None = None, box=N
                 continue
             hits.append((x, y))
     return hits
+
+
+def alert_box() -> tuple[int, int, int, int]:
+    """The 14x14 alert glyph footprint, in cell coordinates."""
+    return (FLOATING_ALERT_XY[0], FLOATING_ALERT_XY[1], FLOATING_ALERT_XY[0] + 14, FLOATING_ALERT_XY[1] + 14)
 
 
 class EnergyChipTest(unittest.TestCase):
@@ -121,6 +135,37 @@ class EnergyChipTest(unittest.TestCase):
                 top = opened.convert("RGBA").crop((0, 0, CELL_WIDTH, 28))
             self.assertIsNone(top.getbbox(), "the top row is not empty for a healthy pet")
         self.assertTrue(report["validation"]["screenMaskClipping"]["ok"], report["validation"])
+
+    def test_a_recovery_paints_no_glyph_in_the_alert_slot(self) -> None:
+        """The recovery *event* is good news, not an escalation, so it paints nothing.
+
+        The retired glyph was a green plus in this slot; a failure must still paint here,
+        which is what makes the empty-slot assertion mean something.
+        """
+        catalog, recovery_state = state_at(90)
+        recovery_state["recentEvents"] = [{"event": "recovery"}]
+        catalog, failure_state = state_at(90)
+        failure_state["recentEvents"] = [{"event": "task_failure"}]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            build_codex_pet(catalog, recovery_state, root / "recovery", layout="floating")
+            build_codex_pet(catalog, failure_state, root / "failure", layout="floating")
+            with Image.open(root / "recovery" / "spritesheet.png") as opened:
+                recovered = opened.convert("RGBA").crop(alert_box())
+            with Image.open(root / "failure" / "spritesheet.png") as opened:
+                failed = opened.convert("RGBA").crop(alert_box())
+
+        def rgb_set(layer: Image.Image) -> set[tuple[int, int, int]]:
+            pixels: Any = (
+                layer.get_flattened_data() if hasattr(layer, "get_flattened_data") else layer.getdata()
+            )
+            return {pixel[:3] for pixel in pixels if pixel[3] > 8}
+
+        self.assertEqual(rgb_set(recovered), set(), "the recovery event painted the alert slot")
+        self.assertNotIn(RECOVERY_GREEN[:3], rgb_set(recovered), "the retired green plus came back")
+        self.assertIn(CRITICAL, rgb_set(failed), "a failure stopped painting the alert glyph")
+        self.assertNotIn(RECOVERY_GREEN[:3], rgb_set(failed), "a failure painted the recovery green")
 
     def test_the_guard_reserves_the_chip_and_no_longer_the_strip(self) -> None:
         catalog = load_catalog(ROOT)

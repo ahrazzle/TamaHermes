@@ -72,10 +72,16 @@ class M91NativeVisualStateTests(unittest.TestCase):
 
         state["recentEvents"] = [{"event": "task_failure"}]
         self.assertEqual(derive_visual_state(state)["alert"], "failure")
+        # A recovery is good news, not an escalation: the event stays in the ledger, but
+        # the top row stays silent, so the alert glyph must not appear for it.
         state["recentEvents"] = [{"event": "recovery"}]
-        self.assertEqual(derive_visual_state(state)["alert"], "recovery")
+        self.assertEqual(derive_visual_state(state)["alert"], "none")
+        state["recentEvents"] = [{"event": "recovery"}, {"event": "task_failure"}]
+        self.assertEqual(derive_visual_state(state)["alert"], "failure")
         state["recentEvents"] = [{"event": "review_opened"}]
         self.assertEqual(derive_visual_state(state)["alert"], "review")
+        state["recentEvents"] = []
+        self.assertEqual(derive_visual_state(state)["alert"], "none")
 
     def test_compiled_atlas_bakes_state_overlay_without_breaking_native_contract(self) -> None:
         catalog = load_catalog(ROOT)

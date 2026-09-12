@@ -8,7 +8,9 @@ from typing import Any
 
 from PIL import Image, ImageDraw
 
+from . import levels
 from .catalog import Catalog, read_json
+from .state import evolution_gates, normalize_ledger
 from .visual_state import derive_visual_state, visual_state_hash
 
 COLUMNS = 8
@@ -61,20 +63,26 @@ XP_BAR_RECT = (
 XP_BAR_STEPS = 20
 
 # Floating layout geometry. Without a shell there is no frame to anchor the HUD, so
-# it is arranged as two tidy rows -- one above the creature, one below -- rather than
+# it is arranged as tidy rows -- one above the creature, one below -- rather than
 # scattered into the cell's corners:
-#     y  8..20   [alert] [ status strip ] [health]
+#     y  8..20   [alert] [ energy chip ] [health]
 #     y 33..176  the creature
 #     y181..192  [food] [ growth bar ] [heart]
+#     y195..207  [ level readout ]
 # Each row is centred as a *group*, with the side icons sitting a 4px gap away from the
 # bar they decorate -- parking them in the cell corners reads as scattered, and there is
 # no shell left to anchor them.
 FLOATING_XP_BAR = {"x": 38, "y": 181, "width": 122, "height": 11}
-# Option C: the top row stays silent unless something needs the owner. The energy chip is
-# the only escalation, drawn while energy is low or critical because that band is the one
-# that ends in hibernation. It keeps the exact footprint the retired status strip used, so
-# the alert and health glyphs flanking it do not move.
+# Option C: the top row stays silent unless something needs the owner, so exactly two things
+# may appear in it. The energy chip, drawn while energy is low or critical because that band
+# is the one that ends in hibernation. And the alert glyph, drawn only for the two events
+# that need a human -- a task failure (red "!") or an opened review (blue diamond); good news
+# such as a recovery escalates nothing and paints nothing. The chip keeps the exact footprint
+# the retired status strip used, so the alert and health glyphs flanking it do not move.
 FLOATING_ENERGY_CHIP = {"x": 43, "y": 8, "width": 106, "height": 12}
+# The level readout is persistent: it is drawn under the growth bar at every level, so the
+# owner always sees which rung of the 99-level ladder the pet stands on. Two digits max.
+FLOATING_LEVEL_BOX = {"x": 56, "y": 195, "width": 80, "height": 12}
 FLOATING_ALERT_XY = (26, 8)
 FLOATING_HEALTH_XY = (154, 8)
 FLOATING_FOOD_XY = (18, 182)      # group of 16+4+122+4+9 = 155, centred
@@ -370,6 +378,26 @@ def xp_bar_rect(layout: str | None = None) -> tuple[int, int, int, int]:
     return (bar["x"], bar["y"], bar["x"] + bar["width"] - 1, bar["y"] + bar["height"] - 1)
 
 
+def level_badge_rect(layout: str | None = None) -> tuple[int, int, int, int] | None:
+    """The persistent level readout rect, or ``None`` for a layout that has no room for it.
+
+    Only the floating HUD carries the readout: the shell layout's HUD is pinned inside the
+    device viewport and has no free row, so the shelled look renders exactly as it always did.
+    """
+    if resolve_layout(layout) != "floating":
+        return None
+    box = FLOATING_LEVEL_BOX
+    return (box["x"], box["y"], box["x"] + box["width"] - 1, box["y"] + box["height"] - 1)
+
+
+def level_badge_report(layout: str | None, visual_state: dict[str, str]) -> dict[str, Any] | None:
+    """The level readout block for a build report, or ``None`` when the layout has none."""
+    rect = level_badge_rect(layout)
+    if rect is None:
+        return None
+    return {"rect": list(rect), "level": visual_state.get("level")}
+
+
 def union_content_bbox(catalog: Catalog, form: str) -> tuple[int, int, int, int]:
     """Union opaque bbox across every pose *form* can play.
 
@@ -434,6 +462,12 @@ def validate_layout_geometry(layout: str, union: tuple[int, int, int, int]) -> d
         "food": (FLOATING_FOOD_XY[0], FLOATING_FOOD_XY[1], FLOATING_FOOD_XY[0] + 15, FLOATING_FOOD_XY[1] + 8),
         "heart": (FLOATING_HEART_XY[0], FLOATING_HEART_XY[1], FLOATING_HEART_XY[0] + 9, FLOATING_HEART_XY[1] + 8),
         "health": (FLOATING_HEALTH_XY[0], FLOATING_HEALTH_XY[1], FLOATING_HEALTH_XY[0] + 13, FLOATING_HEALTH_XY[1] + 11),
+        "level": (
+            FLOATING_LEVEL_BOX["x"],
+            FLOATING_LEVEL_BOX["y"],
+            FLOATING_LEVEL_BOX["x"] + FLOATING_LEVEL_BOX["width"] - 1,
+            FLOATING_LEVEL_BOX["y"] + FLOATING_LEVEL_BOX["height"] - 1,
+        ),
     }
     for name, rect in rects.items():
         if not (0 <= rect[0] < rect[2] < CELL_WIDTH and 0 <= rect[1] < rect[3] < CELL_HEIGHT):
@@ -609,7 +643,6 @@ def _draw_alert(draw: ImageDraw.ImageDraw, x: int, y: int, alert: str) -> None:
     ink = (38, 54, 44, 245)
     fill_by_alert = {
         "failure": (186, 49, 52, 245),
-        "recovery": (57, 132, 85, 245),
         "review": (58, 102, 161, 245),
     }
     fill = fill_by_alert[alert]
@@ -618,9 +651,6 @@ def _draw_alert(draw: ImageDraw.ImageDraw, x: int, y: int, alert: str) -> None:
     if alert == "failure":
         _rect(draw, x + 6, y + 3, 2, 6, ink)
         _rect(draw, x + 6, y + 10, 2, 2, ink)
-    elif alert == "recovery":
-        _rect(draw, x + 6, y + 3, 2, 8, ink)
-        _rect(draw, x + 3, y + 6, 8, 2, ink)
     elif alert == "review":
         draw.line([(x + 3, y + 7), (x + 6, y + 4), (x + 10, y + 7), (x + 6, y + 10), (x + 3, y + 7)], fill=ink, width=1)
         _rect(draw, x + 6, y + 7, 2, 2, ink)
@@ -797,6 +827,79 @@ def _draw_xp_bar(draw: ImageDraw.ImageDraw, visual_state: dict[str, str], rect: 
     draw.rounded_rectangle(frame, radius=radius, outline=ink)
 
 
+# A level readout needs real numerals and the cell carries no font: these are 3x5 pixel-art
+# digits drawn with the same ``_rect`` primitive as every other glyph in the strip, so the
+# readout belongs to the same visual language instead of being a bitmap pasted on top.
+_LEVEL_GLYPHS = {
+    "0": ("111", "101", "101", "101", "111"),
+    "1": ("010", "110", "010", "010", "111"),
+    "2": ("111", "001", "111", "100", "111"),
+    "3": ("111", "001", "111", "001", "111"),
+    "4": ("101", "101", "111", "001", "001"),
+    "5": ("111", "100", "111", "001", "111"),
+    "6": ("111", "100", "111", "101", "111"),
+    "7": ("111", "001", "010", "010", "010"),
+    "8": ("111", "101", "111", "101", "111"),
+    "9": ("111", "101", "111", "001", "111"),
+}
+_LEVEL_GLYPH_W, _LEVEL_GLYPH_H = 3, 5
+_LEVEL_MAX = 99
+
+
+def level_text(value: Any) -> str:
+    """The level as one or two digits, clamped to the ladder's 99."""
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        number = 1
+    return str(max(1, min(_LEVEL_MAX, number)))
+
+
+def _draw_level_badge(
+    draw: ImageDraw.ImageDraw, visual_state: dict[str, str], box: dict[str, int] | None = None
+) -> None:
+    """The persistent level readout, drawn under the growth bar.
+
+    The number is the shared ledger's level (``visual_state['level']``, from ``state.level``),
+    so it is the same rung the growth bar fills toward and the manifest describes. It is drawn
+    whenever the pet is on screen -- level 1 as much as level 99.
+    """
+    rect = box or FLOATING_LEVEL_BOX
+    x, y, width, height = rect["x"], rect["y"], rect["width"], rect["height"]
+    track = (26, 30, 40, 205)
+    ink = (38, 54, 44, 245)
+    stage = str(visual_state.get("stage") or "egg")
+    fill = _STAGE_BAR_FILL.get(stage, _STAGE_BAR_FILL["egg"])
+
+    radius = 3
+    frame = (x, y, x + width - 1, y + height - 1)
+    draw.rounded_rectangle(frame, radius=radius, fill=track)
+
+    digits = level_text(visual_state.get("level"))
+    scale = 2
+    digit_w, digit_h = _LEVEL_GLYPH_W * scale, _LEVEL_GLYPH_H * scale
+    gap = scale
+    caret_w, caret_gap = 3, 4
+    text_w = len(digits) * digit_w + (len(digits) - 1) * gap
+    total_w = caret_w + caret_gap + text_w
+    left = x + (width - total_w) // 2
+    top = y + (height - digit_h) // 2
+
+    # An upward caret says "this is how high you have climbed", not "here is a stat".
+    for step in range(caret_w):
+        _rect(draw, left + step, top + scale * 2 + step, caret_w - step, 1, fill)
+
+    cursor = left + caret_w + caret_gap
+    for index, char in enumerate(digits):
+        glyph = _LEVEL_GLYPHS.get(char, _LEVEL_GLYPHS["0"])
+        gx = cursor + index * (digit_w + gap)
+        for row, bits in enumerate(glyph):
+            for column, bit in enumerate(bits):
+                if bit == "1":
+                    _rect(draw, gx + column * scale, top + row * scale, scale, scale, fill)
+    draw.rounded_rectangle(frame, radius=radius, outline=ink)
+
+
 def apply_visual_overlay(
     cell: Image.Image,
     screen: dict[str, int],
@@ -865,8 +968,121 @@ def apply_float_overlay(
     _draw_heart(draw, FLOATING_HEART_XY[0], FLOATING_HEART_XY[1], visual_state["bond"])
     _draw_alert(draw, FLOATING_ALERT_XY[0], FLOATING_ALERT_XY[1], visual_state["alert"])
     _draw_xp_bar(draw, visual_state, FLOATING_XP_BAR)
+    _draw_level_badge(draw, visual_state, FLOATING_LEVEL_BOX)
     cell.alpha_composite(overlay)
     return cell
+
+
+# The creator-facing contract written into every ``pet.json`` this compiler emits: the pet's
+# gates, plus the ladder they are read against. Hermes renders the sheet; a fork changes the
+# gates, so the block travels with the manifest and install copies it into the ledger -- the
+# same list the compiler reads back out, which is what makes the round trip hold.
+CURVE = f"round({levels.CAP_XP} * ((L - 1) / {levels.MAX_LEVEL - 1}) ** {levels.EXPONENT})"
+
+
+def evolution_block(state: dict[str, Any]) -> dict[str, Any]:
+    """The ``evopet`` block for a pet manifest: this pet's gates on the fixed ladder."""
+    return {
+        "evolutionGates": evolution_gates(state),
+        "maxLevel": levels.MAX_LEVEL,
+        "capXp": levels.CAP_XP,
+        "curve": CURVE,
+    }
+
+
+def read_manifest(path: Path) -> dict[str, Any] | None:
+    """A pet manifest as a dict, or ``None`` when the file is missing or unreadable.
+
+    An unreadable manifest is treated as one that declares nothing rather than failing the
+    install: the package beside it is what is being replaced, and the ledger already carries
+    the gates the pet is running on.
+    """
+    if not path.is_file():
+        return None
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return loaded if isinstance(loaded, dict) else None
+
+
+def declared_gates(manifest: dict[str, Any] | None, source: str = "manifest") -> list[int] | None:
+    """The gates a manifest explicitly declares, or ``None`` when it declares none.
+
+    Deliberately not ``levels.gates_from_manifest``, which substitutes the default pet's gates
+    when the block is absent -- at install, silence must not overwrite a ledger that already
+    carries a creator's list. A block that is present but invalid raises, naming the file: a
+    broken declaration is the creator's to fix, not something to absorb quietly.
+    """
+    block = (manifest or {}).get(levels.MANIFEST_KEY) or {}
+    raw = block.get("evolutionGates")
+    if raw is None:
+        return None
+    try:
+        return levels.validate_gates(raw)
+    except ValueError as exc:
+        raise PetCompileError(f"{source}: {exc}") from exc
+
+
+def check_gates_against_catalog(catalog: Catalog, gates: list[int], line_id: str, source: str) -> None:
+    """Refuse a gate list the pet's own line cannot render, naming the manifest and the gap.
+
+    ``levels.validate_gates`` checks only the *shape* of a declaration (1..4 gates, strictly
+    increasing, in range). A list that passes can still ask for more stages than the line ships —
+    four gates name five forms — and ``catalog.find_form`` then raises the moment the pet reaches
+    the missing one, which strands the tracker the runtime fallback exists to protect. Install is
+    the last moment the creator can still fix that, so the declaration is refused here; mid-run
+    the runtime holds the pet on its current form instead (``state.maybe_evolve``).
+    """
+    required = levels.forms_for_gates(gates)
+    available = catalog.stages_for_line(line_id)
+    missing = [stage for stage in required if stage not in available]
+    if not missing:
+        return
+    shipped = ", ".join(catalog.form_ids(line_id)) or "none"
+    raise PetCompileError(
+        f"{source}: evolutionGates {list(gates)} need a form for every stage "
+        f"({', '.join(required)}), but line {line_id!r} has no form for {', '.join(missing)}; "
+        f"available forms: {shipped}"
+    )
+
+
+def sync_ledger_gates(
+    state: dict[str, Any],
+    manifest: dict[str, Any] | None,
+    source: str = "manifest",
+    catalog: Catalog | None = None,
+) -> list[int]:
+    """Copy a pet manifest's declared gates into the ledger; return the gates to evolve on.
+
+    Install is where a creator's declaration reaches the running pet. The ledger keeps the list
+    so nothing re-reads a manifest mid-run, which also gives the rule its edge: editing a
+    manifest takes effect on the next install, not on the next event. A manifest that declares
+    nothing leaves whatever the ledger already carries, and a ledger with no list at all (an
+    older pet, or one written before install) is seeded from ``default_state``'s gates.
+
+    The returned list is the normalised gates the runtime actually evolves on -- digit-strings
+    from the manifest become ints, exactly as ``levels.validate_gates`` does it -- and reading
+    never rewrites the ledger, so a caller can inspect the gates without mutating the row. A
+    ledger list that is present but unusable falls back to the default pet's gates, the same
+    way ``state.evolution_gates`` does mid-run.
+
+    Pass *catalog* to also cross-check the declaration against the pet's own line: a gate list that
+    is well-formed but names more stages than the line ships is refused here, at install, where the
+    creator can still fix it (``check_gates_against_catalog``). Without a catalog the shape check
+    still runs and the list is copied in, so direct callers see exactly what they saw before.
+    """
+    declared = declared_gates(manifest, source)
+    if declared is not None:
+        if catalog is not None:
+            # A declaration the line cannot render is refused before anything is copied into the
+            # ledger, so the running pet keeps the gates it already had -- and the creator finds
+            # out at install, where the manifest is still theirs to fix.
+            check_gates_against_catalog(catalog, declared, state.get("lineId") or "", source)
+        state["evolutionGates"] = list(declared)
+    elif state.get("evolutionGates") is None:
+        state["evolutionGates"] = evolution_gates(state)
+    return evolution_gates(state)
 
 
 def build_codex_pet(
@@ -955,6 +1171,9 @@ def build_codex_pet(
         "displayName": display_name,
         "description": f"{display_name} form {form_info.get('stage')}:{form_info.get('branch') or 'root'} from the bundled catalog.",
         "spritesheetPath": SPRITESHEET_BASENAME,
+        # The pet's gates, on the fixed ladder -- the creator-facing contract a fork edits and
+        # the one ``levels.gates_from_manifest`` reads back.
+        "evopet": evolution_block(state),
     }
     manifest_path.write_text(json.dumps(pet_manifest, indent=2) + "\n", encoding="utf-8")
     validation_png = validate_atlas(png_path)
@@ -994,6 +1213,9 @@ def build_codex_pet(
             "stage": visual_state.get("stage"),
             "percent": visual_state.get("xpPercent"),
         },
+        # The persistent level readout, beside the bar. ``None`` for the shell layout, which
+        # has no free row: that layout's report is byte-identical to what it always was.
+        "levelBadge": level_badge_report(layout_name, visual_state),
         "sourceHash": source_hash,
         "installHash": source_hash,
         "atlas": {
@@ -1038,6 +1260,100 @@ def _is_versioned_sheet(name: str) -> bool:
     return len(stem) == 12 and all(char in "0123456789abcdef" for char in stem)
 
 
+# --- who may write the desktop mirror --------------------------------------
+#
+# The desktop mirror (``~/.petdex/pets/<slug>``) is *one* pet shown machine-wide, while the
+# ledgers that grow it are per-profile. So a per-profile build cannot be the mirror's authority:
+# whichever session happened to build last would decide the pet's identity, stage and look, and
+# the next session would flip it back. Ownership therefore lives in the combined ledger
+# (``~/.evopet/state.json``), which the drain writes from every profile at once -- and the drain
+# renders the mirror from it. Until a ledger claims the mirror, nothing changes: a machine that
+# has not opted into the combined ledger installs exactly as it always did.
+
+MIRROR_OWNER = "evopet-drain"
+PER_PROFILE_WRITER = "per-profile"
+COMBINED_STATE_ENV = "EVOPET_STATE"
+
+
+class MirrorOwnershipError(PetCompileError):
+    """A build tried to write a desktop mirror that the combined ledger owns."""
+
+
+def combined_ledger_path(value: str | Path | None = None) -> Path:
+    """Where the combined ledger keeps mirror ownership (``EVOPET_STATE``, else ``~/.evopet``)."""
+    import os
+
+    raw = value or os.environ.get(COMBINED_STATE_ENV) or (Path.home() / ".evopet" / "state.json")
+    return Path(raw).expanduser()
+
+
+def mirror_claim(combined_path: Path | None = None) -> dict[str, Any] | None:
+    """The combined ledger's mirror claim, or ``None`` when no ledger owns the mirror.
+
+    Ownership is declared, never inferred: a ledger with no ``mirror`` block -- an older
+    install, or a machine that never opted in -- owns nothing and blocks nothing.
+    """
+    path = combined_ledger_path(combined_path)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    block = payload.get("mirror") if isinstance(payload, dict) else None
+    if not isinstance(block, dict) or not block.get("petdexHome"):
+        return None
+    claim = dict(block)
+    claim["ledger"] = str(path)
+    return claim
+
+
+def assert_mirror_writer(petdex_home: Path, target: Path, writer: str) -> dict[str, Any] | None:
+    """Refuse a mirror write the combined ledger has given to another writer.
+
+    Scoped to the desktop home the claim names: the rule is about *that* mirror, so a build
+    aimed elsewhere (a staging home, a test tmpdir) is untouched and needs no opt-out.
+    """
+    claim = mirror_claim()
+    if claim is None or writer == claim.get("owner"):
+        return claim
+    owned = Path(str(claim["petdexHome"])).expanduser()
+    try:
+        owned_home = owned.resolve()
+    except OSError:
+        owned_home = owned
+    if owned_home != Path(petdex_home).expanduser().resolve():
+        return claim
+    raise MirrorOwnershipError(
+        f"refusing to write {target}: the desktop mirror is owned by {claim.get('owner')} "
+        f"(declared in {claim['ledger']}), and a {writer} build must not overwrite it. "
+        "The drain renders that mirror from the combined ledger; remove the \"mirror\" block "
+        "from the combined ledger to hand it back."
+    )
+
+
+def ledger_description(state: dict[str, Any]) -> str:
+    """A pet's one-line description, read off the ledger it mirrors.
+
+    Stage and level come from the XP (and the ledger's own gates), not from whatever label the
+    ledger carries: a pet labelled "teen" at an XP that earns "hatchling" must introduce itself
+    as the creature the sheet actually draws. Hibernation is a condition, not a rung, so it is
+    reported as itself.
+    """
+    name = state.get("displayName") or "TamaHermes"
+    xp = int(state.get("xp") or 0)
+    level = levels.level_for_xp(xp)
+    stage = str(state.get("lifeStage") or "")
+    try:
+        earned = levels.stage_for_xp(xp, state.get("evolutionGates") or levels.DEFAULT_EVOLUTION_GATES)
+    except (TypeError, ValueError):
+        earned = stage or "egg"
+    if stage != "hibernation":
+        stage = earned
+    return (
+        f"{name} — {stage} stage, level {level}. Grown from your coding agents. "
+        "An evolving desktop companion."
+    )
+
+
 def install_petdex_pet(
     catalog: Catalog,
     state: dict[str, Any],
@@ -1046,6 +1362,9 @@ def install_petdex_pet(
     force: bool = False,
     source_sheet: Path | None = None,
     kind: str | None = None,
+    layout: str | None = None,
+    writer: str = PER_PROFILE_WRITER,
+    mirror_hash: str | None = None,
 ) -> dict[str, Any]:
     """Install the pet into a Petdex desktop home (``~/.petdex``).
 
@@ -1056,11 +1375,16 @@ def install_petdex_pet(
 
     ``source_sheet`` short-circuits the render: when the pet is already built
     for Hermes, mirroring it to the desktop is a file copy, not a rebuild.
+
+    ``writer`` is the guard on a shared resource: once the combined ledger claims
+    this mirror, only ``MIRROR_OWNER`` may write it (see ``assert_mirror_writer``).
     """
     pet_id = state.get("petId", "tamahermes")
     pet_dir = petdex_home / "pets" / pet_id
     target_sheet = pet_dir / SPRITESHEET_BASENAME
     target_manifest = pet_dir / "pet.json"
+    # Before anything is rendered or replaced: does another writer own this mirror?
+    assert_mirror_writer(petdex_home, target_manifest, writer)
     if pet_dir.exists() and not force and (target_sheet.exists() or target_manifest.exists()):
         raise PetCompileError(
             f"{pet_dir} already contains a Petdex pet. This protects the existing package; pass --force to replace it."
@@ -1068,7 +1392,7 @@ def install_petdex_pet(
     if source_sheet is not None and Path(source_sheet).is_file():
         sheet_source = Path(source_sheet)
     else:
-        build_codex_pet(catalog, state, build_dir)
+        build_codex_pet(catalog, state, build_dir, layout=layout)
         sheet_source = build_dir / SPRITESHEET_BASENAME
 
     pet_dir.mkdir(parents=True, exist_ok=True)
@@ -1077,16 +1401,20 @@ def install_petdex_pet(
     manifest: dict[str, Any] = {
         "id": pet_id,
         "displayName": display_name,
-        "description": (
-            f"{display_name} — {state.get('lifeStage', 'egg')} stage, grown from your "
-            "coding agents. An evolving desktop companion."
-        ),
+        "description": ledger_description(state),
         "spritesheetPath": SPRITESHEET_BASENAME,
+        # Read out of the ledger, never into it: the desktop copy is a mirror of the pet the
+        # Hermes/Codex install produced, so a stale mirror can never reset a creator's gates.
+        "evopet": evolution_block(state),
     }
     if kind:
         # `kind` is optional in Petdex (most shipped pets omit it), so it is
         # only written when the caller explicitly asks for one.
         manifest["kind"] = kind
+    if writer == MIRROR_OWNER:
+        # The owning writer stamps which ledger state this sheet came from, so the next run can
+        # tell "unchanged" from "someone replaced it" without re-rendering anything.
+        manifest["mirror"] = {"owner": writer, "hash": mirror_hash}
     target_manifest.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     return {
         "ok": True,
@@ -1096,6 +1424,9 @@ def install_petdex_pet(
         "spritesheet": str(target_sheet),
         "spritesheetPath": SPRITESHEET_BASENAME,
         "sourceSheet": str(sheet_source),
+        "layout": resolve_layout(layout),
+        "writer": writer,
+        "mirrorHash": mirror_hash,
     }
 
 
@@ -1136,6 +1467,18 @@ def install_codex_pet(catalog: Catalog, state: dict[str, Any], codex_home: Path,
         raise PetCompileError(
             f"{pet_dir} already contains Codex pet files. This protects the existing package; pass --force to replace it."
         )
+    # Install is the one moment a declared gate list moves: absorb the manifest being replaced
+    # into the ledger, then build -- so the new pet.json carries the ledger's gates and the
+    # runtime evolves on them. A manifest that declares nothing leaves the ledger as it is. The
+    # catalog is passed so a declaration this line cannot render is refused here, before it can
+    # strand a running pet.
+    sync_ledger_gates(
+        state, read_manifest(target_manifest), source=str(target_manifest), catalog=catalog
+    )
+    # Defensively, and last: a ledger that reached install without a load -- or was written under
+    # an older curve -- is normalised before it is drawn, so the built form cannot disagree with
+    # the XP the ledger carries.
+    normalize_ledger(state, catalog)
     report = build_codex_pet(catalog, state, build_dir)
     pet_dir.mkdir(parents=True, exist_ok=True)
     versioned_sheet_name = f"spritesheet-{report['installHash'][:12]}.webp"
