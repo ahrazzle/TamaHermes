@@ -21,7 +21,7 @@ from tamahermes.catalog import load_catalog
 from tamahermes import pet_compiler
 from tamahermes.pet_compiler import (
     DEFAULT_LAYOUT,
-    FLOATING_LEVEL_BOX,
+    FLOATING_LEVEL_RECT,
     FLOATING_XP_BAR,
     LAYOUTS,
     XP_BAR,
@@ -273,9 +273,10 @@ class BarRenderingTests(unittest.TestCase):
     def test_bar_is_the_only_thing_that_moves_when_progress_moves(self) -> None:
         """Each row's diff must stay inside that row's bar -- or its level readout.
 
-        The floating HUD now prints the level number under the bar, so XP that crosses a level
-        boundary legitimately repaints that badge too. Nothing else may move. The shell layout
-        has no readout, so for it the bar stays the only thing that moves.
+        The floating HUD prints the free-floating level number under the bar, so XP that
+        crosses a level boundary legitimately repaints that number too. Nothing else may
+        move. The shell layout has no readout, so for it the bar stays the only thing
+        that moves.
         """
         for layout in LAYOUTS:
             with self.subTest(layout=layout):
@@ -283,7 +284,7 @@ class BarRenderingTests(unittest.TestCase):
                 rect = xp_bar_rect(layout)
                 allowed = [rect]
                 if layout == "floating":
-                    box = FLOATING_LEVEL_BOX
+                    box = FLOATING_LEVEL_RECT
                     allowed.append(
                         (box["x"], box["y"], box["x"] + box["width"] - 1, box["y"] + box["height"] - 1)
                     )
