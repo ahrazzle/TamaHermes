@@ -711,7 +711,7 @@ def run(
     render_state["lifeStage"] = active_pet["lifeStage"]
 
     mirror_report = _mirror_step(
-        render_state,
+        combined,
         state_file,
         apply=apply,
         petdex_home=petdex_home,
