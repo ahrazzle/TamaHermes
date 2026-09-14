@@ -578,7 +578,7 @@ html, body {{
   user-select: none;
 }}
 body {{
-  -webkit-font-smoothing: none;
+  -webkit-font-smoothing: antialiased;
 }}
 .wrap {{
   position: absolute;
@@ -604,9 +604,7 @@ body {{
   flex-direction: column;
   border-radius: 12px;
   border: 2px solid rgba(8, 16, 24, .9);
-  background:
-    repeating-linear-gradient(0deg, transparent 0 7px, rgba(216, 248, 170, .06) 8px 9px),
-    linear-gradient(180deg, var(--lcd-2), var(--lcd));
+  background: linear-gradient(180deg, var(--lcd-2), var(--lcd));
   box-shadow: inset 0 0 0 1px rgba(255,255,255,.06), inset 0 -14px 28px rgba(0,0,0,.2);
   color: var(--ink);
   overflow: hidden;
@@ -648,8 +646,8 @@ body {{
   align-items: center;
   min-width: 0;
   color: var(--ink-dim);
-  font-size: 7px;
-  line-height: 9px;
+  font-size: 8px;
+  line-height: 11px;
   font-weight: 800;
   white-space: nowrap;
 }}
@@ -723,8 +721,8 @@ body {{
 .line {{
   padding: 3px 12px 0;
   color: var(--ink);
-  font-size: 7px;
-  line-height: 9px;
+  font-size: 8px;
+  line-height: 11px;
   font-weight: 800;
   white-space: nowrap;
   overflow: hidden;

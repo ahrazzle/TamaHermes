@@ -87,6 +87,7 @@ final class OverlayController: NSObject, WKScriptMessageHandler {
         webView = WKWebView(frame: content.bounds, configuration: configuration)
         webView.autoresizingMask = [.width, .height]
         webView.wantsLayer = true
+        webView.setValue(false, forKey: "drawsBackground")
         webView.layer?.backgroundColor = NSColor.clear.cgColor
         if #available(macOS 12.0, *) {
             webView.underPageBackgroundColor = .clear
