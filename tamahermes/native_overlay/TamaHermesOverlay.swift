@@ -239,7 +239,12 @@ final class OverlayController: NSObject, WKScriptMessageHandler {
             movePanel(dx: dx, dy: dy)
             return
         }
+        if event == "hide" || event == "show" { writeInteraction(event: event); return }
         guard ["care", "feed", "clean", "play", "rest"].contains(event) else { return }
+        writeInteraction(event: event)
+    }
+
+    private func writeInteraction(event: String) {
         let payload: [String: Any] = [
             "schema": "tamahermes.native_overlay.interaction.v1",
             "id": UUID().uuidString,

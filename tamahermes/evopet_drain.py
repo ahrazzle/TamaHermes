@@ -537,12 +537,18 @@ def absorb_profiles(
         for key, delta in trait_deltas.items():
             combined["traits"][key] = combined["traits"].get(key, 0) + delta
 
+        # merge_stats rides the same per-profile cursor for clamped stats; replacing
+        # the cursor wholesale here would wipe its baseline and every stat delta
+        # would read as first-sight forever (stat changes silently dropped).
+        stats_cursor = cursor.get("stats") if isinstance(cursor, dict) else None
         cursor_profiles[name] = {
             "xp": xp,
             "counters": {k: int(counters.get(k) or 0) for k in COUNTERS},
             "traits": {k: int(traits.get(k) or 0) for k in TRAITS},
             "absorbedAt": state.get("updatedAt"),
         }
+        if isinstance(stats_cursor, dict):
+            cursor_profiles[name]["stats"] = stats_cursor
         attribution = combined["attribution"]["profiles"].setdefault(
             name, {"xp": xp, "absorbed": 0, "stage": None, "updatedAt": None}
         )
@@ -558,15 +564,22 @@ def absorb_profiles(
 def merge_stats(
     combined: Dict[str, Any], ledgers: List[Tuple[str, Path]], cursor_profiles: Dict[str, Any]
 ) -> Dict[str, int]:
-    """Force-combine each profile's clamped stats once, then absorb only increases.
+    """Absorb each profile's clamped stats as signed deltas over its own cursor.
 
-    A clamped stat has no meaningful delta, so the old rule was "take the maximum across
-    profiles". That rule silently undid care: a profile still sitting at mess 41 would re-raise
-    the combined ledger's freshly cleaned 39 on the very next drain, so care could never stick.
-    Now each profile contributes its whole stat the first time it is seen (the force-combine),
-    and afterwards only the *increase* over what was already absorbed -- a profile getting
-    dirtier still pollutes the shared pet, but a profile that is merely stale does not. The
-    absorbed value rides the profile's cursor, so the rule is idempotent run to run.
+    A clamped stat has no meaningful absolute merge (profiles each simulate the
+    same pet from their own event stream), but it has a meaningful *change*:
+    work tires the pet (energy falls), failure sours it (mood falls), care
+    cleans it (mess falls). The old rule absorbed only increases, so the
+    combined ledger -- the HUD's truth -- pinned energy/mood/health at their
+    max-seen values and care never showed. Now every per-profile delta moves
+    the shared pet both ways, clamped to 0-100.
+
+    A profile that is merely stale contributes nothing: its value equals its
+    cursor, so its delta is zero and it can neither resurrect cleaned mess nor
+    erase earned rest. The cursor rides per profile, so the rule is idempotent
+    run to run. A profile seen for the first time only seeds its cursor --
+    except into an empty combined ledger, which bootstraps from the first
+    profile it ever sees (a fresh install must show a pet, not zeroes).
     """
     combined.setdefault("stats", {})
     merged = {}
@@ -578,15 +591,17 @@ def merge_stats(
             cursor = {}
             cursor_profiles[name] = cursor
         previous = cursor.get("stats")
+        if not isinstance(previous, dict):
+            previous = {}
         for key in CLAMPED_STATS:
             value = int(stats.get(key) or 0)
-            current = int(combined["stats"].get(key) or 0)
-            if isinstance(previous, dict):
-                before = int(previous.get(key) or 0)
-                if value > before:
-                    combined["stats"][key] = _clamp(current + (value - before))
-            else:
-                combined["stats"][key] = max(current, value)
+            if key in previous:
+                delta = value - int(previous.get(key) or 0)
+                if delta:
+                    current = int(combined["stats"].get(key) or 0)
+                    combined["stats"][key] = _clamp(current + delta)
+            elif key not in combined["stats"]:
+                combined["stats"][key] = _clamp(value)
             merged[key] = max(merged.get(key, 0), value)
         cursor["stats"] = {key: int(stats.get(key) or 0) for key in CLAMPED_STATS}
     return merged
