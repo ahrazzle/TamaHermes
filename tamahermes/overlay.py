@@ -596,8 +596,8 @@ body {{
 }}
 .lcd {{
   position: absolute;
-  left: 18px;
-  right: 18px;
+  left: 58px;
+  right: 58px;
   top: 30px;
   bottom: 18px;
   display: flex;
@@ -702,21 +702,34 @@ body {{
   transition: width 180ms ease;
 }}
 .actions {{
-  display: flex;
-  gap: 5px;
-  padding: 6px 12px 7px;
+  position: absolute;
+  inset: 0;
+  display: block;
+  padding: 0;
+  pointer-events: none;
 }}
 .actions button {{
-  border: 1px solid rgba(135, 242, 220, .55);
-  border-radius: 7px;
-  padding: 5px 8px;
+  position: absolute;
+  width: 52px;
+  min-height: 27px;
+  border: 1px solid rgba(135, 242, 220, .78);
+  border-radius: 14px;
+  padding: 5px 4px;
   color: var(--ink);
-  background: rgba(9, 42, 47, .88);
-  font: 800 8px Menlo, Monaco, monospace;
+  background: rgba(9, 42, 47, .96);
+  box-shadow: 0 3px 10px rgba(0,0,0,.28), 0 0 8px rgba(135,242,220,.18);
+  font: 900 8px Menlo, Monaco, monospace;
   cursor: pointer;
+  pointer-events: auto;
 }}
-.actions button:hover {{ background: rgba(23, 78, 82, .95); border-color: var(--accent); }}
+.actions button:nth-child(1) {{ left: 2px; top: 66px; }}
+.actions button:nth-child(2) {{ left: 2px; top: 101px; }}
+.actions button:nth-child(3) {{ right: 2px; top: 66px; }}
+.actions button:nth-child(4) {{ right: 2px; top: 101px; }}
+.actions button:nth-child(5) {{ left: 50%; bottom: 2px; transform: translateX(-50%); }}
+.actions button:hover {{ background: #174e52; border-color: var(--accent); box-shadow: 0 0 14px rgba(255,216,109,.44); }}
 .actions button:active {{ transform: translateY(1px); }}
+.actions button:nth-child(5):active {{ transform: translateX(-50%) translateY(1px); }}
 .flash {{ color: var(--accent); min-height: 10px; font-size: 8px; padding: 0 12px; }}
 .line {{
   padding: 3px 12px 0;
