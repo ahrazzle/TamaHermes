@@ -843,20 +843,14 @@ body {{
   </main>
   <script>
     const dragHandle = document.querySelector('.top');
-    let dragPoint = null;
     if (dragHandle) {{
+      const handler = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.tamahermes;
       dragHandle.addEventListener('pointerdown', (event) => {{
-        dragPoint = {{x: event.clientX, y: event.clientY}};
+        if (handler) handler.postMessage({{event: 'drag-start'}});
         dragHandle.setPointerCapture(event.pointerId);
       }});
-      dragHandle.addEventListener('pointermove', (event) => {{
-        if (!dragPoint) return;
-        const handler = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.tamahermes;
-        if (handler) handler.postMessage({{event: 'drag', dx: event.clientX - dragPoint.x, dy: event.clientY - dragPoint.y}});
-        dragPoint = {{x: event.clientX, y: event.clientY}};
-      }});
-      dragHandle.addEventListener('pointerup', () => {{ dragPoint = null; }});
-      dragHandle.addEventListener('pointercancel', () => {{ dragPoint = null; }});
+      dragHandle.addEventListener('pointerup', () => {{ if (handler) handler.postMessage({{event: 'drag-end'}}); }});
+      dragHandle.addEventListener('pointercancel', () => {{ if (handler) handler.postMessage({{event: 'drag-end'}}); }});
     }}
     document.querySelectorAll('[data-event]').forEach((button) => {{
       button.addEventListener('click', () => {{
@@ -983,16 +977,20 @@ def run_native_overlay_loop(home: Path, root: Path, interval: float = 0.4) -> No
             if selected:
                 interaction = consume_native_interaction(home)
                 if interaction:
-                    record = {
-                        "event": interaction["event"],
-                        "id": interaction.get("id"),
-                        "source": "native-overlay",
-                        "amount": 1,
-                        "at": interaction.get("updatedAt"),
-                    }
-                    spool_native_pet_action(str(interaction["event"]))
-                    apply_bridge_event(catalog, state_path, record)
-                    refresh_installed_pet_for_records([record], catalog, state_path, home)
+                    try:
+                        record = {
+                            "event": interaction["event"],
+                            "id": interaction.get("id"),
+                            "source": "native-overlay",
+                            "amount": 1,
+                            "at": interaction.get("updatedAt"),
+                        }
+                        spool_native_pet_action(str(interaction["event"]))
+                        apply_bridge_event(catalog, state_path, record)
+                        refresh_installed_pet_for_records([record], catalog, state_path, home)
+                    except Exception as exc:  # noqa: BLE001
+                        overlay_state["lastInteractionError"] = str(exc)
+                        save_overlay_state(overlay_file, overlay_state)
                 try:
                     now = time.monotonic()
                     if now - last_codex_event_sync >= 1.0:
