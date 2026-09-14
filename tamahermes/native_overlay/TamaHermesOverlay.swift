@@ -210,12 +210,35 @@ final class OverlayController: NSObject, WKScriptMessageHandler {
         _ = try? FileManager.default.replaceItemAt(URL(fileURLWithPath: configPath), withItemAt: URL(fileURLWithPath: configPath + ".tmp"))
     }
 
+    private func movePanel(dx: Double, dy: Double) {
+        var origin = panel.frame.origin
+        origin.x += dx
+        origin.y -= dy
+        panel.setFrameOrigin(origin)
+        let screen = panel.screen ?? NSScreen.main ?? NSScreen.screens.first!
+        let topLeftX = origin.x
+        let topLeftY = screen.frame.maxY - origin.y - panel.frame.height
+        guard let data = FileManager.default.contents(atPath: configPath),
+              var object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return }
+        object["x"] = topLeftX
+        object["y"] = topLeftY
+        guard JSONSerialization.isValidJSONObject(object), let output = try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted]) else { return }
+        try? output.write(to: URL(fileURLWithPath: configPath + ".tmp"))
+        _ = try? FileManager.default.replaceItemAt(URL(fileURLWithPath: configPath), withItemAt: URL(fileURLWithPath: configPath + ".tmp"))
+    }
+
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         guard message.name == "tamahermes",
               let body = message.body as? [String: Any],
               let event = body["event"] as? String else { return }
         if event == "scale-up" { adjustScale(by: 0.1); return }
         if event == "scale-down" { adjustScale(by: -0.1); return }
+        if event == "drag",
+           let dx = body["dx"] as? Double,
+           let dy = body["dy"] as? Double {
+            movePanel(dx: dx, dy: dy)
+            return
+        }
         guard ["care", "feed", "clean", "play", "rest"].contains(event) else { return }
         let payload: [String: Any] = [
             "schema": "tamahermes.native_overlay.interaction.v1",
