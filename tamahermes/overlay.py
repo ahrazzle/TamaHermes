@@ -34,6 +34,15 @@ from .paths import default_state_path, repo_root as resolve_repo_root
 from .state import load_state, passive_rest_plan
 
 
+def overlay_runtime_state_path(home: Path) -> Path:
+    """Use the native combined ledger when present; keep Codex-home fallback for old installs."""
+    configured = os.environ.get("EVOPET_STATE")
+    if configured:
+        return Path(configured).expanduser()
+    native = Path.home() / ".evopet" / "state.json"
+    return native if native.is_file() else default_state_path(home)
+
+
 def _clamp(value: int, low: int, high: int) -> int:
     return max(low, min(high, value))
 
@@ -573,26 +582,17 @@ body {{
 }}
 .wrap {{
   position: absolute;
-  inset: 10px;
-  border-radius: 18px;
-  clip-path: inset(0 round 18px);
-  background:
-    radial-gradient(circle at 18% 12%, rgba(255, 255, 255, 0.94) 0 10%, transparent 22%),
-    linear-gradient(135deg, var(--glass-a) 0%, var(--glass-b) 44%, var(--glass-c) 74%, var(--glass-d) 100%);
-  border: 1px solid var(--stroke);
-  box-shadow: inset 0 1px 0 rgba(255,255,255,.72), inset 0 -18px 42px rgba(23, 20, 33, .08);
-  backdrop-filter: blur(18px) saturate(1.65);
-  -webkit-backdrop-filter: blur(18px) saturate(1.65);
+  inset: 0;
+  border-radius: 0;
+  clip-path: none;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }}
 .wrap::before {{
-  content: "";
-  position: absolute;
-  left: 18px;
-  top: 14px;
-  width: 74px;
-  height: 6px;
-  border-radius: 6px;
-  background: rgba(255, 255, 255, .72);
+  display: none;
 }}
 .lcd {{
   position: absolute;
@@ -902,7 +902,7 @@ def run_native_overlay_loop(home: Path, root: Path, interval: float = 0.4) -> No
     paths = native_overlay_paths(home)
     binary = build_native_overlay_helper(home)
     catalog = load_catalog(root)
-    state_path = default_state_path(home)
+    state_path = overlay_runtime_state_path(home)
     overlay_file = overlay_state_path(home)
     player = native_sfx_player(home)
     stopped = False
@@ -949,7 +949,12 @@ def run_native_overlay_loop(home: Path, root: Path, interval: float = 0.4) -> No
                             }
                         apply_progress_audio_for_records(records, overlay_state, selected=surface_active, player=player)
                         last_codex_event_sync = now
-                    state = load_state(state_path, catalog)
+                    raw_state = read_json_object(state_path)
+                    if isinstance(raw_state.get("pets"), dict):
+                        from .evopet_drain import desktop_pet_state
+                        state = desktop_pet_state(raw_state, catalog)
+                    else:
+                        state = load_state(state_path, catalog)
                 except Exception:  # noqa: BLE001
                     state = None
                 if state:
@@ -1006,7 +1011,7 @@ def run_native_overlay_loop(home: Path, root: Path, interval: float = 0.4) -> No
 def run_headless_audio_loop(home: Path, root: Path, interval: float = 0.8) -> None:
     write_sidecar_pid(home)
     catalog = load_catalog(root)
-    state_path = default_state_path(home)
+    state_path = overlay_runtime_state_path(home)
     overlay_file = overlay_state_path(home)
     last_codex_event_sync = 0.0
     while True:

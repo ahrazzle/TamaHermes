@@ -233,9 +233,13 @@ def desktop_pet_state(combined: Dict[str, Any], catalog: Any) -> Dict[str, Any]:
         machine_id=str(claim.get("machineId") or "aurora"),
         display_name=str(claim.get("displayName") or "TamaHermes"),
     )
-    state["petId"] = str(claim.get("petId") or "tamahermes")
-    state["xp"] = int(combined.get("xp") or 0)
-    state["lifeStage"] = combined.get("lifeStage") or "egg"
+    state["petId"] = str(claim.get("petId") or combined.get("activePetId") or "tamahermes")
+    active_id = str(combined.get("activePetId") or state["petId"])
+    bucket = (combined.get("pets") or {}).get(active_id)
+    if not isinstance(bucket, dict):
+        bucket = combined
+    state["xp"] = int(bucket.get("xp") or 0)
+    state["lifeStage"] = bucket.get("lifeStage") or "egg"
     state["stats"] = {**state["stats"], **dict(combined.get("stats") or {})}
     state["traits"] = {**state["traits"], **dict(combined.get("traits") or {})}
     state["counters"] = {**state["counters"], **dict(combined.get("counters") or {})}
