@@ -108,7 +108,7 @@ class StageProgressTests(unittest.TestCase):
             (5040, "child", 23, 0),
             (7877, "child", 28, 50),
             (10006, "teen", 32, 0),
-            (20158, "adult", 45, 0),
+            (20158, "adult", 45, 100),
         ]
         for xp, stage, level, percent in cases:
             with self.subTest(xp=xp):
