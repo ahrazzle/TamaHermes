@@ -619,6 +619,55 @@ class M10SupervisorGuardTests(unittest.TestCase):
             self.assertEqual(config["hoverY"], 622)
             self.assertEqual(config["hoverDelaySeconds"], 1.0)
 
+    def test_native_overlay_html_exposes_smooth_drag_protocol(self) -> None:
+        html = render_native_overlay_html(
+            {
+                "displayName": "TamaHermes",
+                "lineId": "toast",
+                "machineId": "aurora",
+                "formId": "toast",
+                "lastCodexState": "running",
+                "level": 3,
+                "lifeStage": "child",
+                "xp": 54,
+                "progress": {"percent": 56, "xpIntoLevel": 5, "xpToNextLevel": 9},
+                "stats": {"energy": 80, "health": 91, "bond": 20, "mood": 77, "mess": 32},
+                "traits": {"focus": 12, "resilience": 8, "restlessness": 1},
+                "visual": {"alert": "review", "satiety": "hungry", "energy": "ok", "health": "ok"},
+                "counters": {"workRuns": 7, "completedRuns": 4, "failedRuns": 1, "reviews": 2, "totalTokens": 1234},
+                "latestEvent": {"event": "task_success", "at": "2026-05-07T00:00:00Z"},
+            },
+            expanded=True,
+        )
+        self.assertIn("cursor: move", html)
+        self.assertIn("pointerdown", html)
+        self.assertIn("pointermove", html)
+        self.assertIn("event: 'drag'", html)
+        self.assertIn("clientX - dragPoint.x", html)
+        self.assertIn("clientY - dragPoint.y", html)
+        swift = (ROOT / "tamahermes" / "native_overlay" / "TamaHermesOverlay.swift").read_text(encoding="utf-8")
+        self.assertIn("private func movePanel(dx: Double, dy: Double)", swift)
+        self.assertIn("origin.y -= dy", swift)
+        self.assertIn("panel.setFrameOrigin(origin)", swift)
+        self.assertIn("if event == \"drag\"", swift)
+
+    def test_native_overlay_config_preserves_dragged_position(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            config_path = home / "tamahermes" / "native-overlay" / "overlay-config.json"
+            config_path.parent.mkdir(parents=True)
+            config_path.write_text(json.dumps({"scale": 1.2, "x": 321, "y": 123}), encoding="utf-8")
+            write_native_overlay_config(
+                home,
+                visible=True,
+                frame={"x": 100, "y": 200, "width": 376, "height": 226},
+                hover={"x": 1186, "y": 622, "width": 80, "height": 87},
+            )
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+            self.assertEqual(config["x"], 321)
+            self.assertEqual(config["y"], 123)
+            self.assertEqual(config["scale"], 1.2)
+
     def test_sidecar_syncs_new_codex_session_events_without_backfilling_history(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp) / "codex-home"
