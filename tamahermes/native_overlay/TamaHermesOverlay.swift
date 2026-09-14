@@ -349,7 +349,9 @@ final class OverlayController: NSObject, WKScriptMessageHandler {
         }
         playSfxIfNeeded()
         panel.ignoresMouseEvents = !(config.visible == true)
-        panel.setFrame(clampedFrame(for: config), display: true)
+        if dragMonitor == nil {
+            panel.setFrame(clampedFrame(for: config), display: true)
+        }
         reloadIfNeeded(htmlPath: config.htmlPath)
         let point = mouseTopLeftPoint()
         let hasHoverTarget = config.hoverX != nil && config.hoverY != nil && config.hoverWidth != nil && config.hoverHeight != nil

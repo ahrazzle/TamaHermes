@@ -979,15 +979,27 @@ def run_native_overlay_loop(home: Path, root: Path, interval: float = 0.4) -> No
                 if interaction:
                     try:
                         record = {
-                            "event": interaction["event"],
+                            "event": "care",
+                            "action": interaction["event"],
                             "id": interaction.get("id"),
                             "source": "native-overlay",
                             "amount": 1,
                             "at": interaction.get("updatedAt"),
                         }
                         spool_native_pet_action(str(interaction["event"]))
-                        apply_bridge_event(catalog, state_path, record)
-                        refresh_installed_pet_for_records([record], catalog, state_path, home)
+                        from .evopet_drain import default_consumed_dir, default_spool, run as drain_run
+                        drain_run(
+                            default_spool(),
+                            state_path,
+                            default_consumed_dir(),
+                            apply=True,
+                            hermes_root=Path.home() / ".hermes",
+                            mirror=False,
+                        )
+                        try:
+                            refresh_installed_pet_for_records([record], catalog, state_path, home)
+                        except Exception as exc:  # noqa: BLE001
+                            overlay_state["lastInstallRefreshError"] = str(exc)
                     except Exception as exc:  # noqa: BLE001
                         overlay_state["lastInteractionError"] = str(exc)
                         save_overlay_state(overlay_file, overlay_state)
