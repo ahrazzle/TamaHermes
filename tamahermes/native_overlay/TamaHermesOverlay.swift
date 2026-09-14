@@ -44,6 +44,9 @@ final class OverlayController: NSObject, WKScriptMessageHandler {
     private var lastSfxPlayedAt: String?
     private var lastSfxError: String?
     private var activeSounds: [NSSound] = []
+    private var dragMonitor: Any?
+    private var dragOrigin: NSPoint?
+    private var dragMouseOrigin: NSPoint?
 
     init(configPath: String) {
         self.configPath = configPath
@@ -210,21 +213,57 @@ final class OverlayController: NSObject, WKScriptMessageHandler {
         _ = try? FileManager.default.replaceItemAt(URL(fileURLWithPath: configPath), withItemAt: URL(fileURLWithPath: configPath + ".tmp"))
     }
 
-    private func movePanel(dx: Double, dy: Double) {
-        var origin = panel.frame.origin
-        origin.x += dx
-        origin.y -= dy
-        panel.setFrameOrigin(origin)
+    private func beginDrag() {
+        endDrag()
+        dragOrigin = panel.frame.origin
+        dragMouseOrigin = NSEvent.mouseLocation
+        let handler: (NSEvent) -> NSEvent? = { [weak self] event in
+            guard let self else { return event }
+            if event.type == .leftMouseUp {
+                self.endDrag()
+            } else if event.type == .leftMouseDragged,
+                      let origin = self.dragOrigin,
+                      let mouse = self.dragMouseOrigin {
+                self.panel.setFrameOrigin(NSPoint(x: origin.x + event.locationInWindow.x - mouse.x, y: origin.y + event.locationInWindow.y - mouse.y))
+                self.persistPanelPosition()
+            }
+            return event
+        }
+        dragMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDragged, .leftMouseUp], handler: handler)
+        if dragMonitor == nil {
+            dragMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDragged, .leftMouseUp]) { [weak self] event in
+                guard let self, event.type == .leftMouseDragged,
+                      let origin = self.dragOrigin,
+                      let mouse = self.dragMouseOrigin else { self?.endDrag(); return }
+                self.panel.setFrameOrigin(NSPoint(x: origin.x + event.locationInWindow.x - mouse.x, y: origin.y + event.locationInWindow.y - mouse.y))
+                self.persistPanelPosition()
+            }
+        }
+    }
+
+    private func endDrag() {
+        if let monitor = dragMonitor { NSEvent.removeMonitor(monitor) }
+        dragMonitor = nil
+        dragOrigin = nil
+        dragMouseOrigin = nil
+    }
+
+    private func persistPanelPosition() {
         let screen = panel.screen ?? NSScreen.main ?? NSScreen.screens.first!
-        let topLeftX = origin.x
+        let origin = panel.frame.origin
         let topLeftY = screen.frame.maxY - origin.y - panel.frame.height
         guard let data = FileManager.default.contents(atPath: configPath),
               var object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return }
-        object["x"] = topLeftX
+        object["x"] = origin.x
         object["y"] = topLeftY
         guard JSONSerialization.isValidJSONObject(object), let output = try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted]) else { return }
         try? output.write(to: URL(fileURLWithPath: configPath + ".tmp"))
         _ = try? FileManager.default.replaceItemAt(URL(fileURLWithPath: configPath), withItemAt: URL(fileURLWithPath: configPath + ".tmp"))
+    }
+
+    private func movePanel(dx: Double, dy: Double) {
+        panel.setFrameOrigin(NSPoint(x: panel.frame.origin.x + dx, y: panel.frame.origin.y - dy))
+        persistPanelPosition()
     }
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
@@ -233,6 +272,8 @@ final class OverlayController: NSObject, WKScriptMessageHandler {
               let event = body["event"] as? String else { return }
         if event == "scale-up" { adjustScale(by: 0.1); return }
         if event == "scale-down" { adjustScale(by: -0.1); return }
+        if event == "drag-start" { beginDrag(); return }
+        if event == "drag-end" { endDrag(); return }
         if event == "drag",
            let dx = body["dx"] as? Double,
            let dy = body["dy"] as? Double {
