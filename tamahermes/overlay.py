@@ -647,6 +647,7 @@ body {{
 }}
 .top {{
   display: flex;
+  cursor: move;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
@@ -841,6 +842,22 @@ body {{
     </section>
   </main>
   <script>
+    const dragHandle = document.querySelector('.top');
+    let dragPoint = null;
+    if (dragHandle) {{
+      dragHandle.addEventListener('pointerdown', (event) => {{
+        dragPoint = {{x: event.clientX, y: event.clientY}};
+        dragHandle.setPointerCapture(event.pointerId);
+      }});
+      dragHandle.addEventListener('pointermove', (event) => {{
+        if (!dragPoint) return;
+        const handler = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.tamahermes;
+        if (handler) handler.postMessage({{event: 'drag', dx: event.clientX - dragPoint.x, dy: event.clientY - dragPoint.y}});
+        dragPoint = {{x: event.clientX, y: event.clientY}};
+      }});
+      dragHandle.addEventListener('pointerup', () => {{ dragPoint = null; }});
+      dragHandle.addEventListener('pointercancel', () => {{ dragPoint = null; }});
+    }}
     document.querySelectorAll('[data-event]').forEach((button) => {{
       button.addEventListener('click', () => {{
         const handler = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.tamahermes;
@@ -924,8 +941,8 @@ def write_native_overlay_config(
         "schema": "tamahermes.native_overlay.config.v1",
         "visible": visible,
         "scale": max(0.75, min(1.75, float(existing.get("scale") or 1.0))),
-        "x": frame.get("x"),
-        "y": frame.get("y"),
+        "x": existing.get("x") if existing.get("x") is not None else frame.get("x"),
+        "y": existing.get("y") if existing.get("y") is not None else frame.get("y"),
         "width": frame.get("width"),
         "height": frame.get("height"),
         "htmlPath": str(html_path or paths["html"]),
