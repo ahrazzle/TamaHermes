@@ -118,6 +118,13 @@ Each `care` gives `+3 XP`, `+5 energy`, `+5 mood`, `+4 health`, `+3 bond` and `-
 then reduces care mistakes. `--amount N` multiplies those changes. `--install` rebuilds and
 reinstalls the pet package so the visible form updates immediately.
 
+**Clean resets mess and starts a cooldown.** `clean` resets `mess` to `0` in one press
+(not `-2`), captures the pre-clean value as `M`, and applies a cooldown of exactly `M`
+seconds — 1 second per mess point, so a full mess of 100 means 100 seconds. During the
+cooldown the pet can neither earn XP nor perform any other action. Cleaning at mess `0`
+is a no-op with no cooldown. The cooldown (and the mess reset) are stored on the ledger,
+so they survive a restart.
+
 **How rest works.** Each `rest` is 10 quiet minutes: `+10 energy`, `+3 health`, `+1 mood`,
 `-3 restlessness`, `quietMinutes +10`. It adds no XP and does not mean active work.
 
