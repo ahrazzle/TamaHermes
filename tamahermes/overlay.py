@@ -34,6 +34,15 @@ from .paths import default_state_path, repo_root as resolve_repo_root
 from .state import load_state, passive_rest_plan
 
 
+def overlay_runtime_state_path(home: Path) -> Path:
+    """Use the native combined ledger when present; keep Codex-home fallback for old installs."""
+    configured = os.environ.get("EVOPET_STATE")
+    if configured:
+        return Path(configured).expanduser()
+    native = Path.home() / ".evopet" / "state.json"
+    return native if native.is_file() else default_state_path(home)
+
+
 def _clamp(value: int, low: int, high: int) -> int:
     return max(low, min(high, value))
 
@@ -291,6 +300,7 @@ def native_overlay_paths(home: Path) -> dict[str, Path]:
         "html": root / "overlay.html",
         "status": root / "overlay-helper-status.json",
         "sfx": root / "overlay-sfx-request.json",
+        "interaction": root / "overlay-interaction-request.json",
     }
 
 
@@ -382,6 +392,18 @@ def apply_progress_audio_for_records(records: list[dict[str, Any]], overlay_stat
     if player:
         return apply_interaction_audio("progress", overlay_state, selected=selected, player=player)
     return apply_interaction_audio("progress", overlay_state, selected=selected)
+
+
+def consume_native_interaction(home: Path) -> dict[str, Any] | None:
+    path = native_overlay_paths(home)["interaction"]
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        path.unlink(missing_ok=True)
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict) or payload.get("event") not in {"care", "feed", "rest"}:
+        return None
+    return payload
 
 
 def queue_native_sfx_request(home: Path, filename: str, volume: float) -> bool:
@@ -512,6 +534,10 @@ def render_native_overlay_html(snapshot: dict[str, Any], expanded: bool = True) 
     machine = html.escape(str(snapshot.get("machineId") or "aurora").upper())
     form = html.escape(str(snapshot.get("formId") or "").upper())
     codex_state = html.escape(str(snapshot.get("lastCodexState") or "idle").upper())
+    progress = snapshot.get("progress") or {}
+    xp_percent = max(0, min(100, int(progress.get("percent") or 0)))
+    xp_into = int(progress.get("xpIntoLevel") or 0)
+    xp_to_next = int(progress.get("xpToNextLevel") or 0)
     visual_text = " / ".join(
         [
             f"SAT {str(visual.get('satiety', '?')).upper()}",
@@ -552,31 +578,42 @@ html, body {{
   user-select: none;
 }}
 body {{
-  -webkit-font-smoothing: none;
+  -webkit-font-smoothing: antialiased;
 }}
 .wrap {{
   position: absolute;
-  inset: 10px;
-  border-radius: 18px;
-  clip-path: inset(0 round 18px);
-  background:
-    radial-gradient(circle at 18% 12%, rgba(255, 255, 255, 0.94) 0 10%, transparent 22%),
-    linear-gradient(135deg, var(--glass-a) 0%, var(--glass-b) 44%, var(--glass-c) 74%, var(--glass-d) 100%);
-  border: 1px solid var(--stroke);
-  box-shadow: inset 0 1px 0 rgba(255,255,255,.72), inset 0 -18px 42px rgba(23, 20, 33, .08);
-  backdrop-filter: blur(18px) saturate(1.65);
-  -webkit-backdrop-filter: blur(18px) saturate(1.65);
+  inset: 0;
+  border-radius: 0;
+  clip-path: none;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }}
 .wrap::before {{
-  content: "";
-  position: absolute;
-  left: 18px;
-  top: 14px;
-  width: 74px;
-  height: 6px;
-  border-radius: 6px;
-  background: rgba(255, 255, 255, .72);
+  display: none;
 }}
+.scale-controls {{
+  position: absolute;
+  z-index: 4;
+  top: 4px;
+  right: 20px;
+  display: flex;
+  gap: 3px;
+}}
+.scale-controls button {{
+  width: 24px;
+  height: 20px;
+  border: 1px solid rgba(135,242,220,.65);
+  border-radius: 6px;
+  color: var(--ink);
+  background: rgba(9,42,47,.94);
+  font: 900 10px Menlo, Monaco, monospace;
+  cursor: pointer;
+}}
+.scale-controls button:hover {{ border-color: var(--accent); color: var(--accent); }}
+
 .lcd {{
   position: absolute;
   left: 18px;
@@ -587,9 +624,7 @@ body {{
   flex-direction: column;
   border-radius: 12px;
   border: 2px solid rgba(8, 16, 24, .9);
-  background:
-    repeating-linear-gradient(0deg, transparent 0 7px, rgba(216, 248, 170, .06) 8px 9px),
-    linear-gradient(180deg, var(--lcd-2), var(--lcd));
+  background: linear-gradient(180deg, var(--lcd-2), var(--lcd));
   box-shadow: inset 0 0 0 1px rgba(255,255,255,.06), inset 0 -14px 28px rgba(0,0,0,.2);
   color: var(--ink);
   overflow: hidden;
@@ -631,8 +666,8 @@ body {{
   align-items: center;
   min-width: 0;
   color: var(--ink-dim);
-  font-size: 7px;
-  line-height: 9px;
+  font-size: 8px;
+  line-height: 11px;
   font-weight: 800;
   white-space: nowrap;
 }}
@@ -666,11 +701,48 @@ body {{
   background: var(--ink);
   opacity: 1;
 }}
+.xp {{
+  margin: 5px 12px 0;
+  color: var(--ink);
+  font-size: 8px;
+  font-weight: 900;
+}}
+.xp-track {{
+  height: 7px;
+  margin-top: 3px;
+  border-radius: 6px;
+  background: rgba(125, 166, 125, .35);
+  overflow: hidden;
+}}
+.xp-fill {{
+  height: 100%;
+  width: {xp_percent}%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--cyan), var(--accent));
+  transition: width 180ms ease;
+}}
+.actions {{
+  display: flex;
+  gap: 5px;
+  padding: 6px 12px 7px;
+}}
+.actions button {{
+  border: 1px solid rgba(135, 242, 220, .55);
+  border-radius: 7px;
+  padding: 5px 8px;
+  color: var(--ink);
+  background: rgba(9, 42, 47, .88);
+  font: 800 8px Menlo, Monaco, monospace;
+  cursor: pointer;
+}}
+.actions button:hover {{ background: rgba(23, 78, 82, .95); border-color: var(--accent); }}
+.actions button:active {{ transform: translateY(1px); }}
+.flash {{ color: var(--accent); min-height: 10px; font-size: 8px; padding: 0 12px; }}
 .line {{
   padding: 3px 12px 0;
   color: var(--ink);
-  font-size: 7px;
-  line-height: 9px;
+  font-size: 8px;
+  line-height: 11px;
   font-weight: 800;
   white-space: nowrap;
   overflow: hidden;
@@ -717,6 +789,10 @@ body {{
 </head>
 <body>
   <main class="wrap" aria-label="TamaHermes status">
+    <div class="scale-controls" aria-label="HUD scale">
+      <button data-event="scale-down" aria-label="Scale HUD down">−</button>
+      <button data-event="scale-up" aria-label="Scale HUD up">+</button>
+    </div>
     <section class="lcd">
       <div class="top"><span>{title}</span><span class="pill">{line}/{machine}</span></div>
       <div class="grid">
@@ -730,13 +806,34 @@ body {{
         <div class="cell"><span>RESIL</span><strong>{int(traits.get("resilience", 0))}</strong></div>
         <div class="cell"><span>RESTLESS</span><strong>{int(traits.get("restlessness", 0))}</strong></div>
       </div>
+      <div class="xp">LEVEL {int(snapshot["level"])} · {xp_percent}% · {xp_into}/{xp_to_next or "MAX"} XP
+        <div class="xp-track"><div class="xp-fill"></div></div>
+      </div>
       <div class="line">{visual_text}</div>
       <div class="line">WORK {int(counters.get("workRuns", 0))} / OK {int(counters["completedRuns"])} / FAIL {int(counters["failedRuns"])} / REV {int(counters["reviews"])}</div>
       <div class="line">TOKENS {int(counters.get("totalTokens", 0))} / SAMPLES {int(counters.get("tokenSamples", 0))} / IDLE {int(counters.get("idleMinutes", 0))}M</div>
       <div class="line latest">{latest_name}: {latest}</div>
+      <div class="actions" aria-label="Pet care actions">
+        <button data-event="care">CARE</button>
+        <button data-event="feed">FEED</button>
+        <button data-event="clean">CLEAN</button>
+        <button data-event="play">PLAY</button>
+        <button data-event="rest">BED</button>
+      </div>
+      <div class="flash" id="flash" aria-live="polite"></div>
       <div class="footer"><span><i class="dot"></i>{codex_state}</span><span>{form}</span></div>
     </section>
   </main>
+  <script>
+    document.querySelectorAll('[data-event]').forEach((button) => {{
+      button.addEventListener('click', () => {{
+        const handler = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.tamahermes;
+        if (handler) handler.postMessage({{event: button.dataset.event}});
+        const flash = document.getElementById('flash');
+        if (flash) flash.textContent = button.textContent + ' queued';
+      }});
+    }});
+  </script>
 </body>
 </html>
 """
@@ -760,22 +857,23 @@ html, body {{
   user-select: none;
 }}
 body {{
-  -webkit-font-smoothing: none;
+  -webkit-font-smoothing: antialiased;
 }}
 .bubble {{
   position: absolute;
-  inset: 10px;
+  inset: 0;
   display: grid;
   place-items: center;
-  border-radius: 18px;
-  color: #092a2f;
-  background:
-    radial-gradient(circle at 18% 14%, rgba(255,255,255,.94) 0 9%, transparent 22%),
-    linear-gradient(135deg, rgba(215,255,241,.94), rgba(135,242,220,.88) 46%, rgba(255,216,109,.82));
-  border: 1px solid rgba(255,255,255,.86);
-  box-shadow: inset 0 1px 0 rgba(255,255,255,.78), 0 12px 34px rgba(23, 20, 33, .24);
-  backdrop-filter: blur(16px) saturate(1.45);
-  -webkit-backdrop-filter: blur(16px) saturate(1.45);
+  border-radius: 12px;
+  color: #d8f8aa;
+  background: linear-gradient(180deg, #0e3c40, #092a2f);
+  border: 2px solid rgba(8, 16, 24, .9);
+  box-shadow: 0 0 26px rgba(135, 242, 220, .32), inset 0 0 0 1px rgba(216,248,170,.18);
+  animation: levelPulse 1s ease-in-out infinite alternate;
+}}
+@keyframes levelPulse {{
+  from {{ box-shadow: 0 0 12px rgba(135, 242, 220, .20), inset 0 0 0 1px rgba(216,248,170,.12); }}
+  to {{ box-shadow: 0 0 30px rgba(255,216,109,.62), inset 0 0 0 1px rgba(216,248,170,.34); }}
 }}
 .message {{
   max-width: 232px;
@@ -805,9 +903,11 @@ def write_native_overlay_config(
     paths = native_overlay_paths(home)
     paths["root"].mkdir(parents=True, exist_ok=True)
     frame = frame or {"x": None, "y": None, "width": 376, "height": 226}
+    existing = read_json_object(paths["config"])
     payload = {
         "schema": "tamahermes.native_overlay.config.v1",
         "visible": visible,
+        "scale": max(0.75, min(1.75, float(existing.get("scale") or 1.0))),
         "x": frame.get("x"),
         "y": frame.get("y"),
         "width": frame.get("width"),
@@ -827,7 +927,7 @@ def run_native_overlay_loop(home: Path, root: Path, interval: float = 0.4) -> No
     paths = native_overlay_paths(home)
     binary = build_native_overlay_helper(home)
     catalog = load_catalog(root)
-    state_path = default_state_path(home)
+    state_path = overlay_runtime_state_path(home)
     overlay_file = overlay_state_path(home)
     player = native_sfx_player(home)
     stopped = False
@@ -848,6 +948,17 @@ def run_native_overlay_loop(home: Path, root: Path, interval: float = 0.4) -> No
             overlay_state = load_overlay_state(overlay_file)
             surface_active, bounds = update_surface_activity(global_state, overlay_state, time.time())
             if selected:
+                interaction = consume_native_interaction(home)
+                if interaction:
+                    record = {
+                        "event": interaction["event"],
+                        "id": interaction.get("id"),
+                        "source": "native-overlay",
+                        "amount": 1,
+                        "at": interaction.get("updatedAt"),
+                    }
+                    apply_bridge_event(catalog, state_path, record)
+                    refresh_installed_pet_for_records([record], catalog, state_path, home)
                 try:
                     now = time.monotonic()
                     if now - last_codex_event_sync >= 1.0:
@@ -863,10 +974,27 @@ def run_native_overlay_loop(home: Path, root: Path, interval: float = 0.4) -> No
                             }
                         apply_progress_audio_for_records(records, overlay_state, selected=surface_active, player=player)
                         last_codex_event_sync = now
-                    state = load_state(state_path, catalog)
+                    raw_state = read_json_object(state_path)
+                    if isinstance(raw_state.get("pets"), dict):
+                        from .evopet_drain import desktop_pet_state
+                        state = desktop_pet_state(raw_state, catalog)
+                    else:
+                        state = load_state(state_path, catalog)
                 except Exception:  # noqa: BLE001
                     state = None
                 if state:
+                    current_level = int(state.get("level") or 0)
+                    previous_level = overlay_state.get("lastRenderedLevel")
+                    if isinstance(previous_level, int) and current_level > previous_level:
+                        now_epoch = time.time()
+                        overlay_state["evolutionAnnouncement"] = {
+                            "schema": "tamahermes.level_up_announcement.v1",
+                            "formId": state.get("lifeStage"),
+                            "message": f"LEVEL UP!  L{current_level}",
+                            "createdAtEpoch": now_epoch,
+                            "expiresAtEpoch": now_epoch + 3.0,
+                        }
+                    overlay_state["lastRenderedLevel"] = current_level
                     snapshot = status_snapshot(state)
                     hover = native_overlay_hover_rect(bounds) if surface_active else None
                     announcement = active_evolution_announcement(overlay_state, time.time())
@@ -883,10 +1011,10 @@ def run_native_overlay_loop(home: Path, root: Path, interval: float = 0.4) -> No
                         paths["html"].write_text(render_native_overlay_html(snapshot, expanded=True), encoding="utf-8")
                         write_native_overlay_config(
                             home,
-                            visible=bool(hover),
+                            visible=True,
                             frame=native_overlay_frame(bounds),
                             html_path=paths["html"],
-                            hover=hover,
+                            hover=None,
                         )
                     else:
                         write_native_overlay_config(home, visible=False)
@@ -920,7 +1048,7 @@ def run_native_overlay_loop(home: Path, root: Path, interval: float = 0.4) -> No
 def run_headless_audio_loop(home: Path, root: Path, interval: float = 0.8) -> None:
     write_sidecar_pid(home)
     catalog = load_catalog(root)
-    state_path = default_state_path(home)
+    state_path = overlay_runtime_state_path(home)
     overlay_file = overlay_state_path(home)
     last_codex_event_sync = 0.0
     while True:

@@ -233,9 +233,13 @@ def desktop_pet_state(combined: Dict[str, Any], catalog: Any) -> Dict[str, Any]:
         machine_id=str(claim.get("machineId") or "aurora"),
         display_name=str(claim.get("displayName") or "TamaHermes"),
     )
-    state["petId"] = str(claim.get("petId") or "tamahermes")
-    state["xp"] = int(combined.get("xp") or 0)
-    state["lifeStage"] = combined.get("lifeStage") or "egg"
+    state["petId"] = str(claim.get("petId") or combined.get("activePetId") or "tamahermes")
+    active_id = str(combined.get("activePetId") or state["petId"])
+    bucket = (combined.get("pets") or {}).get(active_id)
+    if not isinstance(bucket, dict):
+        bucket = combined
+    state["xp"] = int(bucket.get("xp") or 0)
+    state["lifeStage"] = bucket.get("lifeStage") or "egg"
     state["stats"] = {**state["stats"], **dict(combined.get("stats") or {})}
     state["traits"] = {**state["traits"], **dict(combined.get("traits") or {})}
     state["counters"] = {**state["counters"], **dict(combined.get("counters") or {})}
@@ -342,11 +346,57 @@ def empty_combined(now: Optional[str] = None) -> Dict[str, Any]:
         "xp": 0,
         "level": 1,
         "lifeStage": "egg",
+        "pets": {},
         "levels": curve_block(),
         "attribution": {"profiles": {}, "foreign": {}},
         "cursor": {"profiles": {}, "consumed": [], "lastRunAt": None},
         "note": "Attributable numbers only: no prompt text, no paths, no transcripts.",
     }
+
+
+def _active_pet_id(combined: Dict[str, Any], pet_id: Optional[str]) -> str:
+    """Return the selected pet identity, preserving the existing mirror claim when omitted."""
+    raw = str(pet_id or "").strip()
+    if not raw:
+        try:
+            selection = load_json(Path.home() / ".codex-global-state.json") or {}
+            persisted = selection.get("electron-persisted-atom-state")
+            raw = str(
+                selection.get("selected-avatar-id")
+                or selection.get("electron-persisted-atom-state.selected-avatar-id")
+                or (persisted.get("selected-avatar-id") if isinstance(persisted, dict) else "")
+                or ""
+            ).strip()
+        except OSError:
+            raw = ""
+    if raw.startswith("custom:"):
+        raw = raw[7:]
+    if raw:
+        return raw
+    mirror = combined.get("mirror")
+    if isinstance(mirror, dict) and str(mirror.get("petId") or "").strip():
+        return str(mirror["petId"]).strip()
+    return "tamahermes"
+
+
+def _select_pet_progress(combined: Dict[str, Any], pet_id: str) -> Dict[str, Any]:
+    """Select a durable progression bucket, migrating the legacy global bucket once."""
+    pets = combined.setdefault("pets", {})
+    if not isinstance(pets, dict):
+        pets = {}
+        combined["pets"] = pets
+    bucket = pets.get(pet_id)
+    if not isinstance(bucket, dict):
+        bucket = {
+            "xp": int(combined.get("xp") or 0) if not pets else 0,
+            "level": 1,
+            "lifeStage": "egg",
+        }
+        pets[pet_id] = bucket
+    bucket["xp"] = max(0, int(bucket.get("xp") or 0))
+    bucket["level"] = level_for_xp(bucket["xp"])
+    bucket["lifeStage"] = stage_for_xp(bucket["xp"])
+    return bucket
 
 
 def load_json(path: Path) -> Optional[Dict[str, Any]]:
@@ -617,6 +667,9 @@ def run(
     ledgers = ledger_paths(hermes_root)
     combined = load_json(state_file) or empty_combined()
     combined["levels"] = curve_block()
+    active_pet_id = _active_pet_id(combined, pet_id)
+    active_pet = _select_pet_progress(combined, active_pet_id)
+    previous_total_xp = int(combined.get("xp") or 0)
     combined.setdefault("attribution", {"profiles": {}, "foreign": {}})
     combined.setdefault("cursor", {"profiles": {}, "consumed": [], "lastRunAt": None})
 
@@ -644,11 +697,21 @@ def run(
 
     combined["level"] = level_for_xp(combined["xp"])
     combined["lifeStage"] = stage_for_xp(combined["xp"])
+    earned_xp = max(0, int(combined["xp"]) - previous_total_xp)
+    active_pet["xp"] += earned_xp
+    active_pet["level"] = level_for_xp(active_pet["xp"])
+    active_pet["lifeStage"] = stage_for_xp(active_pet["xp"])
+    combined["activePetId"] = active_pet_id
     combined["updatedAt"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     combined["cursor"]["lastRunAt"] = combined["updatedAt"]
+    render_state = dict(combined)
+    render_state["petId"] = active_pet_id
+    render_state["xp"] = active_pet["xp"]
+    render_state["level"] = active_pet["level"]
+    render_state["lifeStage"] = active_pet["lifeStage"]
 
     mirror_report = _mirror_step(
-        combined,
+        render_state,
         state_file,
         apply=apply,
         petdex_home=petdex_home,
@@ -679,9 +742,9 @@ def run(
 
     return {
         "apply": apply,
-        "combined_xp": combined["xp"],
-        "combined_stage": combined["lifeStage"],
-        "combined_level": combined["level"],
+        "combined_xp": active_pet["xp"],
+        "combined_stage": active_pet["lifeStage"],
+        "combined_level": active_pet["level"],
         "profiles": profile_report["profiles"],
         "profile_xp_absorbed": profile_report["xp"],
         "spool_files": len(events),

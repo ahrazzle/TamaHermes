@@ -8,6 +8,7 @@ struct OverlayConfig: Decodable {
     let y: Double?
     let width: Double?
     let height: Double?
+    let scale: Double?
     let htmlPath: String?
     let hoverX: Double?
     let hoverY: Double?
@@ -28,10 +29,11 @@ final class NonActivatingPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 }
 
-final class OverlayController: NSObject {
+final class OverlayController: NSObject, WKScriptMessageHandler {
     private let configPath: String
     private let statusPath: String
     private let sfxPath: String
+    private let interactionPath: String
     private var panel: NonActivatingPanel!
     private var webView: WKWebView!
     private var lastHTMLPath: String = ""
@@ -48,6 +50,7 @@ final class OverlayController: NSObject {
         let root = (configPath as NSString).deletingLastPathComponent
         self.statusPath = root + "/overlay-helper-status.json"
         self.sfxPath = root + "/overlay-sfx-request.json"
+        self.interactionPath = root + "/overlay-interaction-request.json"
         super.init()
         buildPanel()
         Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
@@ -80,10 +83,12 @@ final class OverlayController: NSObject {
         panel.contentView = content
 
         let configuration = WKWebViewConfiguration()
+        configuration.userContentController.add(self, name: "tamahermes")
         configuration.suppressesIncrementalRendering = false
         webView = WKWebView(frame: content.bounds, configuration: configuration)
         webView.autoresizingMask = [.width, .height]
         webView.wantsLayer = true
+        webView.setValue(false, forKey: "drawsBackground")
         webView.layer?.backgroundColor = NSColor.clear.cgColor
         if #available(macOS 12.0, *) {
             webView.underPageBackgroundColor = .clear
@@ -114,8 +119,9 @@ final class OverlayController: NSObject {
     }
 
     private func clampedFrame(for config: OverlayConfig) -> NSRect {
-        let width = max(120, config.width ?? 260)
-        let height = max(80, config.height ?? 120)
+        let scale = max(0.75, min(1.75, config.scale ?? 1.0))
+        let width = max(120, (config.width ?? 260) * scale)
+        let height = max(80, (config.height ?? 120) * scale)
         let screen = screen(forTopLeftX: config.x, topLeftY: config.y)
         let frame = screen.visibleFrame
         let rawX = config.x ?? (frame.maxX - width - 18)
@@ -194,6 +200,41 @@ final class OverlayController: NSObject {
         try? data.write(to: URL(fileURLWithPath: statusPath))
     }
 
+    private func adjustScale(by delta: Double) {
+        guard let data = FileManager.default.contents(atPath: configPath),
+              var object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return }
+        let current = (object["scale"] as? NSNumber)?.doubleValue ?? 1.0
+        object["scale"] = max(0.75, min(1.75, current + delta))
+        guard JSONSerialization.isValidJSONObject(object), let output = try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted]) else { return }
+        try? output.write(to: URL(fileURLWithPath: configPath + ".tmp"))
+        _ = try? FileManager.default.replaceItemAt(URL(fileURLWithPath: configPath), withItemAt: URL(fileURLWithPath: configPath + ".tmp"))
+    }
+
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard message.name == "tamahermes",
+              let body = message.body as? [String: Any],
+              let event = body["event"] as? String else { return }
+        if event == "scale-up" { adjustScale(by: 0.1); return }
+        if event == "scale-down" { adjustScale(by: -0.1); return }
+        guard ["care", "feed", "clean", "play", "rest"].contains(event) else { return }
+        let payload: [String: Any] = [
+            "schema": "tamahermes.native_overlay.interaction.v1",
+            "id": UUID().uuidString,
+            "event": event,
+            "updatedAt": Date().timeIntervalSince1970,
+        ]
+        guard JSONSerialization.isValidJSONObject(payload),
+              let data = try? JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted]) else { return }
+        let temporary = interactionPath + ".tmp"
+        try? data.write(to: URL(fileURLWithPath: temporary))
+        let destination = URL(fileURLWithPath: interactionPath)
+        if FileManager.default.fileExists(atPath: interactionPath) {
+            _ = try? FileManager.default.replaceItemAt(destination, withItemAt: URL(fileURLWithPath: temporary))
+        } else {
+            _ = try? FileManager.default.moveItem(at: URL(fileURLWithPath: temporary), to: destination)
+        }
+    }
+
     private func reloadIfNeeded(htmlPath: String?) {
         guard let htmlPath = htmlPath else { return }
         let url = URL(fileURLWithPath: htmlPath)
@@ -243,6 +284,7 @@ final class OverlayController: NSObject {
             return
         }
         playSfxIfNeeded()
+        panel.ignoresMouseEvents = !(config.visible == true)
         panel.setFrame(clampedFrame(for: config), display: true)
         reloadIfNeeded(htmlPath: config.htmlPath)
         let point = mouseTopLeftPoint()

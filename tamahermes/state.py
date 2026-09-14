@@ -111,7 +111,9 @@ def stage_progress(state: dict[str, Any]) -> dict[str, Any]:
         stage = str(state.get("previousActiveStage") or "child")
     floor = stage_xp_floor(stage, state)
     ceiling = evolution_thresholds(state).get(stage)
-    percent = int(ladder["percent"]) if ceiling is not None else 100
+    # The bar is level progress, not stage progress. A terminal evolution stage can
+    # last through levels 46..99; pinning it to 100% made every adult pet look maxed.
+    percent = int(ladder["percent"])
     return {
         "stage": "hibernation" if dormant else stage,
         "underlyingStage": stage if dormant else None,
