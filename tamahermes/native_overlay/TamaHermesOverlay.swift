@@ -28,10 +28,11 @@ final class NonActivatingPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 }
 
-final class OverlayController: NSObject {
+final class OverlayController: NSObject, WKScriptMessageHandler {
     private let configPath: String
     private let statusPath: String
     private let sfxPath: String
+    private let interactionPath: String
     private var panel: NonActivatingPanel!
     private var webView: WKWebView!
     private var lastHTMLPath: String = ""
@@ -48,6 +49,7 @@ final class OverlayController: NSObject {
         let root = (configPath as NSString).deletingLastPathComponent
         self.statusPath = root + "/overlay-helper-status.json"
         self.sfxPath = root + "/overlay-sfx-request.json"
+        self.interactionPath = root + "/overlay-interaction-request.json"
         super.init()
         buildPanel()
         Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
@@ -80,6 +82,7 @@ final class OverlayController: NSObject {
         panel.contentView = content
 
         let configuration = WKWebViewConfiguration()
+        configuration.userContentController.add(self, name: "tamahermes")
         configuration.suppressesIncrementalRendering = false
         webView = WKWebView(frame: content.bounds, configuration: configuration)
         webView.autoresizingMask = [.width, .height]
@@ -194,6 +197,29 @@ final class OverlayController: NSObject {
         try? data.write(to: URL(fileURLWithPath: statusPath))
     }
 
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard message.name == "tamahermes",
+              let body = message.body as? [String: Any],
+              let event = body["event"] as? String,
+              ["care", "feed", "rest"].contains(event) else { return }
+        let payload: [String: Any] = [
+            "schema": "tamahermes.native_overlay.interaction.v1",
+            "id": UUID().uuidString,
+            "event": event,
+            "updatedAt": Date().timeIntervalSince1970,
+        ]
+        guard JSONSerialization.isValidJSONObject(payload),
+              let data = try? JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted]) else { return }
+        let temporary = interactionPath + ".tmp"
+        try? data.write(to: URL(fileURLWithPath: temporary))
+        let destination = URL(fileURLWithPath: interactionPath)
+        if FileManager.default.fileExists(atPath: interactionPath) {
+            _ = try? FileManager.default.replaceItemAt(destination, withItemAt: URL(fileURLWithPath: temporary))
+        } else {
+            _ = try? FileManager.default.moveItem(at: URL(fileURLWithPath: temporary), to: destination)
+        }
+    }
+
     private func reloadIfNeeded(htmlPath: String?) {
         guard let htmlPath = htmlPath else { return }
         let url = URL(fileURLWithPath: htmlPath)
@@ -243,6 +269,7 @@ final class OverlayController: NSObject {
             return
         }
         playSfxIfNeeded()
+        panel.ignoresMouseEvents = !(config.visible == true)
         panel.setFrame(clampedFrame(for: config), display: true)
         reloadIfNeeded(htmlPath: config.htmlPath)
         let point = mouseTopLeftPoint()

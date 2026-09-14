@@ -111,7 +111,9 @@ def stage_progress(state: dict[str, Any]) -> dict[str, Any]:
         stage = str(state.get("previousActiveStage") or "child")
     floor = stage_xp_floor(stage, state)
     ceiling = evolution_thresholds(state).get(stage)
-    percent = int(ladder["percent"]) if ceiling is not None else 100
+    # The bar is level progress, not stage progress. A terminal evolution stage can
+    # last through levels 46..99; pinning it to 100% made every adult pet look maxed.
+    percent = int(ladder["percent"])
     return {
         "stage": "hibernation" if dormant else stage,
         "underlyingStage": stage if dormant else None,
@@ -448,10 +450,10 @@ def resolve_form_id(state: dict[str, Any], catalog: Catalog) -> str:
 
 
 def choose_teen_branch(state: dict[str, Any]) -> str:
-    traits = state["traits"]
-    focus = traits["focus"]
-    resilience = traits["resilience"]
-    restlessness = traits["restlessness"]
+    traits = state.get("traits") or {}
+    focus = int(traits.get("focus", 0) or 0)
+    resilience = int(traits.get("resilience", 0) or 0)
+    restlessness = int(traits.get("restlessness", 0) or 0)
     if resilience >= focus + 3:
         return "resilient"
     if restlessness >= focus + 4:
@@ -460,16 +462,16 @@ def choose_teen_branch(state: dict[str, Any]) -> str:
 
 
 def choose_adult_branch(state: dict[str, Any]) -> str:
-    stats = state["stats"]
-    traits = state["traits"]
-    counters = state["counters"]
-    if stats["energy"] < 28 or counters["quietMinutes"] >= 120:
+    stats = state.get("stats") or {}
+    traits = state.get("traits") or {}
+    counters = state.get("counters") or {}
+    if int(stats.get("energy", 100) or 0) < 28 or int(counters.get("quietMinutes", 0) or 0) >= 120:
         return "sleepy"
-    if counters["completedRuns"] >= 4 and traits["focus"] >= traits["resilience"]:
+    if int(counters.get("completedRuns", 0) or 0) >= 4 and int(traits.get("focus", 0) or 0) >= int(traits.get("resilience", 0) or 0):
         return "worker"
-    if traits["resilience"] >= traits["focus"] and counters["failedRuns"] >= 2:
+    if int(traits.get("resilience", 0) or 0) >= int(traits.get("focus", 0) or 0) and int(counters.get("failedRuns", 0) or 0) >= 2:
         return "resilient"
-    if traits["restlessness"] <= 2 and counters["quietMinutes"] >= 60:
+    if int(traits.get("restlessness", 0) or 0) <= 2 and int(counters.get("quietMinutes", 0) or 0) >= 60:
         return "quiet"
     return "calm"
 

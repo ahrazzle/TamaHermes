@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from .paths import now_iso
+from .state import stage_progress
 from .visual_state import derive_visual_state
 
 OVERLAY_SCHEMA = "tamahermes.sidecar_overlay.v1"
@@ -297,8 +298,10 @@ def status_snapshot(state: dict[str, Any]) -> dict[str, Any]:
     )
     try:
         visual = derive_visual_state(state)
+        progress = stage_progress(state)
     except Exception:  # noqa: BLE001
         visual = {}
+        progress = {}
     return {
         "displayName": state.get("displayName") or "TamaHermes",
         "lineId": state.get("lineId") or "toast",
@@ -307,6 +310,13 @@ def status_snapshot(state: dict[str, Any]) -> dict[str, Any]:
         "branch": state.get("branch"),
         "level": int(state.get("level") or 1),
         "xp": int(state.get("xp") or 0),
+        "progress": {
+            "percent": int((visual or {}).get("xpPercent") or 0),
+            "levelFloor": int(progress.get("levelFloor") or 0),
+            "levelCeiling": progress.get("levelCeiling"),
+            "xpIntoLevel": int(progress.get("xpIntoLevel") or 0),
+            "xpToNextLevel": int(progress.get("xpToNextLevel") or 0),
+        },
         "formId": state.get("formId"),
         "lastCodexState": state.get("lastCodexState") or "idle",
         "stats": {

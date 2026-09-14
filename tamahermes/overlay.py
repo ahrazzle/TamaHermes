@@ -291,6 +291,7 @@ def native_overlay_paths(home: Path) -> dict[str, Path]:
         "html": root / "overlay.html",
         "status": root / "overlay-helper-status.json",
         "sfx": root / "overlay-sfx-request.json",
+        "interaction": root / "overlay-interaction-request.json",
     }
 
 
@@ -382,6 +383,18 @@ def apply_progress_audio_for_records(records: list[dict[str, Any]], overlay_stat
     if player:
         return apply_interaction_audio("progress", overlay_state, selected=selected, player=player)
     return apply_interaction_audio("progress", overlay_state, selected=selected)
+
+
+def consume_native_interaction(home: Path) -> dict[str, Any] | None:
+    path = native_overlay_paths(home)["interaction"]
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        path.unlink(missing_ok=True)
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict) or payload.get("event") not in {"care", "feed", "rest"}:
+        return None
+    return payload
 
 
 def queue_native_sfx_request(home: Path, filename: str, volume: float) -> bool:
@@ -512,6 +525,10 @@ def render_native_overlay_html(snapshot: dict[str, Any], expanded: bool = True) 
     machine = html.escape(str(snapshot.get("machineId") or "aurora").upper())
     form = html.escape(str(snapshot.get("formId") or "").upper())
     codex_state = html.escape(str(snapshot.get("lastCodexState") or "idle").upper())
+    progress = snapshot.get("progress") or {}
+    xp_percent = max(0, min(100, int(progress.get("percent") or 0)))
+    xp_into = int(progress.get("xpIntoLevel") or 0)
+    xp_to_next = int(progress.get("xpToNextLevel") or 0)
     visual_text = " / ".join(
         [
             f"SAT {str(visual.get('satiety', '?')).upper()}",
@@ -666,6 +683,43 @@ body {{
   background: var(--ink);
   opacity: 1;
 }}
+.xp {{
+  margin: 5px 12px 0;
+  color: var(--ink);
+  font-size: 8px;
+  font-weight: 900;
+}}
+.xp-track {{
+  height: 7px;
+  margin-top: 3px;
+  border-radius: 6px;
+  background: rgba(125, 166, 125, .35);
+  overflow: hidden;
+}}
+.xp-fill {{
+  height: 100%;
+  width: {xp_percent}%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--cyan), var(--accent));
+  transition: width 180ms ease;
+}}
+.actions {{
+  display: flex;
+  gap: 5px;
+  padding: 6px 12px 7px;
+}}
+.actions button {{
+  border: 1px solid rgba(135, 242, 220, .55);
+  border-radius: 7px;
+  padding: 5px 8px;
+  color: var(--ink);
+  background: rgba(9, 42, 47, .88);
+  font: 800 8px Menlo, Monaco, monospace;
+  cursor: pointer;
+}}
+.actions button:hover {{ background: rgba(23, 78, 82, .95); border-color: var(--accent); }}
+.actions button:active {{ transform: translateY(1px); }}
+.flash {{ color: var(--accent); min-height: 10px; font-size: 8px; padding: 0 12px; }}
 .line {{
   padding: 3px 12px 0;
   color: var(--ink);
@@ -730,13 +784,32 @@ body {{
         <div class="cell"><span>RESIL</span><strong>{int(traits.get("resilience", 0))}</strong></div>
         <div class="cell"><span>RESTLESS</span><strong>{int(traits.get("restlessness", 0))}</strong></div>
       </div>
+      <div class="xp">LEVEL {int(snapshot["level"])} · {xp_percent}% · {xp_into}/{xp_to_next or "MAX"} XP
+        <div class="xp-track"><div class="xp-fill"></div></div>
+      </div>
       <div class="line">{visual_text}</div>
       <div class="line">WORK {int(counters.get("workRuns", 0))} / OK {int(counters["completedRuns"])} / FAIL {int(counters["failedRuns"])} / REV {int(counters["reviews"])}</div>
       <div class="line">TOKENS {int(counters.get("totalTokens", 0))} / SAMPLES {int(counters.get("tokenSamples", 0))} / IDLE {int(counters.get("idleMinutes", 0))}M</div>
       <div class="line latest">{latest_name}: {latest}</div>
+      <div class="actions" aria-label="Pet care actions">
+        <button data-event="care">CARE</button>
+        <button data-event="feed">FEED</button>
+        <button data-event="rest">BED</button>
+      </div>
+      <div class="flash" id="flash" aria-live="polite"></div>
       <div class="footer"><span><i class="dot"></i>{codex_state}</span><span>{form}</span></div>
     </section>
   </main>
+  <script>
+    document.querySelectorAll('[data-event]').forEach((button) => {{
+      button.addEventListener('click', () => {{
+        const handler = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.tamahermes;
+        if (handler) handler.postMessage({{event: button.dataset.event}});
+        const flash = document.getElementById('flash');
+        if (flash) flash.textContent = button.textContent + ' queued';
+      }});
+    }});
+  </script>
 </body>
 </html>
 """
@@ -848,6 +921,17 @@ def run_native_overlay_loop(home: Path, root: Path, interval: float = 0.4) -> No
             overlay_state = load_overlay_state(overlay_file)
             surface_active, bounds = update_surface_activity(global_state, overlay_state, time.time())
             if selected:
+                interaction = consume_native_interaction(home)
+                if interaction:
+                    record = {
+                        "event": interaction["event"],
+                        "id": interaction.get("id"),
+                        "source": "native-overlay",
+                        "amount": 1,
+                        "at": interaction.get("updatedAt"),
+                    }
+                    apply_bridge_event(catalog, state_path, record)
+                    refresh_installed_pet_for_records([record], catalog, state_path, home)
                 try:
                     now = time.monotonic()
                     if now - last_codex_event_sync >= 1.0:

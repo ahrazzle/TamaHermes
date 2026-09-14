@@ -21,6 +21,7 @@ from tamahermes.feedback import (
 )
 from tamahermes.overlay import (
     apply_native_interaction_audio,
+    consume_native_interaction,
     apply_progress_audio_for_records,
     queue_native_sfx_request,
     apply_nonactivating_window_style,
@@ -543,6 +544,7 @@ class M10SupervisorGuardTests(unittest.TestCase):
                 "lifeStage": "child",
                 "branch": None,
                 "xp": 54,
+                "progress": {"percent": 56, "xpIntoLevel": 5, "xpToNextLevel": 9},
                 "stats": {"energy": 80, "health": 91, "bond": 20, "mood": 77, "mess": 32},
                 "traits": {"focus": 12, "resilience": 8, "restlessness": 1, "care": 2},
                 "visual": {"alert": "review", "satiety": "hungry", "energy": "ok", "health": "ok"},
@@ -558,6 +560,11 @@ class M10SupervisorGuardTests(unittest.TestCase):
         self.assertIn("WORK 7 / OK 4 / FAIL 1 / REV 2", html)
         self.assertIn("TOKENS 1234 / SAMPLES 0 / IDLE 0M", html)
         self.assertIn("SAT HUNGRY / ENG OK / HP OK / ALERT REVIEW", html)
+        self.assertIn("LEVEL 3 · 56% · 5/9 XP", html)
+        self.assertIn('data-event="care"', html)
+        self.assertIn('data-event="feed"', html)
+        self.assertIn('data-event="rest"', html)
+        self.assertIn("messageHandlers.tamahermes", html)
         self.assertIn(".footer {\n  margin-top: auto;", html)
         self.assertIn("grid-template-columns: repeat(3, minmax(0, 1fr));", html)
         self.assertNotIn(".footer {\n  position: absolute;", html)
@@ -572,6 +579,16 @@ class M10SupervisorGuardTests(unittest.TestCase):
         self.assertIn("overlay-sfx-request.json", swift)
         self.assertIn("NSSound", swift)
         self.assertIn("lastSfxPlayedAt", swift)
+
+    def test_native_interaction_request_is_consumed_once(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            path = home / "tamahermes" / "native-overlay"
+            path.mkdir(parents=True)
+            request = path / "overlay-interaction-request.json"
+            request.write_text(json.dumps({"event": "feed", "id": "one"}), encoding="utf-8")
+            self.assertEqual(consume_native_interaction(home)["event"], "feed")
+            self.assertIsNone(consume_native_interaction(home))
 
     def test_native_overlay_config_carries_hover_gate(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

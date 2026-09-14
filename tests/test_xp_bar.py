@@ -108,7 +108,7 @@ class StageProgressTests(unittest.TestCase):
             (5040, "child", 23, 0),
             (7877, "child", 28, 50),
             (10006, "teen", 32, 0),
-            (20158, "adult", 45, 100),
+            (20158, "adult", 45, 0),
         ]
         for xp, stage, level, percent in cases:
             with self.subTest(xp=xp):
@@ -142,6 +142,14 @@ class StageProgressTests(unittest.TestCase):
         self.assertEqual(at_gate["lifeStage"], "adult")
         self.assertTrue(stage_progress(at_gate)["terminal"])
         self.assertFalse(stage_progress(at_gate)["levelMaxed"])
+
+    def test_terminal_stage_still_uses_the_current_level_band(self) -> None:
+        _catalog, adult = grown(33_318)
+        progress = stage_progress(adult)
+        self.assertEqual(progress["stage"], "adult")
+        self.assertEqual(progress["level"], 57)
+        self.assertEqual(progress["percent"], 56)
+        self.assertLess(progress["percent"], 100)
 
     def test_a_dormant_pet_still_shows_the_progress_it_has_made(self) -> None:
         """Sleeping is a condition, not a reset.
