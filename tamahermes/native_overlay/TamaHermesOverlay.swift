@@ -8,6 +8,7 @@ struct OverlayConfig: Decodable {
     let y: Double?
     let width: Double?
     let height: Double?
+    let scale: Double?
     let htmlPath: String?
     let hoverX: Double?
     let hoverY: Double?
@@ -118,8 +119,9 @@ final class OverlayController: NSObject, WKScriptMessageHandler {
     }
 
     private func clampedFrame(for config: OverlayConfig) -> NSRect {
-        let width = max(120, config.width ?? 260)
-        let height = max(80, config.height ?? 120)
+        let scale = max(0.75, min(1.75, config.scale ?? 1.0))
+        let width = max(120, (config.width ?? 260) * scale)
+        let height = max(80, (config.height ?? 120) * scale)
         let screen = screen(forTopLeftX: config.x, topLeftY: config.y)
         let frame = screen.visibleFrame
         let rawX = config.x ?? (frame.maxX - width - 18)
@@ -198,11 +200,23 @@ final class OverlayController: NSObject, WKScriptMessageHandler {
         try? data.write(to: URL(fileURLWithPath: statusPath))
     }
 
+    private func adjustScale(by delta: Double) {
+        guard let data = FileManager.default.contents(atPath: configPath),
+              var object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return }
+        let current = (object["scale"] as? NSNumber)?.doubleValue ?? 1.0
+        object["scale"] = max(0.75, min(1.75, current + delta))
+        guard JSONSerialization.isValidJSONObject(object), let output = try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted]) else { return }
+        try? output.write(to: URL(fileURLWithPath: configPath + ".tmp"))
+        _ = try? FileManager.default.replaceItemAt(URL(fileURLWithPath: configPath), withItemAt: URL(fileURLWithPath: configPath + ".tmp"))
+    }
+
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         guard message.name == "tamahermes",
               let body = message.body as? [String: Any],
-              let event = body["event"] as? String,
-              ["care", "feed", "rest"].contains(event) else { return }
+              let event = body["event"] as? String else { return }
+        if event == "scale-up" { adjustScale(by: 0.1); return }
+        if event == "scale-down" { adjustScale(by: -0.1); return }
+        guard ["care", "feed", "clean", "play", "rest"].contains(event) else { return }
         let payload: [String: Any] = [
             "schema": "tamahermes.native_overlay.interaction.v1",
             "id": UUID().uuidString,

@@ -594,6 +594,26 @@ body {{
 .wrap::before {{
   display: none;
 }}
+.scale-controls {{
+  position: absolute;
+  z-index: 4;
+  top: 4px;
+  right: 20px;
+  display: flex;
+  gap: 3px;
+}}
+.scale-controls button {{
+  width: 24px;
+  height: 20px;
+  border: 1px solid rgba(135,242,220,.65);
+  border-radius: 6px;
+  color: var(--ink);
+  background: rgba(9,42,47,.94);
+  font: 900 10px Menlo, Monaco, monospace;
+  cursor: pointer;
+}}
+.scale-controls button:hover {{ border-color: var(--accent); color: var(--accent); }}
+
 .lcd {{
   position: absolute;
   left: 18px;
@@ -769,6 +789,10 @@ body {{
 </head>
 <body>
   <main class="wrap" aria-label="TamaHermes status">
+    <div class="scale-controls" aria-label="HUD scale">
+      <button data-event="scale-down" aria-label="Scale HUD down">−</button>
+      <button data-event="scale-up" aria-label="Scale HUD up">+</button>
+    </div>
     <section class="lcd">
       <div class="top"><span>{title}</span><span class="pill">{line}/{machine}</span></div>
       <div class="grid">
@@ -879,9 +903,11 @@ def write_native_overlay_config(
     paths = native_overlay_paths(home)
     paths["root"].mkdir(parents=True, exist_ok=True)
     frame = frame or {"x": None, "y": None, "width": 376, "height": 226}
+    existing = read_json_object(paths["config"])
     payload = {
         "schema": "tamahermes.native_overlay.config.v1",
         "visible": visible,
+        "scale": max(0.75, min(1.75, float(existing.get("scale") or 1.0))),
         "x": frame.get("x"),
         "y": frame.get("y"),
         "width": frame.get("width"),
