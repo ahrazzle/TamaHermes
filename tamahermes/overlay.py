@@ -394,6 +394,22 @@ def apply_progress_audio_for_records(records: list[dict[str, Any]], overlay_stat
     return apply_interaction_audio("progress", overlay_state, selected=selected)
 
 
+def spool_native_pet_action(event: str) -> bool:
+    """Send a green-HUD action through the native pet animation mailbox."""
+    action = "clean" if event == "care" else event
+    if action not in {"clean", "feed", "play"}:
+        return False
+    root = Path.home() / ".petdex" / "runtime" / "evo-queue"
+    root.mkdir(parents=True, exist_ok=True)
+    payload = {"event": "care", "action": action, "agent_source": "evopet"}
+    path = root / f"{os.getpid()}-{time.time_ns()}-{action}-care.json"
+    try:
+        path.write_text(json.dumps(payload, separators=(",", ":")) + "\n", encoding="utf-8")
+    except OSError:
+        return False
+    return True
+
+
 def consume_native_interaction(home: Path) -> dict[str, Any] | None:
     path = native_overlay_paths(home)["interaction"]
     try:
@@ -401,7 +417,7 @@ def consume_native_interaction(home: Path) -> dict[str, Any] | None:
         path.unlink(missing_ok=True)
     except (FileNotFoundError, OSError, json.JSONDecodeError):
         return None
-    if not isinstance(payload, dict) or payload.get("event") not in {"care", "feed", "rest"}:
+    if not isinstance(payload, dict) or payload.get("event") not in {"care", "feed", "clean", "play", "rest"}:
         return None
     return payload
 
@@ -957,6 +973,7 @@ def run_native_overlay_loop(home: Path, root: Path, interval: float = 0.4) -> No
                         "amount": 1,
                         "at": interaction.get("updatedAt"),
                     }
+                    spool_native_pet_action(str(interaction["event"]))
                     apply_bridge_event(catalog, state_path, record)
                     refresh_installed_pet_for_records([record], catalog, state_path, home)
                 try:
