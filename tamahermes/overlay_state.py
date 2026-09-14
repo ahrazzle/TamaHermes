@@ -86,6 +86,7 @@ def default_overlay_state() -> dict[str, Any]:
         "audioPrimed": False,
         "muted": False,
         "quietMode": False,
+        "hudHidden": False,
         "quietHours": None,
         "lastInteractionSfx": None,
         "lastAudioError": None,

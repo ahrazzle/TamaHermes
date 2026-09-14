@@ -513,6 +513,12 @@ def cmd_overlay(args: argparse.Namespace) -> None:
     elif args.action == "normal":
         state["quietMode"] = False
         changed = True
+    elif args.action == "hide":
+        state["hudHidden"] = True
+        changed = True
+    elif args.action == "show":
+        state["hudHidden"] = False
+        changed = True
     elif args.action == "stop":
         report["stopped"] = stop_overlay_process(home)
     elif args.action == "start":
@@ -534,6 +540,7 @@ def cmd_overlay(args: argparse.Namespace) -> None:
             "selected": is_tamahermes_selected(global_state),
             "muted": bool(state.get("muted")),
             "quietMode": bool(state.get("quietMode")),
+            "hudHidden": bool(state.get("hudHidden")),
             "sidecarPid": sidecar_pid,
             "supervisorPid": supervisor_pid,
             "lastSeenEventId": state.get("lastSeenEventId"),
@@ -904,7 +911,7 @@ def build_parser() -> argparse.ArgumentParser:
     watch.set_defaults(func=cmd_watch)
 
     overlay = sub.add_parser("overlay", help="Control the M10 sidecar overlay and SFX.")
-    overlay.add_argument("action", choices=["status", "mute", "unmute", "quiet", "normal", "start", "stop"], nargs="?", default="status")
+    overlay.add_argument("action", choices=["status", "mute", "unmute", "quiet", "normal", "hide", "show", "start", "stop"], nargs="?", default="status")
     overlay.set_defaults(func=cmd_overlay)
 
     bridge = sub.add_parser("bridge", help="Read plugin/automation-friendly event JSONL and update the growth ledger.")

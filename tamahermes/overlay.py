@@ -245,7 +245,7 @@ class TamaHermesOverlayApp:
         selected = is_tamahermes_selected(global_state)
         overlay_state = load_overlay_state(self.overlay_state_file)
         surface_active, bounds = update_surface_activity(global_state, overlay_state, time.time())
-        if not selected or not surface_active:
+        if not hud_visible_now(selected, surface_active, overlay_state):
             if self.was_visible:
                 self.window.withdraw()
                 self.was_visible = False
@@ -401,9 +401,41 @@ def consume_native_interaction(home: Path) -> dict[str, Any] | None:
         path.unlink(missing_ok=True)
     except (FileNotFoundError, OSError, json.JSONDecodeError):
         return None
-    if not isinstance(payload, dict) or payload.get("event") not in {"care", "feed", "rest", "clean", "play"}:
+    if not isinstance(payload, dict) or payload.get("event") not in {
+        "care",
+        "feed",
+        "rest",
+        "clean",
+        "play",
+        "hide",
+        "show",
+    }:
         return None
     return payload
+
+
+def apply_visibility_interaction(overlay_state: dict[str, Any], event: Any) -> bool | None:
+    """Flip the persistent HUD flag for a hide/show interaction.
+
+    Returns True when the flag changed, False when it already had that value,
+    and None when *event* is not a visibility event.
+    """
+    if event == "hide":
+        changed = not overlay_state.get("hudHidden")
+        overlay_state["hudHidden"] = True
+        return changed
+    if event == "show":
+        changed = bool(overlay_state.get("hudHidden"))
+        overlay_state["hudHidden"] = False
+        return changed
+    return None
+
+
+def hud_visible_now(selected: bool, surface_active: bool, overlay_state: dict[str, Any]) -> bool:
+    """Whether the HUD panel may show: selected, surfaced, and not user-hidden."""
+    if overlay_state.get("hudHidden"):
+        return False
+    return bool(selected and surface_active)
 
 
 def queue_native_sfx_request(home: Path, filename: str, volume: float) -> bool:
@@ -613,6 +645,7 @@ body {{
   cursor: pointer;
 }}
 .scale-controls button:hover {{ border-color: var(--accent); color: var(--accent); }}
+.scale-controls button.wide {{ width: auto; padding: 0 7px; }}
 
 .lcd {{
   position: absolute;
@@ -806,6 +839,7 @@ body {{
     <div class="scale-controls" aria-label="HUD scale">
       <button data-event="scale-down" aria-label="Scale HUD down">−</button>
       <button data-event="scale-up" aria-label="Scale HUD up">+</button>
+      <button data-event="hide" class="wide" aria-label="Hide HUD (re-show with: tamahermes overlay show)">HIDE</button>
     </div>
     <section class="lcd">
       <div class="top"><span>{title}</span><span class="pill">{line}/{machine}</span></div>
@@ -980,15 +1014,18 @@ def run_native_overlay_loop(home: Path, root: Path, interval: float = 0.4) -> No
             if selected:
                 interaction = consume_native_interaction(home)
                 if interaction:
-                    record = {
-                        "event": interaction["event"],
-                        "id": interaction.get("id"),
-                        "source": "native-overlay",
-                        "amount": 1,
-                        "at": interaction.get("updatedAt"),
-                    }
-                    apply_bridge_event(catalog, state_path, record)
-                    refresh_installed_pet_for_records([record], catalog, state_path, home)
+                    if apply_visibility_interaction(overlay_state, interaction.get("event")) is not None:
+                        save_overlay_state(overlay_file, overlay_state)
+                    else:
+                        record = {
+                            "event": interaction["event"],
+                            "id": interaction.get("id"),
+                            "source": "native-overlay",
+                            "amount": 1,
+                            "at": interaction.get("updatedAt"),
+                        }
+                        apply_bridge_event(catalog, state_path, record)
+                        refresh_installed_pet_for_records([record], catalog, state_path, home)
                 try:
                     now = time.monotonic()
                     if now - last_codex_event_sync >= 1.0:
@@ -1028,7 +1065,8 @@ def run_native_overlay_loop(home: Path, root: Path, interval: float = 0.4) -> No
                     snapshot = status_snapshot(state)
                     hover = native_overlay_hover_rect(bounds) if surface_active else None
                     announcement = active_evolution_announcement(overlay_state, time.time())
-                    if announcement:
+                    hud_shown = hud_visible_now(selected, surface_active, overlay_state)
+                    if announcement and hud_shown:
                         paths["html"].write_text(render_evolution_announcement_html(str(announcement.get("message") or "")), encoding="utf-8")
                         write_native_overlay_config(
                             home,
@@ -1037,7 +1075,7 @@ def run_native_overlay_loop(home: Path, root: Path, interval: float = 0.4) -> No
                             html_path=paths["html"],
                             hover=None,
                         )
-                    elif surface_active:
+                    elif hud_shown:
                         paths["html"].write_text(render_native_overlay_html(snapshot, expanded=True), encoding="utf-8")
                         write_native_overlay_config(
                             home,
