@@ -833,22 +833,23 @@ html, body {{
   user-select: none;
 }}
 body {{
-  -webkit-font-smoothing: none;
+  -webkit-font-smoothing: antialiased;
 }}
 .bubble {{
   position: absolute;
-  inset: 10px;
+  inset: 0;
   display: grid;
   place-items: center;
-  border-radius: 18px;
-  color: #092a2f;
-  background:
-    radial-gradient(circle at 18% 14%, rgba(255,255,255,.94) 0 9%, transparent 22%),
-    linear-gradient(135deg, rgba(215,255,241,.94), rgba(135,242,220,.88) 46%, rgba(255,216,109,.82));
-  border: 1px solid rgba(255,255,255,.86);
-  box-shadow: inset 0 1px 0 rgba(255,255,255,.78), 0 12px 34px rgba(23, 20, 33, .24);
-  backdrop-filter: blur(16px) saturate(1.45);
-  -webkit-backdrop-filter: blur(16px) saturate(1.45);
+  border-radius: 12px;
+  color: #d8f8aa;
+  background: linear-gradient(180deg, #0e3c40, #092a2f);
+  border: 2px solid rgba(8, 16, 24, .9);
+  box-shadow: 0 0 26px rgba(135, 242, 220, .32), inset 0 0 0 1px rgba(216,248,170,.18);
+  animation: levelPulse 1s ease-in-out infinite alternate;
+}}
+@keyframes levelPulse {{
+  from {{ box-shadow: 0 0 12px rgba(135, 242, 220, .20), inset 0 0 0 1px rgba(216,248,170,.12); }}
+  to {{ box-shadow: 0 0 30px rgba(255,216,109,.62), inset 0 0 0 1px rgba(216,248,170,.34); }}
 }}
 .message {{
   max-width: 232px;
@@ -956,6 +957,18 @@ def run_native_overlay_loop(home: Path, root: Path, interval: float = 0.4) -> No
                 except Exception:  # noqa: BLE001
                     state = None
                 if state:
+                    current_level = int(state.get("level") or 0)
+                    previous_level = overlay_state.get("lastRenderedLevel")
+                    if isinstance(previous_level, int) and current_level > previous_level:
+                        now_epoch = time.time()
+                        overlay_state["evolutionAnnouncement"] = {
+                            "schema": "tamahermes.level_up_announcement.v1",
+                            "formId": state.get("lifeStage"),
+                            "message": f"LEVEL UP!  L{current_level}",
+                            "createdAtEpoch": now_epoch,
+                            "expiresAtEpoch": now_epoch + 3.0,
+                        }
+                    overlay_state["lastRenderedLevel"] = current_level
                     snapshot = status_snapshot(state)
                     hover = native_overlay_hover_rect(bounds) if surface_active else None
                     announcement = active_evolution_announcement(overlay_state, time.time())
