@@ -189,6 +189,18 @@ class M10OverlayStateTests(unittest.TestCase):
 
         self.assertEqual(snapshot["latestEvent"]["event"], "prompt_sent")
 
+    def test_status_snapshot_derives_level_and_percent_from_same_xp(self) -> None:
+        snapshot = status_snapshot({
+            "xp": 34877,
+            "level": 1,  # stale persisted field must not win
+            "lifeStage": "adult",
+            "stats": {},
+            "traits": {},
+            "counters": {},
+        })
+        self.assertEqual(snapshot["level"], 58)
+        self.assertEqual(snapshot["progress"]["percent"], 87)
+
     def test_evolution_announcement_expires_and_renders(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp)

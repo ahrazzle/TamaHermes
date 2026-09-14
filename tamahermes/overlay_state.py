@@ -308,10 +308,10 @@ def status_snapshot(state: dict[str, Any]) -> dict[str, Any]:
         "machineId": state.get("machineId") or "aurora",
         "lifeStage": state.get("lifeStage") or "unknown",
         "branch": state.get("branch"),
-        "level": int(state.get("level") or 1),
+        "level": int(progress.get("level") or 1),
         "xp": int(state.get("xp") or 0),
         "progress": {
-            "percent": int((visual or {}).get("xpPercent") or 0),
+            "percent": int(progress.get("percent") or 0),
             "levelFloor": int(progress.get("levelFloor") or 0),
             "levelCeiling": progress.get("levelCeiling"),
             "xpIntoLevel": int(progress.get("xpIntoLevel") or 0),
