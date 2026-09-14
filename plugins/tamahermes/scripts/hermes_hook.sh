@@ -3,10 +3,8 @@
 # Prefers an explicit interpreter, then the repo's own venv, then PATH python3.
 set -eu
 
-# This script is also invoked through ~/.petdex/bin/petdex-hook. Resolve from
-# the installed target path rather than $0, which remains the symlink path on
-# macOS and otherwise makes the Python entry point appear to be missing.
-SCRIPT_DIR=/Users/kethuda/evopet-pet/plugins/tamahermes/scripts
+# Resolve the script directory from the actual file path, not $0 (which may be a symlink).
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 REPO_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/../../.." && pwd)
 
 if [ -n "${TAMAHERMES_PY:-}" ]; then

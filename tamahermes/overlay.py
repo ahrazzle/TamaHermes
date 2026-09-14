@@ -401,7 +401,7 @@ def consume_native_interaction(home: Path) -> dict[str, Any] | None:
         path.unlink(missing_ok=True)
     except (FileNotFoundError, OSError, json.JSONDecodeError):
         return None
-    if not isinstance(payload, dict) or payload.get("event") not in {"care", "feed", "rest"}:
+    if not isinstance(payload, dict) or payload.get("event") not in {"care", "feed", "rest", "clean", "play"}:
         return None
     return payload
 
