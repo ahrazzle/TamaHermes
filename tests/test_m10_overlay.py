@@ -566,7 +566,7 @@ class M10SupervisorGuardTests(unittest.TestCase):
             expanded=True,
         )
         self.assertIn("background: transparent", html)
-        self.assertIn("backdrop-filter: blur", html)
+        self.assertNotIn("backdrop-filter: blur", html)
         self.assertIn("class=\"lcd\"", html)
         self.assertIn("TamaHermes L3 CHILD", html)
         self.assertIn("WORK 7 / OK 4 / FAIL 1 / REV 2", html)
