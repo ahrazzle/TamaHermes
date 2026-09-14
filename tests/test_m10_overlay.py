@@ -575,6 +575,8 @@ class M10SupervisorGuardTests(unittest.TestCase):
         self.assertIn("LEVEL 3 · 56% · 5/9 XP", html)
         self.assertIn('data-event="care"', html)
         self.assertIn('data-event="feed"', html)
+        self.assertIn('data-event="clean"', html)
+        self.assertIn('data-event="play"', html)
         self.assertIn('data-event="rest"', html)
         self.assertIn("messageHandlers.tamahermes", html)
         self.assertIn(".footer {\n  margin-top: auto;", html)

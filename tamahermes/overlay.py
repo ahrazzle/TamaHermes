@@ -794,6 +794,8 @@ body {{
       <div class="actions" aria-label="Pet care actions">
         <button data-event="care">CARE</button>
         <button data-event="feed">FEED</button>
+        <button data-event="clean">CLEAN</button>
+        <button data-event="play">PLAY</button>
         <button data-event="rest">BED</button>
       </div>
       <div class="flash" id="flash" aria-live="polite"></div>
@@ -967,10 +969,10 @@ def run_native_overlay_loop(home: Path, root: Path, interval: float = 0.4) -> No
                         paths["html"].write_text(render_native_overlay_html(snapshot, expanded=True), encoding="utf-8")
                         write_native_overlay_config(
                             home,
-                            visible=bool(hover),
+                            visible=True,
                             frame=native_overlay_frame(bounds),
                             html_path=paths["html"],
-                            hover=hover,
+                            hover=None,
                         )
                     else:
                         write_native_overlay_config(home, visible=False)
