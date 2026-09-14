@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -147,7 +147,7 @@ EVENT_ALIASES = {
     "token_count": "token_usage",
     "usage": "token_usage",
     "idle": "idle_minute",
-    "clean": "care",
+    "clean": "clean",
     "feed": "care",
     "play": "care",
 }
@@ -213,6 +213,47 @@ def _int_value(value: Any, default: int = 0) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+# CLEAN enforces a "one second per mess point" cooldown (full mess = 100 s): after a
+# clean press the pet is unavailable -- it can neither earn XP nor perform any other
+# action -- until the window expires. ``cleanCooldownUntil`` rides the ledger so the
+# window survives a restart; ``cleanLastMess`` remembers the mess that started it.
+# Keys are always present (``None`` when no cooldown is active) so older ledgers load
+# cleanly and callers never special-case the absence.
+CLEAN_COOLDOWN_DEFAULT = {"cleanCooldownUntil": None, "cleanLastMess": None}
+
+
+def clean_cooldown_expires_at(state: dict[str, Any]) -> str | None:
+    value = state.get("cleanCooldownUntil")
+    if isinstance(value, str) and value:
+        parsed = parse_iso_timestamp(value)
+        return value if parsed is not None else None
+    return None
+
+
+def clean_cooldown_remaining_seconds(state: dict[str, Any], at: str | None = None) -> int:
+    """Seconds still blocked by the clean cooldown at *at* (0 when not in cooldown)."""
+    until_raw = clean_cooldown_expires_at(state)
+    if until_raw is None:
+        return 0
+    until = parse_iso_timestamp(until_raw)
+    now = parse_iso_timestamp(at) if at else None
+    if until is None:
+        return 0
+    if now is None:
+        now = datetime.now(timezone.utc)
+    return max(0, int((until - now).total_seconds()))
+
+
+def _iso(dt: datetime) -> str:
+    """UTC ISO-8601 with 'Z' suffix, matching ``paths.now_iso`` and the drain's stamps."""
+    return dt.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _add_seconds(raw: str, seconds: int) -> str:
+    parsed = parse_iso_timestamp(raw) or datetime.now(timezone.utc)
+    return _iso(parsed.astimezone(timezone.utc) + timedelta(seconds=seconds))
 
 
 def parse_iso_timestamp(value: Any) -> datetime | None:
@@ -358,6 +399,8 @@ def default_state(catalog: Catalog, line_id: str = "toast", machine_id: str = "a
         "lastInstalledVisualState": None,
         "lastInstalledVisualHash": None,
         "recentEvents": [],
+        "cleanCooldownUntil": None,
+        "cleanLastMess": None,
     }
 
 
@@ -405,6 +448,8 @@ def migrate_state(state: dict[str, Any], catalog: Catalog) -> None:
     state.setdefault("lastInstalledVisualHash", None)
     state.setdefault("previousActiveStage", state["lifeStage"])
     state.setdefault("previousActiveBranch", state.get("branch"))
+    for key, value in CLEAN_COOLDOWN_DEFAULT.items():
+        state.setdefault(key, value)
     for key, value in {"energy": 82, "mood": 72, "health": 100, "bond": 0, "mess": 0}.items():
         state["stats"].setdefault(key, value)
     for key in ["focus", "resilience", "restlessness", "care"]:
@@ -628,15 +673,108 @@ def maybe_evolve(state: dict[str, Any], catalog: Catalog) -> dict[str, Any]:
     return {"evolved": before != state["formId"], "from": before, "to": state["formId"]}
 
 
+# Events that are firewalled while a clean cooldown is active. The pet "cannot earn XP"
+# and "cannot perform any other action" until the window expires, so every XP-earning
+# event and every care action is refused; passive telemetry (``token_usage``,
+# ``idle_minute``, ``drag``) and the automatic passive-rest catch-up are not user actions
+# and do not earn XP, so they keep flowing.
+_COOLDOWN_GATED_ACTIONS = frozenset({"clean", "care", "feed", "play"})
+
+
+def _event_gated_by_cooldown(event: str) -> bool:
+    deltas = EVENT_DELTAS.get(event)
+    if deltas and int(deltas.get("xp") or 0) != 0:
+        return True
+    return event in _COOLDOWN_GATED_ACTIONS
+
+
+def _blocked_result(state: dict[str, Any], event: str, timestamp: str, remaining: int) -> dict[str, Any]:
+    """An unchanged copy of *state* plus the cooldown signal -- the event did not land."""
+    form = state.get("formId")
+    return {
+        "state": deepcopy(state),
+        "event": event,
+        "cooldown": True,
+        "cooldownRemaining": remaining,
+        "evolution": {"evolved": False, "from": form, "to": form},
+    }
+
+
+def _apply_clean(state: dict[str, Any], catalog: Catalog, amount: int, timestamp: str) -> dict[str, Any]:
+    """CLEAN: capture M, reset mess to 0, and start an M-second cooldown.
+
+    At mess 0 CLEAN is a strict no-op with no cooldown (the M=0 contract). Otherwise it
+    is still a care action -- it feeds and strengthens exactly as ``care`` did -- but it
+    resets ``mess`` to zero instead of subtracting 2, remembers the mess it cleaned as
+    ``cleanLastMess``, and sets ``cleanCooldownUntil`` ``M * amount`` seconds out.
+    """
+    next_state = deepcopy(state)
+    mess = _int_value(next_state["stats"].get("mess"), 0)
+    if mess <= 0:
+        next_state["updatedAt"] = timestamp
+        return {
+            "state": next_state,
+            "event": "clean",
+            "cooldown": False,
+            "cooldownRemaining": 0,
+            "evolution": {"evolved": False, "from": next_state.get("formId"), "to": next_state.get("formId")},
+        }
+
+    deltas = EVENT_DELTAS["care"]
+    for key, delta in deltas.items():
+        total = delta * amount
+        if key == "xp":
+            next_state["xp"] = max(0, next_state["xp"] + total)
+        elif key == "mess":
+            next_state["stats"]["mess"] = 0
+        elif key in next_state["stats"]:
+            next_state["stats"][key] = clamp(next_state["stats"][key] + total)
+        elif key in next_state["traits"]:
+            next_state["traits"][key] = max(0, next_state["traits"][key] + total)
+        else:
+            next_state["counters"][key] = max(0, next_state["counters"].get(key, 0) + total)
+    # Care semantics: decay a care mistake by the amount and clear the neglect clock.
+    next_state["counters"]["idleMinutes"] = 0
+    next_state["counters"]["careMistakes"] = max(0, next_state["counters"].get("careMistakes", 0) - amount)
+    next_state["cleanLastMess"] = mess
+    next_state["cleanCooldownUntil"] = _add_seconds(timestamp, mess * amount)
+    next_state["lastCodexState"] = "waving"
+    next_state["recentEvents"] = (
+        [{"event": "clean", "amount": amount, "at": timestamp}] + next_state["recentEvents"]
+    )[:12]
+    evolution = maybe_evolve(next_state, catalog)
+    next_state["updatedAt"] = timestamp
+    return {
+        "state": next_state,
+        "event": "clean",
+        "cooldown": False,
+        "cooldownRemaining": 0,
+        "evolution": evolution,
+    }
+
+
 def apply_event(state: dict[str, Any], catalog: Catalog, event_name: str, amount: int = 1, at: str | None = None) -> dict[str, Any]:
     event = normalize_event(event_name)
+    timestamp = at or now_iso()
+
+    if event == "clean":
+        remaining = clean_cooldown_remaining_seconds(state, timestamp)
+        if remaining > 0:
+            return _blocked_result(state, event, timestamp, remaining)
+        return _apply_clean(state, catalog, max(1, amount), timestamp)
+
     if event not in EVENT_DELTAS:
         known = ", ".join(sorted(EVENT_DELTAS))
         raise ValueError(f"unknown event {event_name!r}; known events: {known}")
 
     next_state = deepcopy(state)
-    timestamp = at or now_iso()
     amount = max(1, amount)
+
+    # While the clean cooldown is active the pet can neither earn XP nor perform an action.
+    remaining = clean_cooldown_remaining_seconds(state, timestamp)
+    if remaining > 0 and _event_gated_by_cooldown(event):
+        return _blocked_result(state, event, timestamp, remaining)
+
     deltas = EVENT_DELTAS[event]
     for key, delta in deltas.items():
         total = delta * amount

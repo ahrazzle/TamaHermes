@@ -98,19 +98,24 @@ class SharedLedgerCare(unittest.TestCase):
 
     def _care(self, action: str = "clean", *, apply: bool = True):
         (self.spool / "1-1-1-care.json").write_text(care_spool_body(action))
-        return run(self.spool, self.state_file, self.consumed, apply=apply, hermes_root=self.hermes)
+        now = "2026-09-11T00:00:00Z"
+        return run(self.spool, self.state_file, self.consumed, apply=apply, hermes_root=self.hermes, now=now)
 
     def _combined(self) -> dict:
         return json.loads(self.state_file.read_text())
 
-    def test_care_lowers_mess_and_decays_care_mistakes(self) -> None:
+    def test_clean_resets_mess_and_starts_cooldown(self) -> None:
         self._seed(mess=40, care_mistakes=5)
         report = self._care("clean")
         self.assertEqual(report["care"], {"clean": 1})
         ledger = self._combined()
-        self.assertEqual(ledger["stats"]["mess"], 38)
+        # CLEAN resets mess to 0 in one press (the bug fix), not subtract 2.
+        self.assertEqual(ledger["stats"]["mess"], 0)
         self.assertEqual(ledger["counters"]["careMistakes"], 4)
         self.assertEqual(ledger["xp"], 53)
+        # Clean captures the pre-clean mess and starts an M-second cooldown.
+        self.assertEqual(ledger["cleanLastMess"], 40)
+        self.assertEqual(ledger["cleanCooldownUntil"], "2026-09-11T00:00:40Z")
         # The other half of care is real: it feeds and strengthens.
         self.assertEqual(ledger["stats"]["energy"], 65)
         self.assertEqual(ledger["stats"]["mood"], 55)
@@ -128,8 +133,9 @@ class SharedLedgerCare(unittest.TestCase):
                 self.assertEqual(ledger["counters"]["careMistakes"], 4)
 
     def test_clamps_hold_at_both_ends(self) -> None:
+        # feed/play (the plain care path) keep the -2 mess mechanic even at mess 0.
         self._seed(mess=0, care_mistakes=0, energy=99, health=99, mood=99, bond=99)
-        self._care("clean")
+        self._care("feed")
         ledger = self._combined()
         self.assertEqual(ledger["stats"]["mess"], 0)          # never negative
         self.assertEqual(ledger["counters"]["careMistakes"], 0)
@@ -194,7 +200,7 @@ class MessGauge(unittest.TestCase):
         catalog = load_catalog(ROOT)
         pet = self._pet(mess=40, failed_runs=120)
         before = visual_state.mess_score(pet)
-        cared = apply_event(pet, catalog, "clean")["state"]
+        cared = apply_event(pet, catalog, "feed")["state"]
         after = visual_state.mess_score(cared)
         self.assertEqual(before - after, 2)
         self.assertEqual(cared["stats"]["mess"], 38)
@@ -210,18 +216,19 @@ class MessGauge(unittest.TestCase):
 
 
 class CareAliases(unittest.TestCase):
-    """clean/feed/play are care, and care decays a care mistake by the amount."""
+    """feed/play are care (mess -2); clean is its own event that resets mess."""
 
-    def test_clean_feed_play_are_care(self) -> None:
-        for alias in ("clean", "feed", "play"):
-            self.assertEqual(normalize_event(alias), "care")
+    def test_feed_and_play_are_care_but_clean_is_its_own_event(self) -> None:
+        self.assertEqual(normalize_event("feed"), "care")
+        self.assertEqual(normalize_event("play"), "care")
+        self.assertEqual(normalize_event("clean"), "clean")
 
-    def test_care_decays_a_mistake_and_cleans_two_points(self) -> None:
+    def test_feed_decays_a_mistake_and_cleans_two_points(self) -> None:
         catalog = load_catalog(ROOT)
         pet = default_state(catalog)
         pet["stats"]["mess"] = 10
         pet["counters"]["careMistakes"] = 2
-        cared = apply_event(pet, catalog, "clean")["state"]
+        cared = apply_event(pet, catalog, "feed")["state"]
         self.assertEqual(cared["stats"]["mess"], 8)
         self.assertEqual(cared["counters"]["careMistakes"], 1)
 

@@ -611,20 +611,56 @@ def _clamp(value: int, low: int = 0, high: int = 100) -> int:
     return max(low, min(high, value))
 
 
-def _apply_care_once(combined: Dict[str, Any], action: str) -> None:
+def _apply_care_once(combined: Dict[str, Any], action: str, now: Optional[str] = None) -> None:
     """Apply one care action to the combined ledger, every value from the ledger model.
 
     Mirrors ``state.apply_event`` for the care event -- XP, the clamped stats, the traits, and
     the ``careMistakes`` decay -- without a catalogue: the combined ledger re-derives its stage
     and level from XP after the merge anyway. Numbers come from ``state.EVENT_DELTAS['care']``
     so the app UI, the CLI and the shared ledger cannot drift apart.
-    """
-    from .state import BOUNDED_STATS, EVENT_DELTAS
 
-    deltas = EVENT_DELTAS["care"]
+    ``clean`` is special (it is no longer the plain ``care`` alias): it captures the pre-clean
+    mess M, resets mess to 0 in one press, and starts an M-second cooldown, exactly like
+    ``state.apply_event('clean')``. This is the drain's one writer, so the cooldown and mess
+    reset persist in the combined ledger across runs and restarts.
+    """
+    from .state import BOUNDED_STATS, EVENT_DELTAS, clean_cooldown_remaining_seconds, _add_seconds
+
+    stamp = now or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     combined.setdefault("stats", {})
     combined.setdefault("traits", {})
     combined.setdefault("counters", {})
+
+    if action == "clean":
+        # M=0 is a strict no-op with no cooldown; otherwise reset and cool down.
+        mess = int(combined["stats"].get("mess") or 0)
+        if mess <= 0:
+            return
+        # A re-clean during the window is firewalled (no other action may be performed).
+        if clean_cooldown_remaining_seconds(combined, stamp) > 0:
+            return
+        for key, delta in EVENT_DELTAS["care"].items():
+            if key == "xp":
+                combined["xp"] = max(0, int(combined.get("xp") or 0) + delta)
+            elif key == "mess":
+                combined["stats"]["mess"] = 0
+            elif key in BOUNDED_STATS:
+                combined["stats"][key] = _clamp(int(combined["stats"].get(key) or 0) + delta)
+            elif key in ("focus", "resilience", "restlessness", "care"):
+                combined["traits"][key] = max(0, int(combined["traits"].get(key) or 0) + delta)
+            else:
+                combined["counters"][key] = max(0, int(combined["counters"].get(key) or 0) + delta)
+        combined["counters"]["careMistakes"] = max(0, int(combined["counters"].get("careMistakes") or 0) - 1)
+        combined["counters"]["idleMinutes"] = 0
+        combined["cleanLastMess"] = mess
+        combined["cleanCooldownUntil"] = _add_seconds(stamp, mess)
+        return
+
+    # feed / play (and any other care action) keep the shared ``care`` semantics, but are
+    # firewalled while a clean cooldown is active (the pet cannot perform any other action).
+    if clean_cooldown_remaining_seconds(combined, stamp) > 0:
+        return
+    deltas = EVENT_DELTAS["care"]
     for key, delta in deltas.items():
         if key == "xp":
             combined["xp"] = max(0, int(combined.get("xp") or 0) + delta)
@@ -641,14 +677,19 @@ def _apply_care_once(combined: Dict[str, Any], action: str) -> None:
     combined["counters"]["idleMinutes"] = 0
 
 
-def apply_care_events(combined: Dict[str, Any], care_counts: Dict[str, int]) -> Dict[str, int]:
-    """Apply every care request in *care_counts* to the combined ledger; report what landed."""
+def apply_care_events(combined: Dict[str, Any], care_counts: Dict[str, int], now: Optional[str] = None) -> Dict[str, int]:
+    """Apply every care request in *care_counts* to the combined ledger; report what landed.
+
+    While a clean cooldown is active the pet cannot perform any other action, so feed/play
+    requests are refused in that window; they are still consumed (reported as coalesced) so a
+    backlog does not pile up and re-apply once the cooldown lifts.
+    """
     applied: Dict[str, int] = {}
     for action, count in care_counts.items():
         if action not in CARE_ACTIONS or count <= 0:
             continue
         for _ in range(count):
-            _apply_care_once(combined, action)
+            _apply_care_once(combined, action, now=now)
         applied[action] = count
     return applied
 
@@ -670,6 +711,7 @@ def run(
     display_name: Optional[str] = None,
     pet_id: Optional[str] = None,
     layout: Optional[str] = None,
+    now: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Absorb every ledger and the spool, then (if this machine has one) the desktop mirror.
 
@@ -678,7 +720,12 @@ def run(
     Library callers therefore never write a desktop package unless they ask for one. The
     selection arguments (line, machine, display name, pet id, layout) likewise default to what
     the existing claim recorded, so a plain drain never re-hatches the pet it already owns.
+    ``now`` pins the run's clock (for cooldown evaluation and stamps); it defaults to the wall
+    clock, so a live drain and the test harness agree without special-casing production.
     """
+    from .state import clean_cooldown_remaining_seconds
+
+    stamp = now or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     ledgers = ledger_paths(hermes_root)
     combined = load_json(state_file) or empty_combined()
     combined["levels"] = curve_block()
@@ -694,8 +741,16 @@ def run(
     events = read_spool(spool)
     foreign = classify(events)
 
-    combined["xp"] += foreign["xp"]
+    # While a clean cooldown is active the pet can neither earn XP nor perform any other
+    # action. Fresh foreign-turn XP is refused in that window (it is a new action); the
+    # per-profile XP absorbed just above is historical attributed catch-up from the ledgers'
+    # own cursors and is untouched -- see the module docstring for the ownership split.
+    in_cooldown = clean_cooldown_remaining_seconds(combined, stamp) > 0
+    foreign_xp = 0 if in_cooldown else foreign["xp"]
+    combined["xp"] += foreign_xp
     for source, xp in foreign["xp_by_source"].items():
+        if in_cooldown:
+            continue
         entry = combined["attribution"]["foreign"].setdefault(source, {"xp": 0, "events": 0})
         entry["xp"] += xp
         entry["events"] += foreign["events_by_source"].get(source, 0)
@@ -705,7 +760,7 @@ def run(
         combined["events"][event_name] = combined["events"].get(event_name, 0) + count
 
     # Route C: the native pet menu's care controls, applied to the one shared ledger.
-    care_report = apply_care_events(combined, foreign["care"])
+    care_report = apply_care_events(combined, foreign["care"], now=stamp)
     if care_report:
         combined.setdefault("events", {})
         combined["events"]["care"] = combined["events"].get("care", 0) + sum(care_report.values())
@@ -717,8 +772,8 @@ def run(
     active_pet["level"] = level_for_xp(active_pet["xp"])
     active_pet["lifeStage"] = stage_for_xp(active_pet["xp"])
     combined["activePetId"] = active_pet_id
-    combined["updatedAt"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    combined["cursor"]["lastRunAt"] = combined["updatedAt"]
+    combined["updatedAt"] = stamp
+    combined["cursor"]["lastRunAt"] = stamp
     render_state = dict(combined)
     render_state["petId"] = active_pet_id
     render_state["xp"] = active_pet["xp"]
