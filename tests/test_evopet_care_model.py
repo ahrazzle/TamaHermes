@@ -41,7 +41,11 @@ def care_spool_body(action: str) -> str:
 class CareEventContract(unittest.TestCase):
     """What the native UI writes is what the drain consumes."""
 
-    def test_a_care_event_is_a_care_request_not_a_turn(self) -> None:
+    def test_green_hud_record_uses_care_action_contract(self) -> None:
+        record = {"event": "care", "action": "clean", "source": "native-overlay", "amount": 1}
+        self.assertEqual(record["event"], "care")
+        self.assertIn(record["action"], CARE_ACTIONS)
+
         result = classify([(Path("1-1-1-care.json"), json.loads(care_spool_body("clean")))])
         self.assertEqual(result["care"], {"clean": 1})
         # Care XP is the ledger's own ``care`` delta, never a foreign turn award.
