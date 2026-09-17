@@ -36,7 +36,8 @@ from .hermes_events import (
 )
 from .paths import codex_home as resolve_codex_home
 from .paths import default_state_path, hermes_home as resolve_hermes_home, repo_root as resolve_repo_root
-from .overlay_state import global_state_path, is_tamahermes_selected, load_global_state, load_overlay_state, overlay_state_path, save_overlay_state
+from .overlay import apply_visibility_interaction, expanded_overlay_xy
+from .overlay_state import global_state_path, is_tamahermes_selected, load_global_state, load_overlay_state, overlay_mode, overlay_state_path, save_overlay_state
 from .overlay_supervisor import ensure_overlay_supervisor, overlay_process_alive, pid_running, read_pid, stop_overlay_process, supervisor_pid_path
 from .state import apply_event, apply_passive_rest, default_state, load_state, record_install_metadata, save_state
 from .visual_state import derive_visual_state
@@ -513,11 +514,17 @@ def cmd_overlay(args: argparse.Namespace) -> None:
     elif args.action == "normal":
         state["quietMode"] = False
         changed = True
-    elif args.action == "hide":
-        state["hudHidden"] = True
-        changed = True
-    elif args.action == "show":
-        state["hudHidden"] = False
+    elif args.action in {"hide", "show", "collapse", "expand"}:
+        expanded_xy = expanded_overlay_xy(home) if args.action == "collapse" else None
+        changed = bool(apply_visibility_interaction(state, args.action, expanded_xy=expanded_xy))
+    elif args.action == "toggle":
+        # Two-state toggle only: hidden stays an explicit action.
+        target = "expand" if state.get("hudCollapsed") else "collapse"
+        apply_visibility_interaction(
+            state,
+            target,
+            expanded_xy=expanded_overlay_xy(home) if target == "collapse" else None,
+        )
         changed = True
     elif args.action == "stop":
         report["stopped"] = stop_overlay_process(home)
@@ -541,6 +548,8 @@ def cmd_overlay(args: argparse.Namespace) -> None:
             "muted": bool(state.get("muted")),
             "quietMode": bool(state.get("quietMode")),
             "hudHidden": bool(state.get("hudHidden")),
+            "hudCollapsed": bool(state.get("hudCollapsed")),
+            "mode": overlay_mode(state),
             "sidecarPid": sidecar_pid,
             "supervisorPid": supervisor_pid,
             "lastSeenEventId": state.get("lastSeenEventId"),
@@ -911,7 +920,7 @@ def build_parser() -> argparse.ArgumentParser:
     watch.set_defaults(func=cmd_watch)
 
     overlay = sub.add_parser("overlay", help="Control the M10 sidecar overlay and SFX.")
-    overlay.add_argument("action", choices=["status", "mute", "unmute", "quiet", "normal", "hide", "show", "start", "stop"], nargs="?", default="status")
+    overlay.add_argument("action", choices=["status", "mute", "unmute", "quiet", "normal", "hide", "show", "collapse", "expand", "toggle", "start", "stop"], nargs="?", default="status")
     overlay.set_defaults(func=cmd_overlay)
 
     bridge = sub.add_parser("bridge", help="Read plugin/automation-friendly event JSONL and update the growth ledger.")

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,12 @@ OVERLAY_SCHEMA = "tamahermes.sidecar_overlay.v1"
 TAMAHERMES_AVATAR_ID = "custom:tamahermes"
 GLOBAL_STATE_FILE = ".codex-global-state.json"
 SURFACE_STALE_SECONDS = 10.0
+
+# Panel modes are *derived* from two durable booleans (never stored a third
+# time): hidden > collapsed > expanded.
+OVERLAY_MODE_EXPANDED = "expanded"
+OVERLAY_MODE_COLLAPSED = "collapsed"
+OVERLAY_MODE_HIDDEN = "hidden"
 
 
 @dataclass(frozen=True)
@@ -102,6 +109,11 @@ def default_overlay_state() -> dict[str, Any]:
         "sidecarPid": None,
         "supervisorPid": None,
         "evolutionAnnouncement": None,
+        # Additive (schema id unchanged): visibility + collapse state.
+        "hudHidden": False,
+        "hudCollapsed": False,
+        "hudExpandedXY": None,
+        "supervisorClaim": None,
     }
 
 
@@ -249,6 +261,44 @@ def update_surface_activity(
     overlay_state["surfaceActive"] = active
     overlay_state["lastSurfaceCheckedAtEpoch"] = now_epoch
     return active, bounds
+
+
+def overlay_mode(overlay_state: dict[str, Any]) -> str:
+    """Derive the single panel mode from the two durable booleans.
+
+    ``hidden`` wins over ``collapsed``; anything else is ``expanded``.
+    """
+    if overlay_state.get("hudHidden"):
+        return OVERLAY_MODE_HIDDEN
+    if overlay_state.get("hudCollapsed"):
+        return OVERLAY_MODE_COLLAPSED
+    return OVERLAY_MODE_EXPANDED
+
+
+def overlay_should_run(
+    global_state: dict[str, Any],
+    overlay_state: dict[str, Any],
+    now_epoch: float | None = None,
+    surface_active: bool | None = None,
+) -> bool:
+    """Whether the overlay sidecar should be alive at all.
+
+    The selected pet plus an active surface is the classic condition; a
+    collapsed pill or a hidden (status-item restorable) HUD also counts as a
+    live surface, otherwise the feature would reap its own restore surface as
+    soon as the pointer leaves the mascot.
+
+    ``surface_active`` may be passed in by callers that already ran
+    :func:`update_surface_activity` this tick; when omitted it is computed here.
+    """
+    if surface_active is None:
+        active, _bounds = update_surface_activity(
+            global_state, overlay_state, time.time() if now_epoch is None else now_epoch
+        )
+        surface_active = active
+    if not is_tamahermes_selected(global_state):
+        return False
+    return bool(surface_active or overlay_state.get("hudCollapsed") or overlay_state.get("hudHidden"))
 
 
 def _bounds_from_overlay_state(raw: Any) -> OverlayBounds | None:

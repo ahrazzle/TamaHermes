@@ -15,6 +15,12 @@ struct OverlayConfig: Decodable {
     let hoverWidth: Double?
     let hoverHeight: Double?
     let hoverDelaySeconds: Double?
+    // Additive keys (schema id unchanged). An old config file without them
+    // decodes to nil, which keeps today's behaviour; a new config file with
+    // extra keys still decodes because Swift's Decodable ignores unknowns.
+    let mode: String?
+    let minWidth: Double?
+    let minHeight: Double?
 }
 
 struct SfxRequest: Decodable {
@@ -36,6 +42,7 @@ final class OverlayController: NSObject, WKScriptMessageHandler {
     private let interactionPath: String
     private var panel: NonActivatingPanel!
     private var webView: WKWebView!
+    private var content: NSView!
     private var lastHTMLPath: String = ""
     private var lastHTMLModified: Date?
     private var lastHTMLHash: UInt64?
@@ -49,6 +56,15 @@ final class OverlayController: NSObject, WKScriptMessageHandler {
     private var dragOrigin: NSPoint?
     private var dragMouseOrigin: NSPoint?
     private var dragLastEventAt: Date?
+    private var chromeView: NSView?
+    private var chromeKind: String = ""
+    private var chromeCornerRadius: CGFloat = -1
+    private var lastStatusDigest: Data?
+    private var tickTimer: Timer?
+    private var tickInterval: TimeInterval = 0.25
+    private var statusItem: NSStatusItem?
+    private var lastMode: String = "expanded"
+    private var lastHiddenRequested: Bool = false
 
     init(configPath: String) {
         self.configPath = configPath
@@ -58,9 +74,14 @@ final class OverlayController: NSObject, WKScriptMessageHandler {
         self.interactionPath = root + "/overlay-interaction-request.json"
         super.init()
         buildPanel()
-        Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
-            self?.tick()
-        }
+        buildStatusItem()
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(accessibilityOptionsChanged),
+            name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
+            object: nil
+        )
+        scheduleTick(0.25)
         tick()
     }
 
@@ -82,10 +103,15 @@ final class OverlayController: NSObject, WKScriptMessageHandler {
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient, .ignoresCycle]
         panel.ignoresMouseEvents = true
 
-        let content = NSView(frame: initialFrame)
+        content = NSView(frame: initialFrame)
         content.wantsLayer = true
         content.layer?.backgroundColor = NSColor.clear.cgColor
         panel.contentView = content
+
+        // Chrome goes in FIRST so the WebView stays the topmost content layer:
+        // the glass/vibrancy material is chrome *behind* transparent HTML, never
+        // part of the content layer itself.
+        refreshChrome(mode: "expanded")
 
         let configuration = WKWebViewConfiguration()
         configuration.userContentController.add(self, name: "tamahermes")
@@ -100,6 +126,110 @@ final class OverlayController: NSObject, WKScriptMessageHandler {
         }
         content.addSubview(webView)
     }
+
+    // MARK: - Chrome (three-step degradation chain)
+
+    private var reduceTransparency: Bool {
+        NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
+    }
+
+    private var increaseContrast: Bool {
+        NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+    }
+
+    private var darkModeActive: Bool {
+        NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+    }
+
+    private func cornerRadius(forMode mode: String) -> CGFloat {
+        // Expanded panel radius and the fully rounded pill (design lock).
+        mode == "collapsed" ? 19 : 16
+    }
+
+    private func desiredChromeKind() -> String {
+        if reduceTransparency || increaseContrast {
+            // Hard switch: no translucency at all under the a11y settings.
+            return "opaque"
+        }
+        #if EVOPET_GLASS
+        if #available(macOS 26.0, *) {
+            return "glass"
+        }
+        #endif
+        return "vibrancy"
+    }
+
+    @discardableResult
+    private func refreshChrome(mode: String) -> Bool {
+        let kind = desiredChromeKind()
+        let radius = cornerRadius(forMode: mode)
+        if kind == chromeKind, radius == chromeCornerRadius, chromeView != nil {
+            return false
+        }
+        chromeView?.removeFromSuperview()
+        let chrome = makeChrome(kind: kind, cornerRadius: radius)
+        chrome.frame = content.bounds
+        chrome.autoresizingMask = [.width, .height]
+        content.addSubview(chrome, positioned: .below, relativeTo: webView)
+        chromeView = chrome
+        chromeKind = kind
+        chromeCornerRadius = radius
+        return true
+    }
+
+    private func makeChrome(kind: String, cornerRadius: CGFloat) -> NSView {
+        let host = NSView()
+        host.wantsLayer = true
+        host.layer?.cornerRadius = cornerRadius
+        host.layer?.masksToBounds = true
+        switch kind {
+        case "glass":
+            #if EVOPET_GLASS
+            if #available(macOS 26.0, *) {
+                let glass = NSGlassEffectView()
+                glass.style = .regular
+                glass.cornerRadius = cornerRadius
+                glass.contentView = NSView()
+                if #available(macOS 27.0, *) {
+                    glass.effectIsInteractive = true
+                }
+                let container = NSGlassEffectContainerView()
+                container.spacing = 0
+                container.contentView = glass
+                container.wantsLayer = true
+                host.layer?.backgroundColor = NSColor.clear.cgColor
+                host.addSubview(container)
+                container.frame = host.bounds
+                container.autoresizingMask = [.width, .height]
+                return host
+            }
+            #endif
+            return makeChrome(kind: "vibrancy", cornerRadius: cornerRadius)
+        case "vibrancy":
+            let effect = NSVisualEffectView()
+            effect.material = .hudWindow
+            effect.blendingMode = .behindWindow
+            effect.state = .active
+            host.layer?.backgroundColor = NSColor.clear.cgColor
+            host.addSubview(effect)
+            effect.frame = host.bounds
+            effect.autoresizingMask = [.width, .height]
+            return host
+        default:
+            // Opaque backing (also the terminal fallback): a never-transparent
+            // panel so text stays readable over any desktop.
+            host.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+            return host
+        }
+    }
+
+    @objc private func accessibilityOptionsChanged() {
+        // Force the next tick to rebuild the chrome for the new a11y flags;
+        // the status digest changes too, so the mirror file is rewritten.
+        chromeKind = ""
+    }
+
+    // MARK: - Config and geometry
 
     private func readConfig() -> OverlayConfig? {
         do {
@@ -124,9 +254,13 @@ final class OverlayController: NSObject, WKScriptMessageHandler {
     }
 
     private func clampedFrame(for config: OverlayConfig) -> NSRect {
+        let mode = config.mode ?? "expanded"
         let scale = max(0.75, min(1.75, config.scale ?? 1.0))
-        let width = max(120, (config.width ?? 260) * scale)
-        let height = max(80, (config.height ?? 120) * scale)
+        // The pill is not user-scalable: collapsed mode skips the scale multiply
+        // and brings its own floors, so a 38 pt pill is never clamped away.
+        let modeScale = mode == "collapsed" ? 1.0 : scale
+        let width = max(config.minWidth ?? 120, (config.width ?? 260) * modeScale)
+        let height = max(config.minHeight ?? 80, (config.height ?? 120) * modeScale)
         let screen = screen(forTopLeftX: config.x, topLeftY: config.y)
         let frame = screen.visibleFrame
         let rawX = config.x ?? (frame.maxX - width - 18)
@@ -176,6 +310,8 @@ final class OverlayController: NSObject, WKScriptMessageHandler {
         return Date().timeIntervalSince(started) >= (config.hoverDelaySeconds ?? 1.0)
     }
 
+    // MARK: - Status mirror
+
     private func writeStatus(config: OverlayConfig, point: NSPoint, ready: Bool) {
         func jsonValue(_ value: Double?) -> Any {
             guard let value = value else { return NSNull() }
@@ -196,14 +332,32 @@ final class OverlayController: NSObject, WKScriptMessageHandler {
             "lastSfxFilename": lastSfxFilename ?? NSNull(),
             "lastSfxPlayedAt": lastSfxPlayedAt ?? NSNull(),
             "lastSfxError": lastSfxError ?? NSNull(),
+            // Additive a11y/appearance mirror (schema id unchanged): CSS cannot
+            // read Reduce Transparency / Increase Contrast, so the helper
+            // reports what the native chrome is actually drawing.
+            "mode": config.mode ?? "expanded",
+            "reduceTransparency": reduceTransparency,
+            "increaseContrast": increaseContrast,
+            "darkMode": darkModeActive,
             "updatedAt": ISO8601DateFormatter().string(from: Date()),
         ]
         guard JSONSerialization.isValidJSONObject(payload),
-              let data = try? JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted]) else {
+              let data = try? JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys]) else {
             return
         }
+        // The digest skips `updatedAt` only: an idle helper writes the status
+        // file once instead of 4 times a second.
+        var stable = payload
+        stable.removeValue(forKey: "updatedAt")
+        let digest = (try? JSONSerialization.data(withJSONObject: stable, options: [.sortedKeys])) ?? Data()
+        if digest == lastStatusDigest {
+            return
+        }
+        lastStatusDigest = digest
         try? data.write(to: URL(fileURLWithPath: statusPath))
     }
+
+    // MARK: - Interaction file (helper -> Python)
 
     private func adjustScale(by delta: Double) {
         guard let data = FileManager.default.contents(atPath: configPath),
@@ -214,6 +368,27 @@ final class OverlayController: NSObject, WKScriptMessageHandler {
         try? output.write(to: URL(fileURLWithPath: configPath + ".tmp"))
         _ = try? FileManager.default.replaceItemAt(URL(fileURLWithPath: configPath), withItemAt: URL(fileURLWithPath: configPath + ".tmp"))
     }
+
+    private func writeInteraction(event: String) {
+        let payload: [String: Any] = [
+            "schema": "tamahermes.native_overlay.interaction.v1",
+            "id": UUID().uuidString,
+            "event": event,
+            "updatedAt": Date().timeIntervalSince1970,
+        ]
+        guard JSONSerialization.isValidJSONObject(payload),
+              let data = try? JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted]) else { return }
+        let temporary = interactionPath + ".tmp"
+        try? data.write(to: URL(fileURLWithPath: temporary))
+        let destination = URL(fileURLWithPath: interactionPath)
+        if FileManager.default.fileExists(atPath: interactionPath) {
+            _ = try? FileManager.default.replaceItemAt(destination, withItemAt: URL(fileURLWithPath: temporary))
+        } else {
+            _ = try? FileManager.default.moveItem(at: URL(fileURLWithPath: temporary), to: destination)
+        }
+    }
+
+    // MARK: - Drag (screen-space math, preserved from the live build)
 
     private func beginDrag() {
         endDrag()
@@ -284,6 +459,8 @@ final class OverlayController: NSObject, WKScriptMessageHandler {
         persistPanelPosition()
     }
 
+    // MARK: - WebView messages
+
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         guard message.name == "tamahermes",
               let body = message.body as? [String: Any],
@@ -298,29 +475,61 @@ final class OverlayController: NSObject, WKScriptMessageHandler {
             movePanel(dx: dx, dy: dy)
             return
         }
-        if event == "hide" || event == "show" { writeInteraction(event: event); return }
+        if ["hide", "show", "collapse", "expand"].contains(event) { writeInteraction(event: event); return }
         guard ["care", "feed", "clean", "play", "rest"].contains(event) else { return }
         writeInteraction(event: event)
     }
 
-    private func writeInteraction(event: String) {
-        let payload: [String: Any] = [
-            "schema": "tamahermes.native_overlay.interaction.v1",
-            "id": UUID().uuidString,
-            "event": event,
-            "updatedAt": Date().timeIntervalSince1970,
-        ]
-        guard JSONSerialization.isValidJSONObject(payload),
-              let data = try? JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted]) else { return }
-        let temporary = interactionPath + ".tmp"
-        try? data.write(to: URL(fileURLWithPath: temporary))
-        let destination = URL(fileURLWithPath: interactionPath)
-        if FileManager.default.fileExists(atPath: interactionPath) {
-            _ = try? FileManager.default.replaceItemAt(destination, withItemAt: URL(fileURLWithPath: temporary))
-        } else {
-            _ = try? FileManager.default.moveItem(at: URL(fileURLWithPath: temporary), to: destination)
+    // MARK: - Menu-bar global toggle
+
+    private func buildStatusItem() {
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        if let button = item.button {
+            let image = NSImage(systemSymbolName: "tortoise.fill", accessibilityDescription: "EvoPet HUD")
+            image?.isTemplate = true
+            button.image = image
+            button.toolTip = "EvoPet HUD"
+        }
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        for (title, event) in [
+            ("Expand HUD", "expand"),
+            ("Collapse to pill", "collapse"),
+            ("Hide HUD", "hide"),
+            ("Show HUD", "show"),
+        ] {
+            let menuItem = NSMenuItem(title: title, action: #selector(statusMenuAction(_:)), keyEquivalent: "")
+            menuItem.target = self
+            menuItem.representedObject = event
+            menu.addItem(menuItem)
+        }
+        menu.addItem(NSMenuItem.separator())
+        item.menu = menu
+        statusItem = item
+    }
+
+    @objc private func statusMenuAction(_ sender: NSMenuItem) {
+        guard let event = sender.representedObject as? String else { return }
+        // The status item never keys the panel and never activates the app: it
+        // only writes the same interaction file the WebView writes.
+        writeInteraction(event: event)
+    }
+
+    private func updateStatusMenu() {
+        guard let menu = statusItem?.menu else { return }
+        let hidden = lastHiddenRequested
+        for item in menu.items {
+            switch item.representedObject as? String {
+            case "expand": item.isEnabled = !hidden && lastMode == "collapsed"
+            case "collapse": item.isEnabled = !hidden && lastMode == "expanded"
+            case "hide": item.isEnabled = !hidden
+            case "show": item.isEnabled = hidden
+            default: break
+            }
         }
     }
+
+    // MARK: - Rendering and reload (hash-guarded, preserved)
 
     private func contentHash(of url: URL) -> UInt64? {
         guard let data = try? Data(contentsOf: url) else { return nil }
@@ -339,9 +548,9 @@ final class OverlayController: NSObject, WKScriptMessageHandler {
         if htmlPath == lastHTMLPath && modified == lastHTMLModified {
             return
         }
-        // Python rewrites overlay.html every loop with identical bytes; mtime
-        // alone would reload (and flicker) each tick. Compare content hash and
-        // skip the reload when only the mtime changed.
+        // Python may rewrite overlay.html between modes; mtime alone would
+        // reload (and flicker) when only the timestamp changed. Compare content
+        // hash and skip the reload for identical bytes.
         let hash = contentHash(of: url)
         if htmlPath == lastHTMLPath && hash != nil && hash == lastHTMLHash {
             lastHTMLModified = modified
@@ -384,11 +593,26 @@ final class OverlayController: NSObject, WKScriptMessageHandler {
         activeSounds.removeAll { !$0.isPlaying }
     }
 
+    // MARK: - Tick
+
+    private func scheduleTick(_ interval: TimeInterval) {
+        guard tickTimer == nil || interval != tickInterval else { return }
+        tickInterval = interval
+        tickTimer?.invalidate()
+        tickTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
+            self?.tick()
+        }
+    }
+
     @objc private func tick() {
         guard let config = readConfig() else {
             panel.orderOut(nil)
             return
         }
+        // Cadence: 0.25 s keeps dragging smooth while the panel is on screen;
+        // an invisible panel only needs to wake for a state change once a
+        // second. Same single timer, interval adjusted by visibility.
+        scheduleTick(panel.isVisible ? 0.25 : 1.0)
         playSfxIfNeeded()
         panel.ignoresMouseEvents = !(config.visible == true)
         if dragMonitor != nil {
@@ -401,6 +625,10 @@ final class OverlayController: NSObject, WKScriptMessageHandler {
                 persistPanelPosition()
                 endDrag()
             }
+        }
+        let mode = config.mode ?? "expanded"
+        if refreshChrome(mode: mode) {
+            chromeView?.frame = content.bounds
         }
         if dragMonitor == nil {
             panel.setFrame(clampedFrame(for: config), display: true)
@@ -416,6 +644,9 @@ final class OverlayController: NSObject, WKScriptMessageHandler {
         } else {
             panel.orderOut(nil)
         }
+        lastMode = mode
+        lastHiddenRequested = config.visible != true
+        updateStatusMenu()
         writeStatus(config: config, point: point, ready: ready)
     }
 }

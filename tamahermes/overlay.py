@@ -5,12 +5,15 @@ import hashlib
 import html
 import json
 import os
+import platform
+import re
+import shutil
 import signal
 import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from .bridge import apply_bridge_event
 from .catalog import load_catalog
@@ -18,10 +21,15 @@ from .codex_events import default_cursor, load_cursor, resolve_session_inputs, s
 from .feedback import active_evolution_announcement
 from .overlay_audio import apply_audio_decision, apply_interaction_audio, sfx_resource_path
 from .overlay_state import (
+    OVERLAY_MODE_COLLAPSED,
+    OVERLAY_MODE_EXPANDED,
+    OVERLAY_MODE_HIDDEN,
     is_tamahermes_selected,
     load_global_state,
     load_overlay_state,
+    overlay_mode,
     overlay_pid_path,
+    overlay_should_run,
     overlay_state_path,
     read_json_object,
     save_overlay_state,
@@ -60,6 +68,21 @@ def _percent(value: int) -> str:
     return f"{_clamp(value, 0, 100):3d}%"
 
 
+def file_sha256(path: Path) -> str | None:
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+def write_json_file(path: Path, payload: dict[str, Any]) -> None:
+    """Write JSON atomically so a reader never sees a half-written file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    temporary.replace(path)
+
+
 TAMAGO_PALETTE = {
     "aurora": {
         "outline": "#171421",
@@ -96,6 +119,18 @@ TAMAGO_PALETTE = {
 
 def tamago_palette(machine_id: str | None) -> dict[str, str]:
     return TAMAGO_PALETTE.get(machine_id or "", TAMAGO_PALETTE["aurora"])
+
+
+# Panel geometry. The pill is the collapsed shape of the *same* panel (one
+# panel, one WebView, three derived modes); 120x80 is the floor the native
+# helper already applies to the expanded panel.
+DEFAULT_PANEL_WIDTH = 376
+DEFAULT_PANEL_HEIGHT = 226
+COLLAPSED_WIDTH = 148
+COLLAPSED_HEIGHT = 38
+DEFAULT_MIN_WIDTH = 120
+DEFAULT_MIN_HEIGHT = 80
+NATIVE_OVERLAY_CONFIG_SCHEMA = "tamahermes.native_overlay.config.v1"
 
 
 class NativeOverlayUnavailable(RuntimeError):
@@ -297,6 +332,9 @@ def native_overlay_paths(home: Path) -> dict[str, Path]:
         "root": root,
         "binary": root / "TamaHermesOverlay",
         "stamp": root / "TamaHermesOverlay.sha256",
+        "provenance": root / "TamaHermesOverlay.provenance.json",
+        "backup": root / "TamaHermesOverlay.prev",
+        "backupProvenance": root / "TamaHermesOverlay.prev.provenance.json",
         "config": root / "overlay-config.json",
         "html": root / "overlay.html",
         "status": root / "overlay-helper-status.json",
@@ -395,6 +433,22 @@ def apply_progress_audio_for_records(records: list[dict[str, Any]], overlay_stat
     return apply_interaction_audio("progress", overlay_state, selected=selected)
 
 
+def spool_native_pet_action(event: str) -> bool:
+    """Send a green-HUD action through the native pet animation mailbox."""
+    action = "clean" if event == "care" else event
+    if action not in {"clean", "feed", "play"}:
+        return False
+    root = Path.home() / ".petdex" / "runtime" / "evo-queue"
+    root.mkdir(parents=True, exist_ok=True)
+    payload = {"event": "care", "action": action, "agent_source": "evopet"}
+    path = root / f"{os.getpid()}-{time.time_ns()}-{action}-care.json"
+    try:
+        path.write_text(json.dumps(payload, separators=(",", ":")) + "\n", encoding="utf-8")
+    except OSError:
+        return False
+    return True
+
+
 def consume_native_interaction(home: Path) -> dict[str, Any] | None:
     path = native_overlay_paths(home)["interaction"]
     try:
@@ -402,24 +456,34 @@ def consume_native_interaction(home: Path) -> dict[str, Any] | None:
         path.unlink(missing_ok=True)
     except (FileNotFoundError, OSError, json.JSONDecodeError):
         return None
-    if not isinstance(payload, dict) or payload.get("event") not in {
-        "care",
-        "feed",
-        "rest",
-        "clean",
-        "play",
-        "hide",
-        "show",
-    }:
+    if not isinstance(payload, dict) or payload.get("event") not in NATIVE_INTERACTION_EVENTS:
         return None
     return payload
 
 
-def apply_visibility_interaction(overlay_state: dict[str, Any], event: Any) -> bool | None:
-    """Flip the persistent HUD flag for a hide/show interaction.
+# Events the native helper may forward through the interaction file. Visibility
+# events move the panel state; the rest are pet-care actions. Widened additively
+# (schema id unchanged) so `hide`/`show`/`collapse`/`expand` no longer land on
+# the pet-action spool.
+NATIVE_VISIBILITY_EVENTS = frozenset({"hide", "show", "collapse", "expand"})
+NATIVE_PET_ACTION_EVENTS = frozenset({"care", "feed", "clean", "play", "rest"})
+NATIVE_INTERACTION_EVENTS = NATIVE_VISIBILITY_EVENTS | NATIVE_PET_ACTION_EVENTS
 
-    Returns True when the flag changed, False when it already had that value,
-    and None when *event* is not a visibility event.
+
+def apply_visibility_interaction(
+    overlay_state: dict[str, Any],
+    event: Any,
+    expanded_xy: dict[str, Any] | None = None,
+) -> bool | None:
+    """Flip the persistent HUD flags for a visibility interaction.
+
+    Returns True when a flag changed, False when it already had that value, and
+    None when *event* is not a visibility event.
+
+    ``expanded_xy`` is where the expanded panel was when it collapsed; it is
+    kept until the renderer has put the panel back ("restored from
+    hudExpandedXY, then cleared"), which is what makes an expand survive both
+    the pill click and the CLI.
     """
     if event == "hide":
         changed = not overlay_state.get("hudHidden")
@@ -429,7 +493,41 @@ def apply_visibility_interaction(overlay_state: dict[str, Any], event: Any) -> b
         changed = bool(overlay_state.get("hudHidden"))
         overlay_state["hudHidden"] = False
         return changed
+    if event == "collapse":
+        changed = not overlay_state.get("hudCollapsed")
+        stored = overlay_state.get("hudExpandedXY")
+        if isinstance(expanded_xy, dict) and (changed or not isinstance(stored, dict)):
+            overlay_state["hudExpandedXY"] = {"x": expanded_xy.get("x"), "y": expanded_xy.get("y")}
+        overlay_state["hudCollapsed"] = True
+        return changed
+    if event == "expand":
+        changed = bool(overlay_state.get("hudCollapsed"))
+        overlay_state["hudCollapsed"] = False
+        return changed
     return None
+
+
+def apply_native_interaction(
+    home: Path,
+    interaction: dict[str, Any],
+    overlay_state: dict[str, Any],
+) -> tuple[str, bool]:
+    """Route one consumed native interaction.
+
+    Returns ``(disposition, changed)`` where disposition is ``"visibility"``
+    (the panel state was asked to change; never a pet action), ``"pet-action"``
+    (an existing care event for the pet spool) or ``"unknown"``. Visibility
+    events are consumed here even when they are a no-op, so they can never fall
+    through onto the pet-action path.
+    """
+    event = interaction.get("event")
+    if event in NATIVE_VISIBILITY_EVENTS:
+        expanded_xy = expanded_overlay_xy(home) if event == "collapse" else None
+        changed = bool(apply_visibility_interaction(overlay_state, event, expanded_xy=expanded_xy))
+        return "visibility", changed
+    if event in NATIVE_PET_ACTION_EVENTS:
+        return "pet-action", True
+    return "unknown", False
 
 
 def hud_visible_now(selected: bool, surface_active: bool, overlay_state: dict[str, Any]) -> bool:
@@ -472,40 +570,281 @@ def native_overlay_source() -> Path:
     return Path(__file__).resolve().parent / "native_overlay" / "TamaHermesOverlay.swift"
 
 
-def build_native_overlay_helper(home: Path) -> Path:
+COMMAND_LINE_TOOLS_ROOT = Path("/Library/Developer/CommandLineTools")
+NATIVE_OVERLAY_PROVENANCE_SCHEMA = "tamahermes.native_overlay.provenance.v1"
+NATIVE_OVERLAY_DEPLOYMENT_TARGET_MIN = "macos15.0"
+GLASS_SDK_HEADER = Path("System/Library/Frameworks/AppKit.framework/Headers/NSGlassEffectView.h")
+_SDK_DIR_PATTERN = re.compile(r"^MacOSX(?:(\d+)(?:\.(\d+))?)?\.sdk$")
+
+
+def sdk_version_key(name: str) -> tuple[int, int]:
+    """Numeric compare for SDK directory names (26.5 > 26 > 9.0, not lexicographic)."""
+    match = _SDK_DIR_PATTERN.match(name)
+    if not match:
+        return (-1, -1)
+    major = int(match.group(1)) if match.group(1) else 0
+    minor = int(match.group(2)) if match.group(2) else 0
+    return (major, minor)
+
+
+def probe_glass_sdk(
+    toolchain_root: Path = COMMAND_LINE_TOOLS_ROOT,
+    sdk_dirs: list[Path] | None = None,
+) -> Path | None:
+    """Highest-versioned SDK that actually carries the Liquid Glass header.
+
+    Returns None when no glass-capable SDK exists — the caller then degrades to
+    the legacy recipe instead of failing the build.
+    """
+    if sdk_dirs is None:
+        sdk_root = toolchain_root / "SDKs"
+        try:
+            sdk_dirs = sorted(sdk_root.glob("MacOSX*.sdk"), key=lambda path: sdk_version_key(path.name))
+        except OSError:
+            return None
+    else:
+        sdk_dirs = sorted(sdk_dirs, key=lambda path: sdk_version_key(path.name))
+    for sdk in reversed(sdk_dirs):
+        if (sdk / GLASS_SDK_HEADER).exists():
+            return sdk
+    return None
+
+
+def swift_toolchain_path(toolchain_root: Path = COMMAND_LINE_TOOLS_ROOT) -> Path:
+    """The CLT toolchain when present, else the developer-tools default."""
+    candidate = toolchain_root / "usr" / "bin" / "swiftc"
+    if candidate.exists():
+        return candidate
+    return Path("/usr/bin/swiftc")
+
+
+def toolchain_version(swiftc: Path, runner: Any = subprocess.run) -> str | None:
+    try:
+        completed = runner([str(swiftc), "--version"], capture_output=True, text=True, timeout=5, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if completed.returncode != 0:
+        return None
+    first_line = (completed.stdout or completed.stderr or "").strip().splitlines()
+    return first_line[0].strip() if first_line else None
+
+
+def git_provenance(source: Path, runner: Any = subprocess.run) -> dict[str, Any]:
+    """Best-effort git identity for the tree the source was compiled from."""
+    def git(*args: str) -> str | None:
+        try:
+            completed = runner(
+                ["git", "-C", str(source.parent), *args],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        if completed.returncode != 0:
+            return None
+        return completed.stdout.strip()
+
+    head = git("rev-parse", "HEAD")
+    branch = git("rev-parse", "--abbrev-ref", "HEAD")
+    dirty = git("status", "--porcelain")
+    return {
+        "gitHead": head or None,
+        "gitBranch": branch or None,
+        "gitDirty": bool(dirty.strip()) if isinstance(dirty, str) else None,
+    }
+
+
+def native_overlay_build_recipe(
+    source: Path,
+    *,
+    toolchain_root: Path = COMMAND_LINE_TOOLS_ROOT,
+    swiftc: Path | None = None,
+    machine: str | None = None,
+    sdk_dirs: list[Path] | None = None,
+    runner: Any = subprocess.run,
+) -> dict[str, Any]:
+    """The compile recipe for the helper: glass when the SDK can see it, else legacy.
+
+    Glass is an optimisation, never a requirement: a toolchain without the
+    Liquid Glass headers silently produces the same single source file with the
+    legacy recipe instead of failing the build.
+    """
+    compiler = swiftc or swift_toolchain_path(toolchain_root)
+    architecture = (machine or platform.machine() or "arm64").strip()
+    sdk = probe_glass_sdk(toolchain_root, sdk_dirs=sdk_dirs)
+    flags: list[str] = ["-O"]
+    target: str | None = None
+    if sdk is not None:
+        target = f"{architecture}-apple-{NATIVE_OVERLAY_DEPLOYMENT_TARGET_MIN}"
+        flags.extend(["-sdk", str(sdk), "-target", target, "-D", "EVOPET_GLASS"])
+    flags.extend(["-framework", "AppKit", "-framework", "WebKit"])
+    return {
+        "swiftc": compiler,
+        "sdk": sdk,
+        "target": target,
+        "flags": flags,
+        "glassEnabled": sdk is not None,
+        "toolchainVersion": toolchain_version(compiler, runner=runner),
+    }
+
+
+def native_overlay_recipe_key(recipe: dict[str, Any], source_sha256: str) -> str:
+    """Hash of the inputs that must change before the binary is rebuilt."""
+    material = json.dumps(
+        {
+            "sourceSha256": source_sha256,
+            "toolchainVersion": recipe.get("toolchainVersion"),
+            "sdkPath": str(recipe["sdk"]) if recipe.get("sdk") else None,
+            "target": recipe.get("target"),
+            "flags": list(recipe.get("flags") or []),
+        },
+        sort_keys=True,
+    )
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
+def native_overlay_provenance(
+    source: Path,
+    recipe: dict[str, Any],
+    source_sha256: str,
+    binary_sha256: str,
+    *,
+    runner: Any = subprocess.run,
+    recipe_fallback: str | None = None,
+) -> dict[str, Any]:
+    record: dict[str, Any] = {
+        "schema": NATIVE_OVERLAY_PROVENANCE_SCHEMA,
+        "recipeKey": native_overlay_recipe_key(recipe, source_sha256),
+        "sourcePath": str(source),
+        "sourceSha256": source_sha256,
+        "binarySha256": binary_sha256,
+        "toolchainPath": str(recipe["swiftc"]),
+        "toolchainVersion": recipe.get("toolchainVersion"),
+        "sdkPath": str(recipe["sdk"]) if recipe.get("sdk") else None,
+        "sdkName": recipe["sdk"].name if recipe.get("sdk") else None,
+        "target": recipe.get("target"),
+        "flags": list(recipe.get("flags") or []),
+        "glassEnabled": bool(recipe.get("glassEnabled")),
+        "builtAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    record.update(git_provenance(source, runner=runner))
+    if recipe_fallback:
+        record["recipeFallback"] = recipe_fallback
+    return record
+
+
+def build_native_overlay_helper(
+    home: Path,
+    *,
+    runner: Any = subprocess.run,
+    toolchain_root: Path = COMMAND_LINE_TOOLS_ROOT,
+    machine: str | None = None,
+    sdk_dirs: list[Path] | None = None,
+    copier: Any = shutil.copy2,
+) -> Path:
+    """Compile the native helper if the cached build does not already match.
+
+    Never signals, kills or restarts anything: the binary is compiled next to the
+    live one and swapped in with an atomic replace, so a running helper keeps its
+    inode. The legacy source-hash stamp keeps being written for the old cache
+    semantics, and the recipe/provenance file records what was actually built.
+    """
     paths = native_overlay_paths(home)
     source = native_overlay_source()
     if sys.platform != "darwin":
         raise NativeOverlayUnavailable("native overlay requires macOS")
     if not source.exists():
         raise NativeOverlayUnavailable(f"missing native overlay source: {source}")
-    swiftc = Path("/usr/bin/swiftc")
-    if not swiftc.exists():
-        raise NativeOverlayUnavailable("swiftc is unavailable")
-    source_hash = hashlib.sha256(source.read_bytes()).hexdigest()
     binary = paths["binary"]
     stamp = paths["stamp"]
-    if binary.exists() and stamp.exists() and stamp.read_text(encoding="utf-8").strip() == source_hash:
+    source_hash = hashlib.sha256(source.read_bytes()).hexdigest()
+    recipe = native_overlay_build_recipe(
+        source,
+        toolchain_root=toolchain_root,
+        machine=machine,
+        sdk_dirs=sdk_dirs,
+        runner=runner,
+    )
+    if not Path(recipe["swiftc"]).exists():
+        raise NativeOverlayUnavailable("swiftc is unavailable")
+    recipe_key = native_overlay_recipe_key(recipe, source_hash)
+
+    cached = read_json_object(paths["provenance"])
+    if (
+        binary.exists()
+        and cached.get("recipeKey") == recipe_key
+        and cached.get("sourceSha256") == source_hash
+        and cached.get("binarySha256")
+        and cached.get("binarySha256") == file_sha256(binary)
+    ):
+        # Cached build matches the recipe and the bytes on disk: no compile,
+        # no surprise rebuild of the live directory.
+        stamp.write_text(source_hash + "\n", encoding="utf-8")
         return binary
+
     paths["root"].mkdir(parents=True, exist_ok=True)
-    command = [
-        str(swiftc),
-        "-O",
-        "-framework",
-        "AppKit",
-        "-framework",
-        "WebKit",
-        str(source),
-        "-o",
-        str(binary),
-    ]
+    # Keep a one-generation rollback copy *before* the new binary lands.
+    if binary.exists():
+        try:
+            copier(binary, paths["backup"])
+            if paths["provenance"].exists():
+                copier(paths["provenance"], paths["backupProvenance"])
+        except OSError:
+            pass
+    fallback_reason: str | None = None
     try:
-        subprocess.run(command, check=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    except subprocess.CalledProcessError as exc:
-        message = exc.stderr.strip() or exc.stdout.strip() or str(exc)
-        raise NativeOverlayUnavailable(message) from exc
+        binary_sha = _compile_native_overlay(source, recipe, binary, runner=runner)
+    except NativeOverlayUnavailable as exc:
+        if not recipe.get("glassEnabled"):
+            raise
+        # Degrade instead of failing: a toolchain that cannot build the glass
+        # path still builds the same source with the legacy recipe.
+        fallback_reason = f"glass-compile-failed: {exc}"
+        print(f"native overlay: {fallback_reason}", file=sys.stderr)
+        recipe = native_overlay_build_recipe(source, toolchain_root=toolchain_root, machine=machine, sdk_dirs=[], runner=runner)
+        if recipe.get("glassEnabled") or not Path(recipe["swiftc"]).exists():
+            raise exc
+        recipe_key = native_overlay_recipe_key(recipe, source_hash)
+        binary_sha = _compile_native_overlay(source, recipe, binary, runner=runner)
+
+    record = native_overlay_provenance(
+        source,
+        recipe,
+        source_hash,
+        binary_sha,
+        runner=runner,
+        recipe_fallback=fallback_reason,
+    )
+    write_json_file(paths["provenance"], record)
+    # Legacy stamp: same wire format as before (source hash only).
     stamp.write_text(source_hash + "\n", encoding="utf-8")
     return binary
+
+
+def _compile_native_overlay(source: Path, recipe: dict[str, Any], binary: Path, *, runner: Any) -> str:
+    """Compile to a temp sibling, verify it, then atomically swap it into place."""
+    temporary = binary.with_name(f"{binary.name}.tmp-{os.getpid()}")
+    command = [str(recipe["swiftc"]), *[str(flag) for flag in recipe["flags"]], str(source), "-o", str(temporary)]
+    try:
+        completed = runner(command, capture_output=True, text=True, check=False)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise NativeOverlayUnavailable(str(exc)) from exc
+    if completed.returncode != 0:
+        message = (completed.stderr or completed.stdout or "").strip() or f"swiftc exited {completed.returncode}"
+        try:
+            temporary.unlink()
+        except OSError:
+            pass
+        raise NativeOverlayUnavailable(message)
+    if not temporary.exists():
+        raise NativeOverlayUnavailable("swiftc produced no binary")
+    binary_sha = file_sha256(temporary)
+    if binary_sha is None:
+        raise NativeOverlayUnavailable("could not hash the compiled binary")
+    os.replace(temporary, binary)
+    return binary_sha
 
 
 def native_overlay_frame(bounds: Any) -> dict[str, int | None]:
@@ -537,6 +876,75 @@ def native_overlay_hover_rect(bounds: Any) -> dict[str, int] | None:
     return {"x": target.x, "y": target.y, "width": target.width, "height": target.height}
 
 
+def overlay_config_mode(overlay_state: dict[str, Any]) -> str:
+    """The panel *shape* the native helper draws: hidden is a state, not a shape."""
+    return OVERLAY_MODE_COLLAPSED if overlay_state.get("hudCollapsed") else OVERLAY_MODE_EXPANDED
+
+
+def native_overlay_min_bounds(mode: str | None) -> tuple[int, int]:
+    """Smallest panel the native helper may clamp to, per mode.
+
+    The expanded panel floors at 120x80; a 38 pt pill is smaller than that
+    floor, so collapsed mode has to hand the helper its own floors or it would
+    refuse to draw the chip.
+    """
+    if mode == OVERLAY_MODE_COLLAPSED:
+        return COLLAPSED_WIDTH, COLLAPSED_HEIGHT
+    return DEFAULT_MIN_WIDTH, DEFAULT_MIN_HEIGHT
+
+
+def expanded_overlay_xy(home: Path) -> dict[str, Any] | None:
+    """The expanded panel position currently recorded in the native config."""
+    payload = read_json_object(native_overlay_paths(home)["config"])
+    x = payload.get("x")
+    y = payload.get("y")
+    if isinstance(x, bool) or isinstance(y, bool):
+        return None
+    if isinstance(x, (int, float)) and isinstance(y, (int, float)):
+        return {"x": x, "y": y}
+    return None
+
+
+def collapsed_overlay_frame(bounds: Any) -> dict[str, int | None]:
+    """Pill frame: the expanded panel's top-left, collapsed in place."""
+    frame = native_overlay_frame(bounds)
+    return {"x": frame.get("x"), "y": frame.get("y"), "width": COLLAPSED_WIDTH, "height": COLLAPSED_HEIGHT}
+
+
+def expanded_frame_with_restore(overlay_state: dict[str, Any], bounds: Any) -> tuple[dict[str, int | None], bool]:
+    """Expanded frame, honouring a pending saved position.
+
+    Returns ``(frame, restoring)``. When a saved position is pending the caller
+    writes the frame with ``force_xy=True`` and then clears ``hudExpandedXY`` —
+    "restored from hudExpandedXY, then cleared".
+    """
+    frame = native_overlay_frame(bounds)
+    stored = overlay_state.get("hudExpandedXY")
+    if isinstance(stored, dict):
+        return {**frame, "x": stored.get("x"), "y": stored.get("y")}, True
+    return frame, False
+
+
+def overlay_loop_interval(mode: str, interval: float) -> float:
+    """Loop cadence by mode: expanded stays responsive, pill/hidden idle cheaper."""
+    if mode == OVERLAY_MODE_EXPANDED:
+        return max(0.25, interval)
+    return max(1.0, interval)
+
+
+def native_overlay_a11y(status: dict[str, Any]) -> dict[str, Any]:
+    """Accessibility/appearance mirror read back from the helper status file.
+
+    Only keys the helper actually reported are returned, so a missing or old
+    status file means "no reduction" rather than an invented appearance.
+    """
+    return {
+        key: bool(status[key])
+        for key in ("reduceTransparency", "increaseContrast", "darkMode")
+        if key in status
+    }
+
+
 def evolution_overlay_frame(bounds: Any) -> dict[str, int | None]:
     width = 274
     height = 92
@@ -553,7 +961,280 @@ def _bars(value: int) -> str:
     return "".join('<i class="on"></i>' if index < count else "<i></i>" for index in range(5))
 
 
-def render_native_overlay_html(snapshot: dict[str, Any], expanded: bool = True) -> str:
+def _mini_bar_height(value: int) -> int:
+    """Pill bar height in points: 3-14 pt, so every bar stays visible."""
+    return max(3, min(14, round(_clamp(value, 0, 100) * 14 / 100)))
+
+
+# Presentation tokens. System appearance is authoritative (no app-level
+# appearance switch): these follow `prefers-color-scheme`, and the helper's
+# darkMode mirror is only a fallback for when the WebView reports nothing.
+_LIGHT_THEME_TOKENS = """  --ink-primary: #13202A;
+  --ink-secondary: #40515D;
+  --accent: #A86500;
+  --positive: #176B45;
+  --disabled: #687780;
+  --chrome-wash: rgba(255, 255, 255, 0.18);
+  --chrome-specular: rgba(255, 255, 255, 0.55);
+  --chrome-border: rgba(19, 31, 42, 0.22);
+  --chrome-shadow: 0 8px 24px rgba(10, 20, 28, 0.20);
+  --focus-ring: #0A63FF;
+  --opaque-bg: #F4F6F8;
+  --contrast-ink: #000000;
+  --contrast-border: #0B2A3A;
+"""
+
+_DARK_THEME_TOKENS = """  --ink-primary: #F2F7F7;
+  --ink-secondary: #B8C7CC;
+  --accent: #FFD86D;
+  --positive: #73D6A4;
+  --disabled: #7D8B91;
+  --chrome-wash: rgba(110, 190, 205, 0.10);
+  --chrome-specular: rgba(255, 255, 255, 0.22);
+  --chrome-border: rgba(220, 245, 248, 0.22);
+  --chrome-shadow: 0 8px 24px rgba(0, 0, 0, 0.48);
+  --focus-ring: #69B6FF;
+  --opaque-bg: #14181D;
+  --contrast-ink: #FFFFFF;
+  --contrast-border: #FFFFFF;
+"""
+
+
+def _indent(text: str, prefix: str) -> str:
+    return "".join(prefix + line if line.strip() else line for line in text.splitlines(keepends=True))
+
+
+THEME_STYLE_CSS = (
+    ":root {\n" + _LIGHT_THEME_TOKENS + "}\n"
+    "@media (prefers-color-scheme: dark) {\n"
+    '  body:not([data-theme="light"]) {\n' + _indent(_DARK_THEME_TOKENS, "  ") + "  }\n"
+    "}\n"
+    'body[data-theme="dark"] {\n' + _DARK_THEME_TOKENS + "}\n"
+)
+
+# Reduce Transparency / Increase Contrast are mirrored from the helper status
+# file because CSS cannot read them. Neither variant introduces blur or
+# translucency: the opaque fallback replaces the wash, and the high-contrast
+# variant swaps in flat backgrounds with full-contrast ink and 2 px borders.
+A11Y_STYLE_CSS = """
+body[data-a11y="opaque"] {
+  --chrome-wash: rgba(0, 0, 0, 0);
+  --chrome-border: var(--contrast-border);
+}
+body[data-a11y="opaque"] button.pill {
+  background: var(--opaque-bg);
+  border-width: 2px;
+}
+body[data-a11y="opaque"] .scale-controls button,
+body[data-a11y="opaque"] .actions button {
+  background: var(--opaque-bg);
+}
+body[data-contrast="high"] {
+  --ink-primary: var(--contrast-ink);
+  --ink-secondary: var(--contrast-ink);
+  --chrome-border: var(--contrast-border);
+}
+body[data-contrast="high"] button.pill {
+  border-width: 2px;
+}
+body[data-contrast="high"] .lcd {
+  --lcd-2: var(--opaque-bg);
+  --lcd: var(--opaque-bg);
+  --ink: var(--contrast-ink);
+  --ink-dim: var(--contrast-ink);
+  --accent: var(--contrast-ink);
+  --cyan: var(--contrast-ink);
+  --rose: var(--contrast-ink);
+  box-shadow: none;
+}
+"""
+
+
+def body_attributes(a11y: dict[str, Any] | None) -> str:
+    """body attributes mirrored from the helper's accessibility/appearance status."""
+    attrs: list[str] = []
+    if a11y and a11y.get("reduceTransparency"):
+        attrs.append('data-a11y="opaque"')
+    if a11y and a11y.get("increaseContrast"):
+        attrs.append('data-contrast="high"')
+    if a11y and "darkMode" in a11y:
+        attrs.append('data-theme="dark"' if a11y.get("darkMode") else 'data-theme="light"')
+    return (" " + " ".join(attrs)) if attrs else ""
+
+
+def render_native_overlay_html(
+    snapshot: dict[str, Any],
+    expanded: bool = True,
+    mode: str | None = None,
+    a11y: dict[str, Any] | None = None,
+) -> str:
+    """Render the panel for the effective mode.
+
+    ``expanded`` stays the positional default (existing callers); ``mode`` wins
+    when given, so the loop can pass the derived mode directly.
+    """
+    effective_mode = mode or (OVERLAY_MODE_EXPANDED if expanded else OVERLAY_MODE_COLLAPSED)
+    if effective_mode == OVERLAY_MODE_COLLAPSED:
+        return render_collapsed_overlay_html(snapshot, a11y=a11y)
+    return render_expanded_overlay_html(snapshot, a11y=a11y)
+
+
+def render_collapsed_overlay_html(snapshot: dict[str, Any], a11y: dict[str, Any] | None = None) -> str:
+    """The collapsed pill: level/name, three stat bars, one expand affordance.
+
+    The whole panel is the control: a click anywhere expands, and a pointer that
+    travels further than 3 px is a drag instead of a click.
+    """
+    stats = snapshot.get("stats") or {}
+    level = int(snapshot.get("level") or 0)
+    label = html.escape(f"L{level} · {str(snapshot.get('displayName') or 'TamaHermes')}")
+    values = [int(stats.get("energy") or 0), int(stats.get("health") or 0), int(stats.get("bond") or 0)]
+    mini = "".join(f'<i style="height: {_mini_bar_height(value)}px"></i>' for value in values)
+    return f"""<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+{THEME_STYLE_CSS}{A11Y_STYLE_CSS}
+html, body {{
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: transparent;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+  letter-spacing: 0;
+  user-select: none;
+}}
+body {{
+  -webkit-font-smoothing: antialiased;
+}}
+.wrap {{
+  position: absolute;
+  inset: 0;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}}
+button.pill {{
+  position: absolute;
+  inset: 0;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0 10px;
+  border: 1px solid var(--chrome-border);
+  border-radius: 19px;
+  background: linear-gradient(135deg, var(--chrome-wash), rgba(0, 0, 0, 0) 62%);
+  box-shadow: var(--chrome-shadow), inset 0 1px 0 var(--chrome-specular);
+  color: var(--ink-primary);
+  font: 600 11px/16px -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+  font-variant-numeric: tabular-nums;
+  text-align: left;
+  cursor: pointer;
+}}
+button.pill:hover {{
+  border-color: var(--accent);
+  box-shadow: var(--chrome-shadow), inset 0 1px 0 var(--chrome-specular), 0 0 0 1px var(--accent);
+}}
+button.pill:active {{
+  box-shadow: 0 4px 14px var(--chrome-shadow);
+}}
+button.pill:focus-visible {{
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}}
+button.pill .label {{
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 58px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}}
+button.pill .mini {{
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  height: 14px;
+}}
+button.pill .mini i {{
+  display: block;
+  width: 4px;
+  border-radius: 2px;
+  background: var(--accent);
+}}
+button.pill .chev {{
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: var(--accent);
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1;
+}}
+</style>
+</head>
+<body{body_attributes(a11y)}>
+  <main class="wrap" aria-label="TamaHermes status">
+    <button class="pill" type="button" data-event="expand" aria-label="Expand HUD">
+      <span class="label">{label}</span>
+      <span class="mini" aria-hidden="true">{mini}</span>
+      <span class="chev" aria-hidden="true">›</span>
+    </button>
+  </main>
+  <script>
+    const pill = document.querySelector('button.pill');
+    if (pill) {{
+      const handler = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.tamahermes;
+      const threshold = 3;
+      let pressed = false;
+      let dragged = false;
+      let startX = 0;
+      let startY = 0;
+      pill.addEventListener('pointerdown', (event) => {{
+        pressed = true;
+        dragged = false;
+        startX = event.screenX;
+        startY = event.screenY;
+        try {{ pill.setPointerCapture(event.pointerId); }} catch (error) {{}}
+      }});
+      pill.addEventListener('pointermove', (event) => {{
+        if (!pressed || dragged) return;
+        if (Math.max(Math.abs(event.screenX - startX), Math.abs(event.screenY - startY)) <= threshold) return;
+        // Past the threshold this is a drag, not a click: hand the session to
+        // the same native drag monitor the expanded panel uses.
+        dragged = true;
+        if (handler) handler.postMessage({{event: 'drag-start'}});
+      }});
+      pill.addEventListener('pointerup', () => {{
+        if (!pressed) return;
+        pressed = false;
+        if (dragged) {{
+          if (handler) handler.postMessage({{event: 'drag-end'}});
+          return;
+        }}
+        if (handler) handler.postMessage({{event: 'expand'}});
+      }});
+      pill.addEventListener('pointercancel', () => {{
+        if (pressed && dragged && handler) handler.postMessage({{event: 'drag-end'}});
+        pressed = false;
+        dragged = false;
+      }});
+    }}
+  </script>
+</body>
+</html>
+"""
+
+
+def render_expanded_overlay_html(snapshot: dict[str, Any], a11y: dict[str, Any] | None = None) -> str:
     stats = snapshot["stats"]
     traits = snapshot.get("traits", {})
     counters = snapshot["counters"]
@@ -591,6 +1272,7 @@ def render_native_overlay_html(snapshot: dict[str, Any], expanded: bool = True) 
 <head>
 <meta charset="utf-8">
 <style>
+{THEME_STYLE_CSS}{A11Y_STYLE_CSS}
 :root {{
   --glass-a: rgba(239, 255, 248, 0.82);
   --glass-b: rgba(174, 238, 255, 0.72);
@@ -841,12 +1523,12 @@ body {{
 }}
 </style>
 </head>
-<body>
+<body{body_attributes(a11y)}>
   <main class="wrap" aria-label="TamaHermes status">
     <div class="scale-controls" aria-label="HUD scale">
       <button data-event="scale-down" aria-label="Scale HUD down">−</button>
       <button data-event="scale-up" aria-label="Scale HUD up">+</button>
-      <button data-event="hide" class="wide" aria-label="Hide HUD (re-show with: tamahermes overlay show)">HIDE</button>
+      <button data-event="hide" class="wide" aria-label="Hide HUD">HIDE</button>
     </div>
     <section class="lcd">
       <div class="top"><span>{title}</span><span class="pill">{line}/{machine}</span></div>
@@ -963,6 +1645,62 @@ body {{
 """
 
 
+def native_overlay_config_payload(
+    home: Path,
+    visible: bool,
+    frame: dict[str, int | None] | None = None,
+    html_path: Path | None = None,
+    hover: dict[str, int] | None = None,
+    hover_delay_seconds: float = 1.0,
+    mode: str = OVERLAY_MODE_EXPANDED,
+    min_width: int | None = None,
+    min_height: int | None = None,
+    force_xy: bool = False,
+) -> dict[str, Any]:
+    """The native config payload for one tick.
+
+    Split out from the write so callers can tell whether the payload actually
+    changed before paying for a file write. ``mode``/``minWidth``/``minHeight``
+    are additive keys; the schema id and every existing key are unchanged, and
+    the helper's decoder ignores unknown keys, so old/new sides interoperate.
+    """
+    paths = native_overlay_paths(home)
+    frame = frame or {"x": None, "y": None, "width": DEFAULT_PANEL_WIDTH, "height": DEFAULT_PANEL_HEIGHT}
+    existing = read_json_object(paths["config"])
+    x = frame.get("x")
+    y = frame.get("y")
+    if force_xy:
+        if x is None:
+            x = existing.get("x")
+        if y is None:
+            y = existing.get("y")
+    else:
+        if existing.get("x") is not None:
+            x = existing.get("x")
+        if existing.get("y") is not None:
+            y = existing.get("y")
+    floor_width, floor_height = native_overlay_min_bounds(mode)
+    hover_payload = hover or {}
+    return {
+        "schema": NATIVE_OVERLAY_CONFIG_SCHEMA,
+        "visible": visible,
+        "mode": mode,
+        "scale": max(0.75, min(1.75, float(existing.get("scale") or 1.0))),
+        "x": x,
+        "y": y,
+        "width": frame.get("width"),
+        "height": frame.get("height"),
+        "minWidth": min_width if min_width is not None else floor_width,
+        "minHeight": min_height if min_height is not None else floor_height,
+        "htmlPath": str(html_path or paths["html"]),
+        "hoverX": hover_payload.get("x"),
+        "hoverY": hover_payload.get("y"),
+        "hoverWidth": hover_payload.get("width"),
+        "hoverHeight": hover_payload.get("height"),
+        "hoverDelaySeconds": hover_delay_seconds,
+    }
+
+
 def write_native_overlay_config(
     home: Path,
     visible: bool,
@@ -970,30 +1708,101 @@ def write_native_overlay_config(
     html_path: Path | None = None,
     hover: dict[str, int] | None = None,
     hover_delay_seconds: float = 1.0,
+    mode: str = OVERLAY_MODE_EXPANDED,
+    min_width: int | None = None,
+    min_height: int | None = None,
+    force_xy: bool = False,
 ) -> None:
     paths = native_overlay_paths(home)
     paths["root"].mkdir(parents=True, exist_ok=True)
-    frame = frame or {"x": None, "y": None, "width": 376, "height": 226}
-    existing = read_json_object(paths["config"])
-    payload = {
-        "schema": "tamahermes.native_overlay.config.v1",
-        "visible": visible,
-        "scale": max(0.75, min(1.75, float(existing.get("scale") or 1.0))),
-        "x": existing.get("x") if existing.get("x") is not None else frame.get("x"),
-        "y": existing.get("y") if existing.get("y") is not None else frame.get("y"),
-        "width": frame.get("width"),
-        "height": frame.get("height"),
-        "htmlPath": str(html_path or paths["html"]),
-        "hoverX": hover.get("x") if hover else None,
-        "hoverY": hover.get("y") if hover else None,
-        "hoverWidth": hover.get("width") if hover else None,
-        "hoverHeight": hover.get("height") if hover else None,
-        "hoverDelaySeconds": hover_delay_seconds,
-    }
+    payload = native_overlay_config_payload(
+        home,
+        visible,
+        frame=frame,
+        html_path=html_path,
+        hover=hover,
+        hover_delay_seconds=hover_delay_seconds,
+        mode=mode,
+        min_width=min_width,
+        min_height=min_height,
+        force_xy=force_xy,
+    )
     paths["config"].write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
 
-def run_native_overlay_loop(home: Path, root: Path, interval: float = 0.4) -> None:
+# Observation timestamps never count as "something changed": `updatedAt` is set
+# by the save itself, `lastSurfaceCheckedAtEpoch` is a pure tick heartbeat, and
+# `lastBoundsChangedAtEpoch` is refreshed on every tick while the overlay is
+# open. Persisting them per tick is exactly the write churn this replaces; a
+# real bounds change still lands because `lastBoundsSignature` is tracked.
+STATE_WRITE_IGNORED_KEYS = frozenset(
+    {"updatedAt", "lastSurfaceCheckedAtEpoch", "lastBoundsChangedAtEpoch"}
+)
+
+
+def overlay_state_fingerprint(overlay_state: dict[str, Any]) -> str:
+    """A stable digest of the parts of the overlay state worth persisting."""
+    tracked = {key: value for key, value in overlay_state.items() if key not in STATE_WRITE_IGNORED_KEYS}
+    return json.dumps(tracked, sort_keys=True, default=str)
+
+
+class NativeOverlayWriter:
+    """Write suppression for the files the Python loop owns.
+
+    The loop used to rewrite overlay.html and overlay-config.json on every tick
+    and re-save overlay-state.json on every branch, even when nothing had
+    changed. Each method here compares the payload it would write with the one
+    it last wrote and skips the write when they are identical.
+    """
+
+    def __init__(self, home: Path) -> None:
+        self.home = home
+        self.paths = native_overlay_paths(home)
+        self.paths["root"].mkdir(parents=True, exist_ok=True)
+        self.html_writes = 0
+        self.config_writes = 0
+        self.state_writes = 0
+        self._html_body: str | None = None
+        self._config_body: str | None = None
+        self._state_fingerprint: str | None = None
+
+    def write_html(self, content: str) -> bool:
+        if self._html_body == content:
+            return False
+        self.paths["html"].write_text(content, encoding="utf-8")
+        self._html_body = content
+        self.html_writes += 1
+        return True
+
+    def write_config(self, visible: bool, **kwargs: Any) -> bool:
+        paths = self.paths
+        paths["root"].mkdir(parents=True, exist_ok=True)
+        payload = native_overlay_config_payload(self.home, visible, **kwargs)
+        body = json.dumps(payload, sort_keys=True, default=str)
+        if body == self._config_body:
+            return False
+        paths["config"].write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        self._config_body = body
+        self.config_writes += 1
+        return True
+
+    def write_state(self, overlay_state: dict[str, Any]) -> bool:
+        fingerprint = overlay_state_fingerprint(overlay_state)
+        if fingerprint == self._state_fingerprint:
+            return False
+        save_overlay_state(overlay_state_path(self.home), overlay_state)
+        self._state_fingerprint = overlay_state_fingerprint(overlay_state)
+        self.state_writes += 1
+        return True
+
+
+def run_native_overlay_loop(
+    home: Path,
+    root: Path,
+    interval: float = 0.4,
+    popen: Callable[..., Any] = subprocess.Popen,
+    max_iterations: int | None = None,
+) -> None:
     write_sidecar_pid(home)
     paths = native_overlay_paths(home)
     binary = build_native_overlay_helper(home)
@@ -1001,7 +1810,9 @@ def run_native_overlay_loop(home: Path, root: Path, interval: float = 0.4) -> No
     state_path = overlay_runtime_state_path(home)
     overlay_file = overlay_state_path(home)
     player = native_sfx_player(home)
+    writer = NativeOverlayWriter(home)
     stopped = False
+    iterations = 0
 
     def stop(_signum: int, _frame: Any) -> None:
         nonlocal stopped
@@ -1010,7 +1821,7 @@ def run_native_overlay_loop(home: Path, root: Path, interval: float = 0.4) -> No
     old_term = signal.signal(signal.SIGTERM, stop)
     old_int = signal.signal(signal.SIGINT, stop)
     write_native_overlay_config(home, visible=False)
-    helper = subprocess.Popen([str(binary), str(paths["config"])], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    helper = popen([str(binary), str(paths["config"])], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     last_codex_event_sync = 0.0
     try:
         while not stopped:
@@ -1021,18 +1832,45 @@ def run_native_overlay_loop(home: Path, root: Path, interval: float = 0.4) -> No
             if selected:
                 interaction = consume_native_interaction(home)
                 if interaction:
-                    if apply_visibility_interaction(overlay_state, interaction.get("event")) is not None:
-                        save_overlay_state(overlay_file, overlay_state)
-                    else:
-                        record = {
-                            "event": interaction["event"],
-                            "id": interaction.get("id"),
-                            "source": "native-overlay",
-                            "amount": 1,
-                            "at": interaction.get("updatedAt"),
-                        }
-                        apply_bridge_event(catalog, state_path, record)
-                        refresh_installed_pet_for_records([record], catalog, state_path, home)
+                    disposition, changed = apply_native_interaction(home, interaction, overlay_state)
+                    if disposition == "pet-action":
+                        try:
+                            record = {
+                                "event": "care",
+                                "action": interaction["event"],
+                                "id": interaction.get("id"),
+                                "source": "native-overlay",
+                                "amount": 1,
+                                "at": interaction.get("updatedAt"),
+                            }
+                            spool_native_pet_action(str(interaction["event"]))
+                            from .evopet_drain import default_consumed_dir, default_spool, run as drain_run
+                            drain_run(
+                                default_spool(),
+                                state_path,
+                                default_consumed_dir(),
+                                apply=True,
+                                hermes_root=Path.home() / ".hermes",
+                                mirror=False,
+                            )
+                            try:
+                                refresh_installed_pet_for_records([record], catalog, state_path, home)
+                            except Exception as exc:  # noqa: BLE001
+                                overlay_state["lastInstallRefreshError"] = str(exc)
+                        except Exception as exc:  # noqa: BLE001
+                            overlay_state["lastInteractionError"] = str(exc)
+                            writer.write_state(overlay_state)
+                    elif changed:
+                        writer.write_state(overlay_state)
+            mode = overlay_mode(overlay_state)
+            # A collapsed pill or a hidden HUD is still a live surface: the loop
+            # keeps running so the restore affordance cannot delete itself.
+            should_run = overlay_should_run(global_state, overlay_state, time.time(), surface_active=surface_active)
+            if selected:
+                # Event sync, audio bookkeeping and the state file keep the same
+                # gate they always had (the selected pet), whatever the panel is
+                # currently drawing: a hidden HUD must still absorb events rather
+                # than replay them when it comes back.
                 try:
                     now = time.monotonic()
                     if now - last_codex_event_sync >= 1.0:
@@ -1070,44 +1908,69 @@ def run_native_overlay_loop(home: Path, root: Path, interval: float = 0.4) -> No
                         }
                     overlay_state["lastRenderedLevel"] = current_level
                     snapshot = status_snapshot(state)
+                    helper_status = read_json_object(paths["status"])
+                    a11y = native_overlay_a11y(helper_status)
                     hover = native_overlay_hover_rect(bounds) if surface_active else None
                     announcement = active_evolution_announcement(overlay_state, time.time())
                     hud_shown = hud_visible_now(selected, surface_active, overlay_state)
+                    config_mode = overlay_config_mode(overlay_state)
+                    # The pill is the one surface that stays on screen without an
+                    # active hover surface (the restore affordance must not delete
+                    # itself); every other mode needs the classic visible gate.
+                    show_panel = hud_shown if mode != OVERLAY_MODE_COLLAPSED else bool(should_run)
                     if announcement and hud_shown:
-                        paths["html"].write_text(render_evolution_announcement_html(str(announcement.get("message") or "")), encoding="utf-8")
-                        write_native_overlay_config(
-                            home,
+                        writer.write_html(render_evolution_announcement_html(str(announcement.get("message") or "")))
+                        writer.write_config(
                             visible=True,
                             frame=evolution_overlay_frame(bounds),
                             html_path=paths["html"],
                             hover=None,
+                            mode=OVERLAY_MODE_EXPANDED,
                         )
-                    elif hud_shown:
-                        paths["html"].write_text(render_native_overlay_html(snapshot, expanded=True), encoding="utf-8")
-                        write_native_overlay_config(
-                            home,
+                    elif show_panel and config_mode == OVERLAY_MODE_COLLAPSED:
+                        writer.write_html(render_native_overlay_html(snapshot, mode=OVERLAY_MODE_COLLAPSED, a11y=a11y))
+                        writer.write_config(
                             visible=True,
-                            frame=native_overlay_frame(bounds),
+                            frame=collapsed_overlay_frame(bounds),
                             html_path=paths["html"],
                             hover=None,
+                            mode=OVERLAY_MODE_COLLAPSED,
                         )
+                    elif show_panel:
+                        frame, restoring = expanded_frame_with_restore(overlay_state, bounds)
+                        writer.write_html(render_native_overlay_html(snapshot, mode=OVERLAY_MODE_EXPANDED, a11y=a11y))
+                        writer.write_config(
+                            visible=True,
+                            frame=frame,
+                            html_path=paths["html"],
+                            hover=None,
+                            mode=OVERLAY_MODE_EXPANDED,
+                            force_xy=restoring,
+                        )
+                        if restoring:
+                            overlay_state["hudExpandedXY"] = None
                     else:
-                        write_native_overlay_config(home, visible=False)
+                        writer.write_config(visible=False, mode=config_mode)
                         overlay_state["lastHoverReady"] = False
                         overlay_state["lastAudioMascotRect"] = None
                     apply_audio_decision(state, overlay_state, selected=surface_active, player=player)
                     if surface_active:
-                        apply_native_interaction_audio(overlay_state, read_json_object(paths["status"]), hover, selected=True, player=player)
-                    save_overlay_state(overlay_file, overlay_state)
+                        apply_native_interaction_audio(overlay_state, helper_status, hover, selected=True, player=player)
+                    writer.write_state(overlay_state)
                 else:
-                    write_native_overlay_config(home, visible=False)
-                    save_overlay_state(overlay_file, overlay_state)
+                    writer.write_config(visible=False, mode=overlay_config_mode(overlay_state))
+                    writer.write_state(overlay_state)
             else:
-                write_native_overlay_config(home, visible=False)
-                save_overlay_state(overlay_file, overlay_state)
+                writer.write_config(visible=False, mode=overlay_config_mode(overlay_state))
+                overlay_state["lastHoverReady"] = False
+                overlay_state["lastAudioMascotRect"] = None
+                writer.write_state(overlay_state)
             if helper.poll() is not None:
-                helper = subprocess.Popen([str(binary), str(paths["config"])], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            time.sleep(max(0.25, interval))
+                helper = popen([str(binary), str(paths["config"])], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            iterations += 1
+            if max_iterations is not None and iterations >= max_iterations:
+                break
+            time.sleep(overlay_loop_interval(mode, interval))
     finally:
         write_native_overlay_config(home, visible=False)
         if helper.poll() is None:

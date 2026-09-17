@@ -7,6 +7,7 @@ import signal
 import subprocess
 import sys
 import time
+import traceback
 from pathlib import Path
 from typing import Any, Callable
 
@@ -15,6 +16,7 @@ from .overlay_state import (
     is_tamahermes_selected,
     load_overlay_state,
     overlay_pid_path,
+    overlay_should_run,
     overlay_state_path,
     read_json_object,
     save_overlay_state,
@@ -26,6 +28,62 @@ from .paths import repo_root as resolve_repo_root
 
 LAUNCH_AGENT_LABEL = "com.autoark.tamahermes.overlay-supervisor"
 MIN_RESTART_SECONDS = 3.0
+
+# Claim outcomes. A live pid we cannot identify is never trusted and never
+# signalled; a live peer that really is our supervisor is a duplicate instance.
+CLAIMED = "CLAIMED"
+RECOVERED_STALE = "RECOVERED_STALE"
+DUPLICATE_PEER = "DUPLICATE_PEER"
+UNVERIFIED_PEER = "UNVERIFIED_PEER"
+
+# Exit codes (sysexits): non-zero so a fault surfaces in the launchd log and can
+# be retried instead of a silent clean exit that KeepAlive will not relaunch.
+EXIT_SOFTWARE = 70
+EXIT_TEMPFAIL = 75
+EXIT_CONFIG = 78
+
+SUPERVISOR_SIGNATURE = "supervisor"
+SIDECAR_SIGNATURE = "sidecar"
+FOREIGN_SIGNATURE = "foreign"
+UNKNOWN_SIGNATURE = "unknown"
+
+# Order matters: "tamahermes.overlay_supervisor" also contains
+# "tamahermes.overlay", so the supervisor marker is tested first.
+SUPERVISOR_MARKER = "tamahermes.overlay_supervisor"
+SIDECAR_MARKER = "tamahermes.overlay"
+
+
+def log(message: str) -> None:
+    """One observable line per event: the supervisor logs were empty before."""
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime())
+    print(f"{stamp} overlay-supervisor[{os.getpid()}] {message}", file=sys.stderr, flush=True)
+
+
+def pid_identity(pid: int, runner: Callable[..., subprocess.CompletedProcess[Any]] = subprocess.run) -> str | None:
+    """The pid's command line, or None when it cannot be read in time."""
+    if pid <= 0:
+        return None
+    ps = "/bin/ps" if Path("/bin/ps").exists() else "ps"
+    try:
+        completed = runner([ps, "-p", str(pid), "-o", "command="], capture_output=True, text=True, timeout=0.5, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if completed.returncode != 0:
+        return None
+    command = (completed.stdout or "").strip()
+    return command or None
+
+
+def pid_signature(pid: int, identity_reader: Callable[[int], str | None] = pid_identity) -> str:
+    """Classify a pid by its command line: supervisor | sidecar | foreign | unknown."""
+    identity = identity_reader(pid)
+    if not identity or not identity.strip():
+        return UNKNOWN_SIGNATURE
+    if SUPERVISOR_MARKER in identity:
+        return SUPERVISOR_SIGNATURE
+    if SIDECAR_MARKER in identity:
+        return SIDECAR_SIGNATURE
+    return FOREIGN_SIGNATURE
 
 
 def _pid_stat(pid: int, runner: Callable[..., subprocess.CompletedProcess[Any]] = subprocess.run) -> str | None:
@@ -78,20 +136,55 @@ def clear_pid(path: Path) -> None:
         pass
 
 
-def claim_pid_file(path: Path, pid: int | None = None, is_running: Callable[[int], bool] = pid_running) -> bool:
+def claim_pid_file(
+    path: Path,
+    pid: int | None = None,
+    is_running: Callable[[int], bool] = pid_running,
+    identity_reader: Callable[[int], str | None] = pid_identity,
+) -> str:
+    """Claim the pid file after verifying the identity of a live claimant.
+
+    Returns one of CLAIMED / RECOVERED_STALE / DUPLICATE_PEER / UNVERIFIED_PEER.
+    A live pid whose signature is not our supervisor is a stale file from a
+    reused pid, so it is self-healed; an unreadable pid is never trusted, and
+    nothing here signals anything.
+    """
     pid = pid or os.getpid()
     existing = read_pid(path)
-    if existing and existing != pid and is_running(existing):
-        return False
+    if not existing or existing == pid or not is_running(existing):
+        write_pid(path, pid)
+        return CLAIMED
+    signature = pid_signature(existing, identity_reader=identity_reader)
+    if signature == SUPERVISOR_SIGNATURE:
+        return DUPLICATE_PEER
+    if signature == UNKNOWN_SIGNATURE:
+        return UNVERIFIED_PEER
     write_pid(path, pid)
-    return True
+    return RECOVERED_STALE
 
 
-def stop_pid(pid: int, timeout: float = 1.5, is_running: Callable[[int], bool] = pid_running) -> bool:
+def record_supervisor_claim(home: Path, result: str, peer_pid: int | None) -> None:
+    """Persist the claim outcome so the silent-exit defect stays observable."""
+    state = load_overlay_state(overlay_state_path(home))
+    state["supervisorClaim"] = {
+        "result": result,
+        "peerPid": peer_pid,
+        "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    save_overlay_state(overlay_state_path(home), state)
+
+
+def stop_pid(
+    pid: int,
+    timeout: float = 1.5,
+    is_running: Callable[[int], bool] = pid_running,
+    killer: Callable[[int, int], None] | None = None,
+) -> bool:
     if not is_running(pid):
         return True
+    send = killer or os.kill
     try:
-        os.kill(pid, signal.SIGTERM)
+        send(pid, signal.SIGTERM)
     except OSError:
         return True
     deadline = time.monotonic() + timeout
@@ -172,11 +265,20 @@ def install_launch_agent(
     return {"ok": True, "path": str(path), "label": LAUNCH_AGENT_LABEL, "loaded": loaded}
 
 
-def overlay_process_alive(home: Path, is_running: Callable[[int], bool] = pid_running) -> int | None:
+def overlay_process_alive(
+    home: Path,
+    is_running: Callable[[int], bool] = pid_running,
+    identity_reader: Callable[[int], str | None] = pid_identity,
+) -> int | None:
+    """The live sidecar pid, or None. Only a verified sidecar counts."""
     state = load_overlay_state(overlay_state_path(home))
     candidates = [state.get("sidecarPid"), read_pid(overlay_pid_path(home))]
     for raw_pid in candidates:
-        if isinstance(raw_pid, int) and is_running(raw_pid):
+        if (
+            isinstance(raw_pid, int)
+            and is_running(raw_pid)
+            and pid_signature(raw_pid, identity_reader=identity_reader) == SIDECAR_SIGNATURE
+        ):
             return raw_pid
     clear_pid(overlay_pid_path(home))
     if state.get("sidecarPid"):
@@ -233,14 +335,30 @@ def wait_for_running_pid(path: Path, timeout: float = 2.0, is_running: Callable[
     return pid if pid and is_running(pid) else None
 
 
-def stop_overlay_process(home: Path, is_running: Callable[[int], bool] = pid_running) -> bool:
+def stop_overlay_process(
+    home: Path,
+    is_running: Callable[[int], bool] = pid_running,
+    identity_reader: Callable[[int], str | None] = pid_identity,
+    killer: Callable[[int, int], None] | None = None,
+) -> bool:
+    """Stop the sidecar — and only the sidecar.
+
+    A pid file or state value that does not verify as our sidecar (foreign,
+    supervisor, or unreadable) is cleared without signalling anything: signalling
+    a reused pid is the defect this hardening removes.
+    """
     pid = read_pid(overlay_pid_path(home))
     state = load_overlay_state(overlay_state_path(home))
     if not pid and isinstance(state.get("sidecarPid"), int):
         pid = state["sidecarPid"]
     stopped = True
     if pid:
-        stopped = stop_pid(pid, is_running=is_running)
+        if not is_running(pid):
+            stopped = True
+        elif pid_signature(pid, identity_reader=identity_reader) == SIDECAR_SIGNATURE:
+            stopped = stop_pid(pid, is_running=is_running, killer=killer)
+        else:
+            stopped = False
     clear_pid(overlay_pid_path(home))
     state["sidecarPid"] = None
     save_overlay_state(overlay_state_path(home), state)
@@ -272,17 +390,24 @@ def supervise_once(
     is_running: Callable[[int], bool] = pid_running,
     starter: Callable[[Path, Path | None, str | None], int] | None = None,
     stopper: Callable[[Path], bool] | None = None,
+    app_running: Callable[[], bool] | None = None,
+    identity_reader: Callable[[int], str | None] = pid_identity,
 ) -> dict[str, Any]:
     global_state = read_json_object(global_state_path(home))
     selected = is_tamahermes_selected(global_state)
     overlay_state = load_overlay_state(overlay_state_path(home))
     surface_active, _bounds = update_surface_activity(global_state, overlay_state, time.time())
     save_overlay_state(overlay_state_path(home), overlay_state)
-    running_pid = overlay_process_alive(home, is_running=is_running)
-    if not selected or not surface_active:
+    # The pill and the hidden HUD are live surfaces: idle-stop may not reap them.
+    should_run = overlay_should_run(global_state, overlay_state, time.time(), surface_active=surface_active)
+    is_running = is_running or pid_running
+    identity_reader = identity_reader or pid_identity
+    running_pid = overlay_process_alive(home, is_running=is_running, identity_reader=identity_reader)
+    live = should_run and (app_running() if app_running else True)
+    if not live:
         stopped = True
         if running_pid:
-            stopped = stopper(home) if stopper else stop_overlay_process(home, is_running=is_running)
+            stopped = stopper(home) if stopper else stop_overlay_process(home, is_running=is_running, identity_reader=identity_reader)
         return {"selected": selected, "surfaceActive": surface_active, "runningPid": running_pid, "startedPid": None, "stopped": stopped}
     if running_pid:
         return {"selected": True, "surfaceActive": True, "runningPid": running_pid, "startedPid": None, "stopped": False}
@@ -346,10 +471,54 @@ def ensure_overlay_supervisor(
     return report
 
 
-def supervisor_loop(home: Path, root: Path | None = None, python: str | None = None, interval: float = 1.0) -> int:
+def _home_usable(home: Path) -> bool:
+    """Whether the supervisor can write its state under this codex home.
+
+    Checked without side effects: a missing home is a config fault (78), and a
+    supervisor must never invent the codex home it was pointed at.
+    """
+    target = home / "tamahermes"
+    for candidate in (target, target.parent):
+        if candidate.is_dir():
+            return os.access(candidate, os.W_OK | os.X_OK)
+    return False
+
+
+def supervisor_loop(
+    home: Path,
+    root: Path | None = None,
+    python: str | None = None,
+    interval: float = 1.0,
+    is_running: Callable[[int], bool] | None = None,
+    identity_reader: Callable[[int], str | None] | None = None,
+) -> int:
+    # Late-bound so tests (and callers) can swap process identity reading
+    # wholesale without ever probing a live pid.
+    is_running = is_running or pid_running
+    identity_reader = identity_reader or pid_identity
     pid_path = supervisor_pid_path(home)
-    if not claim_pid_file(pid_path):
+    if not _home_usable(home):
+        log(f"ERROR config: codex home not usable: {home}")
+        return EXIT_CONFIG
+    if root is not None and not root.is_dir():
+        log(f"ERROR config: repo root not a directory: {root}")
+        return EXIT_CONFIG
+    claim = claim_pid_file(pid_path, is_running=is_running, identity_reader=identity_reader)
+    if claim == UNVERIFIED_PEER:
+        existing = read_pid(pid_path)
+        log(f"ERROR {claim}: pid file holds {existing} which cannot be identified; exiting {EXIT_TEMPFAIL}")
+        record_supervisor_claim(home, claim, existing)
+        return EXIT_TEMPFAIL
+    if claim == DUPLICATE_PEER:
+        existing = read_pid(pid_path)
+        log(f"WARNING {claim}: another supervisor ({existing}) already holds the pid file; exiting 0")
+        record_supervisor_claim(home, claim, existing)
         return 0
+    if claim == RECOVERED_STALE:
+        log(f"WARNING {claim}: stale/reused pid found in {pid_path}; rewrote it for self ({os.getpid()})")
+        record_supervisor_claim(home, claim, None)
+    else:
+        record_supervisor_claim(home, claim, None)
     state = load_overlay_state(overlay_state_path(home))
     state["supervisorPid"] = os.getpid()
     save_overlay_state(overlay_state_path(home), state)
@@ -358,18 +527,24 @@ def supervisor_loop(home: Path, root: Path | None = None, python: str | None = N
         while True:
             global_state = read_json_object(global_state_path(home))
             overlay_state = load_overlay_state(overlay_state_path(home))
-            selected = is_tamahermes_selected(global_state)
             surface_active, _bounds = update_surface_activity(global_state, overlay_state, time.time())
             save_overlay_state(overlay_state_path(home), overlay_state)
             app_running = native_pet_process_running()
-            if selected and surface_active and app_running:
-                running = overlay_process_alive(home)
+            # D9.1: the collapsed pill / hidden toggle count as live surfaces; the
+            # by-design idle child stop (EvoPet closed) is preserved as-is.
+            should_run = overlay_should_run(global_state, overlay_state, time.time(), surface_active=surface_active)
+            if should_run and app_running:
+                running = overlay_process_alive(home, is_running=is_running, identity_reader=identity_reader)
                 if not running and time.monotonic() - last_start >= MIN_RESTART_SECONDS:
                     start_overlay_process(home, root=root, python=python)
                     last_start = time.monotonic()
             else:
-                stop_overlay_process(home)
+                stop_overlay_process(home, is_running=is_running, identity_reader=identity_reader)
             time.sleep(max(0.2, interval))
+    except Exception:  # noqa: BLE001
+        log(f"ERROR fault: unexpected supervisor failure; exiting {EXIT_SOFTWARE}")
+        log(traceback.format_exc())
+        return EXIT_SOFTWARE
     finally:
         current = read_pid(pid_path)
         if current == os.getpid():
