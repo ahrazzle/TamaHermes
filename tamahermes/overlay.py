@@ -5,6 +5,9 @@ import hashlib
 import html
 import json
 import os
+import platform
+import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -63,6 +66,21 @@ def _format_latest(latest: dict[str, Any] | None) -> str:
 
 def _percent(value: int) -> str:
     return f"{_clamp(value, 0, 100):3d}%"
+
+
+def file_sha256(path: Path) -> str | None:
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+def write_json_file(path: Path, payload: dict[str, Any]) -> None:
+    """Write JSON atomically so a reader never sees a half-written file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    temporary.replace(path)
 
 
 TAMAGO_PALETTE = {
@@ -314,6 +332,9 @@ def native_overlay_paths(home: Path) -> dict[str, Path]:
         "root": root,
         "binary": root / "TamaHermesOverlay",
         "stamp": root / "TamaHermesOverlay.sha256",
+        "provenance": root / "TamaHermesOverlay.provenance.json",
+        "backup": root / "TamaHermesOverlay.prev",
+        "backupProvenance": root / "TamaHermesOverlay.prev.provenance.json",
         "config": root / "overlay-config.json",
         "html": root / "overlay.html",
         "status": root / "overlay-helper-status.json",
@@ -549,40 +570,281 @@ def native_overlay_source() -> Path:
     return Path(__file__).resolve().parent / "native_overlay" / "TamaHermesOverlay.swift"
 
 
-def build_native_overlay_helper(home: Path) -> Path:
+COMMAND_LINE_TOOLS_ROOT = Path("/Library/Developer/CommandLineTools")
+NATIVE_OVERLAY_PROVENANCE_SCHEMA = "tamahermes.native_overlay.provenance.v1"
+NATIVE_OVERLAY_DEPLOYMENT_TARGET_MIN = "macos15.0"
+GLASS_SDK_HEADER = Path("System/Library/Frameworks/AppKit.framework/Headers/NSGlassEffectView.h")
+_SDK_DIR_PATTERN = re.compile(r"^MacOSX(?:(\d+)(?:\.(\d+))?)?\.sdk$")
+
+
+def sdk_version_key(name: str) -> tuple[int, int]:
+    """Numeric compare for SDK directory names (26.5 > 26 > 9.0, not lexicographic)."""
+    match = _SDK_DIR_PATTERN.match(name)
+    if not match:
+        return (-1, -1)
+    major = int(match.group(1)) if match.group(1) else 0
+    minor = int(match.group(2)) if match.group(2) else 0
+    return (major, minor)
+
+
+def probe_glass_sdk(
+    toolchain_root: Path = COMMAND_LINE_TOOLS_ROOT,
+    sdk_dirs: list[Path] | None = None,
+) -> Path | None:
+    """Highest-versioned SDK that actually carries the Liquid Glass header.
+
+    Returns None when no glass-capable SDK exists — the caller then degrades to
+    the legacy recipe instead of failing the build.
+    """
+    if sdk_dirs is None:
+        sdk_root = toolchain_root / "SDKs"
+        try:
+            sdk_dirs = sorted(sdk_root.glob("MacOSX*.sdk"), key=lambda path: sdk_version_key(path.name))
+        except OSError:
+            return None
+    else:
+        sdk_dirs = sorted(sdk_dirs, key=lambda path: sdk_version_key(path.name))
+    for sdk in reversed(sdk_dirs):
+        if (sdk / GLASS_SDK_HEADER).exists():
+            return sdk
+    return None
+
+
+def swift_toolchain_path(toolchain_root: Path = COMMAND_LINE_TOOLS_ROOT) -> Path:
+    """The CLT toolchain when present, else the developer-tools default."""
+    candidate = toolchain_root / "usr" / "bin" / "swiftc"
+    if candidate.exists():
+        return candidate
+    return Path("/usr/bin/swiftc")
+
+
+def toolchain_version(swiftc: Path, runner: Any = subprocess.run) -> str | None:
+    try:
+        completed = runner([str(swiftc), "--version"], capture_output=True, text=True, timeout=5, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if completed.returncode != 0:
+        return None
+    first_line = (completed.stdout or completed.stderr or "").strip().splitlines()
+    return first_line[0].strip() if first_line else None
+
+
+def git_provenance(source: Path, runner: Any = subprocess.run) -> dict[str, Any]:
+    """Best-effort git identity for the tree the source was compiled from."""
+    def git(*args: str) -> str | None:
+        try:
+            completed = runner(
+                ["git", "-C", str(source.parent), *args],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        if completed.returncode != 0:
+            return None
+        return completed.stdout.strip()
+
+    head = git("rev-parse", "HEAD")
+    branch = git("rev-parse", "--abbrev-ref", "HEAD")
+    dirty = git("status", "--porcelain")
+    return {
+        "gitHead": head or None,
+        "gitBranch": branch or None,
+        "gitDirty": bool(dirty.strip()) if isinstance(dirty, str) else None,
+    }
+
+
+def native_overlay_build_recipe(
+    source: Path,
+    *,
+    toolchain_root: Path = COMMAND_LINE_TOOLS_ROOT,
+    swiftc: Path | None = None,
+    machine: str | None = None,
+    sdk_dirs: list[Path] | None = None,
+    runner: Any = subprocess.run,
+) -> dict[str, Any]:
+    """The compile recipe for the helper: glass when the SDK can see it, else legacy.
+
+    Glass is an optimisation, never a requirement: a toolchain without the
+    Liquid Glass headers silently produces the same single source file with the
+    legacy recipe instead of failing the build.
+    """
+    compiler = swiftc or swift_toolchain_path(toolchain_root)
+    architecture = (machine or platform.machine() or "arm64").strip()
+    sdk = probe_glass_sdk(toolchain_root, sdk_dirs=sdk_dirs)
+    flags: list[str] = ["-O"]
+    target: str | None = None
+    if sdk is not None:
+        target = f"{architecture}-apple-{NATIVE_OVERLAY_DEPLOYMENT_TARGET_MIN}"
+        flags.extend(["-sdk", str(sdk), "-target", target, "-D", "EVOPET_GLASS"])
+    flags.extend(["-framework", "AppKit", "-framework", "WebKit"])
+    return {
+        "swiftc": compiler,
+        "sdk": sdk,
+        "target": target,
+        "flags": flags,
+        "glassEnabled": sdk is not None,
+        "toolchainVersion": toolchain_version(compiler, runner=runner),
+    }
+
+
+def native_overlay_recipe_key(recipe: dict[str, Any], source_sha256: str) -> str:
+    """Hash of the inputs that must change before the binary is rebuilt."""
+    material = json.dumps(
+        {
+            "sourceSha256": source_sha256,
+            "toolchainVersion": recipe.get("toolchainVersion"),
+            "sdkPath": str(recipe["sdk"]) if recipe.get("sdk") else None,
+            "target": recipe.get("target"),
+            "flags": list(recipe.get("flags") or []),
+        },
+        sort_keys=True,
+    )
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
+def native_overlay_provenance(
+    source: Path,
+    recipe: dict[str, Any],
+    source_sha256: str,
+    binary_sha256: str,
+    *,
+    runner: Any = subprocess.run,
+    recipe_fallback: str | None = None,
+) -> dict[str, Any]:
+    record: dict[str, Any] = {
+        "schema": NATIVE_OVERLAY_PROVENANCE_SCHEMA,
+        "recipeKey": native_overlay_recipe_key(recipe, source_sha256),
+        "sourcePath": str(source),
+        "sourceSha256": source_sha256,
+        "binarySha256": binary_sha256,
+        "toolchainPath": str(recipe["swiftc"]),
+        "toolchainVersion": recipe.get("toolchainVersion"),
+        "sdkPath": str(recipe["sdk"]) if recipe.get("sdk") else None,
+        "sdkName": recipe["sdk"].name if recipe.get("sdk") else None,
+        "target": recipe.get("target"),
+        "flags": list(recipe.get("flags") or []),
+        "glassEnabled": bool(recipe.get("glassEnabled")),
+        "builtAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    record.update(git_provenance(source, runner=runner))
+    if recipe_fallback:
+        record["recipeFallback"] = recipe_fallback
+    return record
+
+
+def build_native_overlay_helper(
+    home: Path,
+    *,
+    runner: Any = subprocess.run,
+    toolchain_root: Path = COMMAND_LINE_TOOLS_ROOT,
+    machine: str | None = None,
+    sdk_dirs: list[Path] | None = None,
+    copier: Any = shutil.copy2,
+) -> Path:
+    """Compile the native helper if the cached build does not already match.
+
+    Never signals, kills or restarts anything: the binary is compiled next to the
+    live one and swapped in with an atomic replace, so a running helper keeps its
+    inode. The legacy source-hash stamp keeps being written for the old cache
+    semantics, and the recipe/provenance file records what was actually built.
+    """
     paths = native_overlay_paths(home)
     source = native_overlay_source()
     if sys.platform != "darwin":
         raise NativeOverlayUnavailable("native overlay requires macOS")
     if not source.exists():
         raise NativeOverlayUnavailable(f"missing native overlay source: {source}")
-    swiftc = Path("/usr/bin/swiftc")
-    if not swiftc.exists():
-        raise NativeOverlayUnavailable("swiftc is unavailable")
-    source_hash = hashlib.sha256(source.read_bytes()).hexdigest()
     binary = paths["binary"]
     stamp = paths["stamp"]
-    if binary.exists() and stamp.exists() and stamp.read_text(encoding="utf-8").strip() == source_hash:
+    source_hash = hashlib.sha256(source.read_bytes()).hexdigest()
+    recipe = native_overlay_build_recipe(
+        source,
+        toolchain_root=toolchain_root,
+        machine=machine,
+        sdk_dirs=sdk_dirs,
+        runner=runner,
+    )
+    if not Path(recipe["swiftc"]).exists():
+        raise NativeOverlayUnavailable("swiftc is unavailable")
+    recipe_key = native_overlay_recipe_key(recipe, source_hash)
+
+    cached = read_json_object(paths["provenance"])
+    if (
+        binary.exists()
+        and cached.get("recipeKey") == recipe_key
+        and cached.get("sourceSha256") == source_hash
+        and cached.get("binarySha256")
+        and cached.get("binarySha256") == file_sha256(binary)
+    ):
+        # Cached build matches the recipe and the bytes on disk: no compile,
+        # no surprise rebuild of the live directory.
+        stamp.write_text(source_hash + "\n", encoding="utf-8")
         return binary
+
     paths["root"].mkdir(parents=True, exist_ok=True)
-    command = [
-        str(swiftc),
-        "-O",
-        "-framework",
-        "AppKit",
-        "-framework",
-        "WebKit",
-        str(source),
-        "-o",
-        str(binary),
-    ]
+    # Keep a one-generation rollback copy *before* the new binary lands.
+    if binary.exists():
+        try:
+            copier(binary, paths["backup"])
+            if paths["provenance"].exists():
+                copier(paths["provenance"], paths["backupProvenance"])
+        except OSError:
+            pass
+    fallback_reason: str | None = None
     try:
-        subprocess.run(command, check=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    except subprocess.CalledProcessError as exc:
-        message = exc.stderr.strip() or exc.stdout.strip() or str(exc)
-        raise NativeOverlayUnavailable(message) from exc
+        binary_sha = _compile_native_overlay(source, recipe, binary, runner=runner)
+    except NativeOverlayUnavailable as exc:
+        if not recipe.get("glassEnabled"):
+            raise
+        # Degrade instead of failing: a toolchain that cannot build the glass
+        # path still builds the same source with the legacy recipe.
+        fallback_reason = f"glass-compile-failed: {exc}"
+        print(f"native overlay: {fallback_reason}", file=sys.stderr)
+        recipe = native_overlay_build_recipe(source, toolchain_root=toolchain_root, machine=machine, sdk_dirs=[], runner=runner)
+        if recipe.get("glassEnabled") or not Path(recipe["swiftc"]).exists():
+            raise exc
+        recipe_key = native_overlay_recipe_key(recipe, source_hash)
+        binary_sha = _compile_native_overlay(source, recipe, binary, runner=runner)
+
+    record = native_overlay_provenance(
+        source,
+        recipe,
+        source_hash,
+        binary_sha,
+        runner=runner,
+        recipe_fallback=fallback_reason,
+    )
+    write_json_file(paths["provenance"], record)
+    # Legacy stamp: same wire format as before (source hash only).
     stamp.write_text(source_hash + "\n", encoding="utf-8")
     return binary
+
+
+def _compile_native_overlay(source: Path, recipe: dict[str, Any], binary: Path, *, runner: Any) -> str:
+    """Compile to a temp sibling, verify it, then atomically swap it into place."""
+    temporary = binary.with_name(f"{binary.name}.tmp-{os.getpid()}")
+    command = [str(recipe["swiftc"]), *[str(flag) for flag in recipe["flags"]], str(source), "-o", str(temporary)]
+    try:
+        completed = runner(command, capture_output=True, text=True, check=False)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise NativeOverlayUnavailable(str(exc)) from exc
+    if completed.returncode != 0:
+        message = (completed.stderr or completed.stdout or "").strip() or f"swiftc exited {completed.returncode}"
+        try:
+            temporary.unlink()
+        except OSError:
+            pass
+        raise NativeOverlayUnavailable(message)
+    if not temporary.exists():
+        raise NativeOverlayUnavailable("swiftc produced no binary")
+    binary_sha = file_sha256(temporary)
+    if binary_sha is None:
+        raise NativeOverlayUnavailable("could not hash the compiled binary")
+    os.replace(temporary, binary)
+    return binary_sha
 
 
 def native_overlay_frame(bounds: Any) -> dict[str, int | None]:
