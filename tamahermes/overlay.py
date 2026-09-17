@@ -1604,7 +1604,11 @@ def run_native_overlay_loop(
             # A collapsed pill or a hidden HUD is still a live surface: the loop
             # keeps running so the restore affordance cannot delete itself.
             should_run = overlay_should_run(global_state, overlay_state, time.time(), surface_active=surface_active)
-            if should_run and mode != OVERLAY_MODE_HIDDEN:
+            if selected:
+                # Event sync, audio bookkeeping and the state file keep the same
+                # gate they always had (the selected pet), whatever the panel is
+                # currently drawing: a hidden HUD must still absorb events rather
+                # than replay them when it comes back.
                 try:
                     now = time.monotonic()
                     if now - last_codex_event_sync >= 1.0:
@@ -1648,6 +1652,10 @@ def run_native_overlay_loop(
                     announcement = active_evolution_announcement(overlay_state, time.time())
                     hud_shown = hud_visible_now(selected, surface_active, overlay_state)
                     config_mode = overlay_config_mode(overlay_state)
+                    # The pill is the one surface that stays on screen without an
+                    # active hover surface (the restore affordance must not delete
+                    # itself); every other mode needs the classic visible gate.
+                    show_panel = hud_shown if mode != OVERLAY_MODE_COLLAPSED else bool(should_run)
                     if announcement and hud_shown:
                         writer.write_html(render_evolution_announcement_html(str(announcement.get("message") or "")))
                         writer.write_config(
@@ -1657,7 +1665,7 @@ def run_native_overlay_loop(
                             hover=None,
                             mode=OVERLAY_MODE_EXPANDED,
                         )
-                    elif hud_shown and config_mode == OVERLAY_MODE_COLLAPSED:
+                    elif show_panel and config_mode == OVERLAY_MODE_COLLAPSED:
                         writer.write_html(render_native_overlay_html(snapshot, mode=OVERLAY_MODE_COLLAPSED, a11y=a11y))
                         writer.write_config(
                             visible=True,
@@ -1666,7 +1674,7 @@ def run_native_overlay_loop(
                             hover=None,
                             mode=OVERLAY_MODE_COLLAPSED,
                         )
-                    elif hud_shown:
+                    elif show_panel:
                         frame, restoring = expanded_frame_with_restore(overlay_state, bounds)
                         writer.write_html(render_native_overlay_html(snapshot, mode=OVERLAY_MODE_EXPANDED, a11y=a11y))
                         writer.write_config(
