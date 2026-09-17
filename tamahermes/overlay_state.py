@@ -317,6 +317,7 @@ def status_snapshot(state: dict[str, Any]) -> dict[str, Any]:
             "levelCeiling": progress.get("levelCeiling"),
             "xpIntoLevel": int(progress.get("xpIntoLevel") or 0),
             "xpToNextLevel": int(progress.get("xpToNextLevel") or 0),
+            "levelMaxed": bool(progress.get("levelMaxed")),
         },
         "formId": state.get("formId"),
         "lastCodexState": state.get("lastCodexState") or "idle",

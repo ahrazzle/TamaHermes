@@ -89,8 +89,9 @@ NEUTRAL_STATES = {"idle", "running", "waiting", "waving"}
 # ledger -- the one shared pet. Care is never written to a profile ledger.
 CARE_ACTIONS = ("clean", "feed", "play")
 
-# The ladder and the curve are EvoPet's (see tamahermes/levels.py): 99 levels, 100,000 XP at the
-# top, fast early and slow late. The gates are the pet creator's; these are the default pet's.
+# The ladder and the curve are EvoPet's (see tamahermes/levels.py): levels keep climbing, each
+# costing more than the one before it. The gates are the pet creator's; these are the default
+# pet's.
 DEFAULT_EVOLUTION_GATES = levels.DEFAULT_EVOLUTION_GATES
 
 
@@ -328,8 +329,11 @@ def curve_block() -> Dict[str, Any]:
     """The fixed ladder + the creator's gates, stamped into every combined ledger."""
     return {
         "maxLevel": levels.MAX_LEVEL,
-        "capXp": levels.CAP_XP,
-        "curve": f"xp(L) = round({levels.CAP_XP} * ((L - 1) / {levels.MAX_LEVEL - 1}) ** {levels.EXPONENT})",
+        "topXp": levels.TOP_XP,
+        "curve": (
+            f"xp(L) = round({levels.QUADRATIC_TERM} * (L - 1) ** 2"
+            f" + (L - 1) ** 6 / {levels.TAIL_DIVISOR})"
+        ),
         "evolutionGates": list(levels.DEFAULT_EVOLUTION_GATES),
         "gateXp": levels.gate_report(levels.DEFAULT_EVOLUTION_GATES),
         "note": "the ladder is fixed by EvoPet; the gates are the pet creator's setting",

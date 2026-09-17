@@ -88,9 +88,10 @@ def stage_xp_floor(stage: str, state: dict[str, Any] | None = None) -> int:
 def stage_progress(state: dict[str, Any]) -> dict[str, Any]:
     """Progress toward the next LEVEL — what the growth bar fills against — plus the stage.
 
-    The ladder is fixed by EvoPet (``levels.py``): 99 levels, 100,000 XP at the top, fast early
-    and slow late. The pet *evolves* only when it reaches a creator-declared level gate, so the
-    bar fills roughly a hundred times per lifetime instead of once per stage.
+    The ladder is fixed by EvoPet (``levels.py``): levels keep climbing, each one costing more
+    than the last, so the early rungs stay cheap and the top stays far away. The pet *evolves*
+    only when it reaches a creator-declared level gate, so the bar fills roughly once per level
+    instead of once per stage.
 
     ``ceiling`` is the cumulative XP that ends the current *stage* (``None`` for the terminal
     stage, reported as 100%). ``percent`` is the position inside the current *level*. Both the
@@ -112,7 +113,8 @@ def stage_progress(state: dict[str, Any]) -> dict[str, Any]:
     floor = stage_xp_floor(stage, state)
     ceiling = evolution_thresholds(state).get(stage)
     # The bar is level progress, not stage progress. A terminal evolution stage can
-    # last through levels 46..99; pinning it to 100% made every adult pet look maxed.
+    # last from the last gate to the top of the ladder; pinning it to 100% made every
+    # adult pet look maxed.
     percent = int(ladder["percent"])
     return {
         "stage": "hibernation" if dormant else stage,
@@ -668,7 +670,8 @@ def maybe_evolve(state: dict[str, Any], catalog: Catalog) -> dict[str, Any]:
             else:
                 state.pop(key, None)
         state["formId"] = before
-    # The ladder is EvoPet's, not the creator's: 99 levels, 100,000 XP at the top.
+    # The ladder is EvoPet's, not the creator's: levels keep climbing, each costing more than
+    # the one before it.
     state["level"] = levels.level_for_xp(state["xp"])
     return {"evolved": before != state["formId"], "from": before, "to": state["formId"]}
 

@@ -11,11 +11,11 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class TheLadderIsFixed(unittest.TestCase):
-    def test_level_one_is_zero_xp_and_level_99_is_the_cap(self) -> None:
+    def test_level_one_is_zero_xp_and_the_top_of_the_ladder_is_the_last_rung(self) -> None:
         self.assertEqual(levels.xp_for_level(1), 0)
-        self.assertEqual(levels.xp_for_level(99), levels.CAP_XP)
-        self.assertEqual(levels.CAP_XP, 100_000)
-        self.assertEqual(levels.MAX_LEVEL, 99)
+        self.assertEqual(levels.xp_for_level(levels.MAX_LEVEL), levels.TOP_XP)
+        self.assertEqual(levels.TOP_XP, 998_019_880)
+        self.assertEqual(levels.MAX_LEVEL, 999)
 
     def test_the_curve_is_strictly_increasing(self) -> None:
         previous = -1
@@ -32,8 +32,8 @@ class TheLadderIsFixed(unittest.TestCase):
         self.assertGreaterEqual(last, 1500)
         self.assertGreater(middle, first)
         self.assertLess(middle, last)
-        # half the cap is spent getting from level 50 to the top
-        self.assertEqual(levels.xp_for_level(50), 25_000)
+        # The same 10 * u ** 2 early ladder the project has always shipped.
+        self.assertEqual(levels.xp_for_level(50), 24_024)
 
     def test_every_level_boundary_round_trips(self) -> None:
         for level in range(1, levels.MAX_LEVEL + 1):
@@ -44,7 +44,7 @@ class TheLadderIsFixed(unittest.TestCase):
 
     def test_the_top_of_the_ladder_is_maxed_not_overflowing(self) -> None:
         self.assertEqual(levels.level_for_xp(10 ** 9), levels.MAX_LEVEL)
-        top = levels.level_progress(levels.CAP_XP)
+        top = levels.level_progress(levels.TOP_XP)
         self.assertTrue(top["maxed"])
         self.assertIsNone(top["ceiling"])
         self.assertEqual(top["percent"], 100)
@@ -85,12 +85,12 @@ class GatesAreTheCreatorsChoice(unittest.TestCase):
     def test_a_stage_is_decided_by_the_pet_level_that_reaches_the_gate(self) -> None:
         gates = levels.DEFAULT_EVOLUTION_GATES
         self.assertEqual(levels.stage_for_xp(0, gates), "egg")
-        self.assertEqual(levels.stage_for_xp(1000, gates), "egg")
+        self.assertEqual(levels.stage_for_xp(levels.xp_for_level(11) - 1, gates), "egg")
         self.assertEqual(levels.stage_for_xp(levels.xp_for_level(11), gates), "hatchling")
         self.assertEqual(levels.stage_for_xp(levels.xp_for_level(23) - 1, gates), "hatchling")
         self.assertEqual(levels.stage_for_xp(levels.xp_for_level(23), gates), "child")
         self.assertEqual(levels.stage_for_xp(levels.xp_for_level(45), gates), "adult")
-        self.assertEqual(levels.stage_for_xp(levels.CAP_XP, gates), "adult")
+        self.assertEqual(levels.stage_for_xp(levels.TOP_XP, gates), "adult")
 
     def test_a_creator_can_choose_fewer_or_more_gates(self) -> None:
         two = levels.validate_gates([12, 40])
@@ -100,7 +100,7 @@ class GatesAreTheCreatorsChoice(unittest.TestCase):
         self.assertEqual(len(levels.forms_for_gates(four)), 5)
 
     def test_bad_gate_lists_are_rejected_loudly(self) -> None:
-        for bad in ([], [40, 20], [11, 11], [0], [200], [1, 2, 3, 4, 5]):
+        for bad in ([], [40, 20], [11, 11], [0], [1000], [1, 2, 3, 4, 5]):
             with self.assertRaises(ValueError, msg=bad):
                 levels.validate_gates(bad)
 
@@ -173,7 +173,7 @@ class ThePetCarriesItsOwnGates(unittest.TestCase):
     def test_the_ledgers_table_follows_the_ledgers_gates(self) -> None:
         """Three gates at levels 20, 40 and 60, priced on the fixed curve."""
         thresholds = pet_state.evolution_thresholds(self.ledger(gates=self.CUSTOM))
-        self.assertEqual(thresholds, {"egg": 3_759, "hatchling": 15_837, "child": 36_245})
+        self.assertEqual(thresholds, {"egg": 3_610, "hatchling": 15_214, "child": 34_852})
         self.assertEqual(thresholds, levels.ledger_thresholds(self.CUSTOM))
         self.assertEqual(
             (thresholds["egg"], thresholds["hatchling"], thresholds["child"]),
@@ -182,7 +182,7 @@ class ThePetCarriesItsOwnGates(unittest.TestCase):
         # The creator-facing reading is the same relationship, one stage to the right.
         self.assertEqual(
             levels.thresholds_for_gates(self.CUSTOM),
-            {"hatchling": 3_759, "child": 15_837, "teen": 36_245},
+            {"hatchling": 3_610, "child": 15_214, "teen": 34_852},
         )
 
     def test_a_ledger_without_a_gate_list_keeps_the_default_table(self) -> None:
@@ -197,15 +197,15 @@ class ThePetCarriesItsOwnGates(unittest.TestCase):
         self.assertEqual(self.stage_at(5_040, gates=self.CUSTOM), "hatchling")
         self.assertEqual(self.stage_at(5_040), "child")
         self.assertEqual(self.stage_at(3_759, gates=self.CUSTOM), "hatchling")
-        self.assertEqual(self.stage_at(3_758, gates=self.CUSTOM), "egg")
+        self.assertEqual(self.stage_at(levels.xp_for_level(20) - 1, gates=self.CUSTOM), "egg")
         self.assertEqual(self.stage_at(15_837, gates=self.CUSTOM), "child")
         self.assertEqual(self.stage_at(36_245, gates=self.CUSTOM), "teen")
         # A pet that never reaches the last gate never reaches the last form.
-        self.assertEqual(self.stage_at(levels.CAP_XP, gates=self.CUSTOM), "teen")
+        self.assertEqual(self.stage_at(levels.TOP_XP, gates=self.CUSTOM), "teen")
 
     def test_an_old_ledger_evolves_exactly_as_it_always_did(self) -> None:
         """No gate list means the default table, at every gate boundary and either side of it."""
-        boundaries = [0, 1_040, 1_041, 5_039, 5_040, 10_005, 10_006, 20_157, 20_158, levels.CAP_XP]
+        boundaries = [0, 999, 1_000, 4_839, 4_840, 9_610, 9_611, 19_366, 19_367, levels.TOP_XP]
         for xp in boundaries:
             with self.subTest(xp=xp):
                 self.assertEqual(
@@ -221,15 +221,15 @@ class ThePetCarriesItsOwnGates(unittest.TestCase):
         pet_state.maybe_evolve(custom, self.catalog)
         progress = pet_state.stage_progress(custom)
         self.assertEqual(progress["stage"], "hatchling")
-        self.assertEqual(progress["ceiling"], 15_837)
-        self.assertEqual(progress["floor"], 3_759)
+        self.assertEqual(progress["ceiling"], 15_214)
+        self.assertEqual(progress["floor"], 3_610)
         self.assertFalse(progress["terminal"])
 
         default = self.ledger(xp=5_040)
         pet_state.maybe_evolve(default, self.catalog)
-        self.assertEqual(pet_state.stage_progress(default)["ceiling"], 10_006)
-        self.assertEqual(pet_state.stage_xp_floor("hatchling", default), 1_041)
-        self.assertEqual(pet_state.stage_xp_floor("hatchling"), 1_041)
+        self.assertEqual(pet_state.stage_progress(default)["ceiling"], 9_611)
+        self.assertEqual(pet_state.stage_xp_floor("hatchling", default), 1_000)
+        self.assertEqual(pet_state.stage_xp_floor("hatchling"), 1_000)
 
     def test_an_unusable_gate_list_never_strands_a_running_pet(self) -> None:
         """Mid-run there is nobody to ask: fall back to the default table, never raise.
@@ -237,7 +237,7 @@ class ThePetCarriesItsOwnGates(unittest.TestCase):
         A bad declaration is refused loudly at install instead (see
         ``tests/test_evopet_gates_roundtrip.py``), where it can still be fixed.
         """
-        for raw in ([30, 10], [], [0], [200], "twenty", 20):
+        for raw in ([30, 10], [], [0], [1000], "twenty", 20):
             with self.subTest(raw=raw):
                 state = self.ledger(xp=5_040)
                 state["evolutionGates"] = raw

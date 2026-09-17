@@ -12,6 +12,11 @@ VISUAL_STATE_SCHEMA = "tamahermes.visual_state.v2"
 # recomposited when the drawn bar actually moves, not on every XP tick.
 STAGE_PROGRESS_STEPS = 20
 
+# A bar below the top of the ladder is never drawn full: the first bucket that would
+# read as "complete" is 100, so the drawn value stops one bucket short of it. Only the
+# top rung has no next level, and only there may the bar be complete.
+MAX_DISPLAY_PERCENT = 95
+
 # This table drives the HUD's escalation row, which stays silent unless something actually
 # needs the owner, so only such events belong here: task_failure (red "!") and review_opened
 # (blue diamond). The "recovery" *event* is untouched -- it still earns its XP, its sound and
@@ -31,6 +36,20 @@ def percent_bucket(percent: int, steps: int = STAGE_PROGRESS_STEPS) -> int:
     """Snap a percentage to one of *steps* even buckets (default 5% steps)."""
     step = 100 // max(1, steps)
     return clamp(int(round(percent / step)) * step)
+
+
+def xp_display_percent(progress: dict[str, Any]) -> int:
+    """The bar's drawn value: complete only at the top of the ladder.
+
+    ``level_progress`` reports the real position inside the current level. Quantising that
+    straight to a bucket can land on 100 while the level still has room left (the last percent
+    of a wide band rounds up), which paints a full bar inside a level that is not finished. The
+    clamp belongs here, at the one site the sprite reads: 95 is one bucket short of "complete".
+    """
+    percent = int(progress.get("percent") or 0)
+    if progress.get("maxed") or progress.get("levelMaxed"):
+        return clamp(percent)
+    return clamp(min(percent, MAX_DISPLAY_PERCENT))
 
 
 def positive_int(value: Any) -> int:
@@ -142,7 +161,7 @@ def derive_visual_state(state: dict[str, Any]) -> dict[str, str]:
         "alert": alert_bin(state),
         "stage": str(progress["stage"]),
         "level": str(progress["level"]),
-        "xpPercent": str(percent_bucket(int(progress["percent"]))),
+        "xpPercent": str(percent_bucket(xp_display_percent(progress))),
     }
 
 

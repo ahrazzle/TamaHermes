@@ -60,9 +60,9 @@ class TheCompilerWritesTheBlock(unittest.TestCase):
             manifest["evopet"],
             {
                 "evolutionGates": list(levels.DEFAULT_EVOLUTION_GATES),
-                "maxLevel": 99,
-                "capXp": 100_000,
-                "curve": "round(100000 * ((L - 1) / 98) ** 2.0)",
+                "maxLevel": 999,
+                "topXp": 998_019_880,
+                "curve": "round(10 * (L - 1) ** 2 + (L - 1) ** 6 / 1000000000)",
             },
         )
         self.assertEqual(manifest["evopet"]["curve"], CURVE)
@@ -76,7 +76,7 @@ class TheCompilerWritesTheBlock(unittest.TestCase):
         # And the manifest's own numbers are the ones a creator would price their pet against.
         self.assertEqual(
             levels.thresholds_for_gates(levels.gates_from_manifest(manifest)),
-            {"hatchling": 3_759, "child": 15_837, "teen": 36_245},
+            {"hatchling": 3_610, "child": 15_214, "teen": 34_852},
         )
 
     def test_a_ledger_with_no_gate_list_still_compiles_the_default_pet(self) -> None:

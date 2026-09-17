@@ -31,7 +31,7 @@ class PartialTraitsAtTeenRegression(unittest.TestCase):
     def test_partial_traits_at_teen_renders_without_keyerror(self) -> None:
         # The exact live shape: only two traits, staged at teen threshold.
         combined = empty_combined("2026-09-12T02:31:50Z")
-        combined["xp"] = 12668  # level 35, teen (gate 10006)
+        combined["xp"] = 12668  # level 36, teen (gate 9611)
         combined["level"] = levels.level_for_xp(12668)
         combined["lifeStage"] = levels.stage_for_xp(12668)
         combined["traits"] = {"focus": 1549, "resilience": 1350}
@@ -40,7 +40,7 @@ class PartialTraitsAtTeenRegression(unittest.TestCase):
         combined["mirror"] = {"petId": "tamahermes", "lineId": "toast", "machineId": "aurora", "layout": "floating"}
 
         self.assertEqual(combined["lifeStage"], "teen")
-        self.assertEqual(combined["level"], 35)
+        self.assertEqual(combined["level"], 36)
 
         # Must not raise KeyError: 'restlessness'
         state = desktop_pet_state(combined, self.catalog)

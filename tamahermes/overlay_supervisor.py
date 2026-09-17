@@ -247,6 +247,20 @@ def stop_overlay_process(home: Path, is_running: Callable[[int], bool] = pid_run
     return stopped
 
 
+def native_pet_process_running() -> bool:
+    """Return whether the EvoPet native runtime is currently alive."""
+    ps = "/bin/ps" if Path("/bin/ps").exists() else "ps"
+    try:
+        result = subprocess.run([ps, "-axo", "command="], capture_output=True, text=True, timeout=0.5, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    for command in result.stdout.splitlines():
+        if "petdex-desktop-native" in command or "PetdexDev" in command:
+            if "/bin/bash -c" not in command and "python3 -c" not in command:
+                return True
+    return False
+
+
 def selected_from_disk(home: Path) -> bool:
     return is_tamahermes_selected(read_json_object(global_state_path(home)))
 
@@ -347,7 +361,8 @@ def supervisor_loop(home: Path, root: Path | None = None, python: str | None = N
             selected = is_tamahermes_selected(global_state)
             surface_active, _bounds = update_surface_activity(global_state, overlay_state, time.time())
             save_overlay_state(overlay_state_path(home), overlay_state)
-            if selected and surface_active:
+            app_running = native_pet_process_running()
+            if selected and surface_active and app_running:
                 running = overlay_process_alive(home)
                 if not running and time.monotonic() - last_start >= MIN_RESTART_SECONDS:
                     start_overlay_process(home, root=root, python=python)

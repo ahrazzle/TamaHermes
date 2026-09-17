@@ -149,9 +149,9 @@ class CombinedLedger(unittest.TestCase):
         payload = json.loads(self.state_file.read_text())
         self.assertIn("lugia", payload["attribution"]["profiles"])
         self.assertIn("halakukhan", payload["attribution"]["profiles"])
-        # 1151 + 887 = 2038 XP: level 14, past the first gate (1,041 XP) so a hatchling.
+        # 1151 + 887 = 2038 XP: level 15, past the first gate (1,000 XP) so a hatchling.
         self.assertEqual(payload["lifeStage"], "hatchling")
-        self.assertEqual(payload["level"], 14)
+        self.assertEqual(payload["level"], 15)
         self.assertEqual(payload["level"], levels.level_for_xp(2038))
         self.assertEqual(payload["levels"]["evolutionGates"], list(levels.DEFAULT_EVOLUTION_GATES))
         self.assertEqual(payload["cursor"]["profiles"]["lugia"]["xp"], 1151)

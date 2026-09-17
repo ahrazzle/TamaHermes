@@ -81,13 +81,15 @@ FLOATING_XP_BAR = {"x": 38, "y": 181, "width": 122, "height": 11}
 # the retired status strip used, so the alert and health glyphs flanking it do not move.
 FLOATING_ENERGY_CHIP = {"x": 43, "y": 8, "width": 106, "height": 12}
 # The level readout is persistent: it is drawn under the growth bar at every level, so the
-# owner always sees which rung of the 99-level ladder the pet stands on. Two digits max.
+# owner always sees which rung of the ladder the pet stands on. Three digits: the ladder's
+# bound is 999, and the real levels pets reach are three digits (the live combined ledger sits
+# around level 120), so a two-digit readout would print 99 for a level-123 pet.
 # It is a free-floating number, not a badge: no bubble or container, just enlarged pixel-art
 # digits (glyph scale 3) in a fixed bright ink with a near-black halo, so the number stays
 # legible when the pet is downsized instead of shrinking inside a box. The stage-colored
 # caret beside the digits is decoration only. The rect below is the maximum painted extent
-# (two digits + caret + halo) used by the collision guard and the build report.
-FLOATING_LEVEL_RECT = {"x": 78, "y": 192, "width": 36, "height": 16}
+# (three digits + caret + halo) used by the collision guard and the build report.
+FLOATING_LEVEL_RECT = {"x": 72, "y": 192, "width": 48, "height": 16}
 FLOATING_ALERT_XY = (26, 8)
 FLOATING_HEALTH_XY = (154, 8)
 FLOATING_FOOD_XY = (18, 182)      # group of 16+4+122+4+9 = 155, centred
@@ -795,9 +797,9 @@ def _draw_xp_bar(draw: ImageDraw.ImageDraw, visual_state: dict[str, str], rect: 
     """Evolution progress, drawn in the dead space below the LCD screen.
 
     The status strip answers "how is the pet doing" in coarse bins; this answers
-    "how close is the next stage", which is the number a Tamagotchi owner actually
+    "how close is the next level", which is the number a Tamagotchi owner actually
     watches. The fill colour tracks the current stage so the bar changes character as
-    the pet grows, and it fills completely on the terminal (adult) stage.
+    the pet grows, and it fills completely only at the top of the ladder.
     """
     bar = rect or XP_BAR
     x, y, width, height = bar["x"], bar["y"], bar["width"], bar["height"]
@@ -859,11 +861,11 @@ _LEVEL_GLYPHS = {
     "9": ("111", "101", "111", "001", "111"),
 }
 _LEVEL_GLYPH_W, _LEVEL_GLYPH_H = 3, 5
-_LEVEL_MAX = 99
+_LEVEL_MAX = 999
 
 
 def level_text(value: Any) -> str:
-    """The level as one or two digits, clamped to the ladder's 99."""
+    """The level as one, two or three digits, clamped to the ladder's top."""
     try:
         number = int(value)
     except (TypeError, ValueError):
@@ -878,12 +880,12 @@ def _draw_level_number(
 
     The number is the shared ledger's level (``visual_state['level']``, from ``state.level``),
     so it is the same rung the growth bar fills toward and the manifest describes. It is drawn
-    whenever the pet is on screen -- level 1 as much as level 99 -- with no bubble or
+    whenever the pet is on screen -- level 1 as much as level 999 -- with no bubble or
     container around it: enlarged 3x digits in a fixed bright ink, each lit pixel backed by
     a 1px near-black halo, so the number carries its own contrast on any desktop instead of
     borrowing a container's. The stage-colored caret is decoration only.
 
-    The content is centered in *rect* (which reserves the two-digit maximum): a one-digit
+    The content is centered in *rect* (which reserves the three-digit maximum): a one-digit
     level leaves transparent margins, which is what makes "no container" observable.
     A 1px halo fringe may kiss the growth bar's bottom edge directly above the rect; both
     are near-black, so it reads as one shadow, not an overlap.
@@ -997,7 +999,7 @@ def apply_float_overlay(
 # gates, plus the ladder they are read against. Hermes renders the sheet; a fork changes the
 # gates, so the block travels with the manifest and install copies it into the ledger -- the
 # same list the compiler reads back out, which is what makes the round trip hold.
-CURVE = f"round({levels.CAP_XP} * ((L - 1) / {levels.MAX_LEVEL - 1}) ** {levels.EXPONENT})"
+CURVE = f"round({levels.QUADRATIC_TERM} * (L - 1) ** 2 + (L - 1) ** 6 / {levels.TAIL_DIVISOR})"
 
 
 def evolution_block(state: dict[str, Any]) -> dict[str, Any]:
@@ -1005,7 +1007,7 @@ def evolution_block(state: dict[str, Any]) -> dict[str, Any]:
     return {
         "evolutionGates": evolution_gates(state),
         "maxLevel": levels.MAX_LEVEL,
-        "capXp": levels.CAP_XP,
+        "topXp": levels.TOP_XP,
         "curve": CURVE,
     }
 

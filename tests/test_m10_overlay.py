@@ -198,8 +198,8 @@ class M10OverlayStateTests(unittest.TestCase):
             "traits": {},
             "counters": {},
         })
-        self.assertEqual(snapshot["level"], 58)
-        self.assertEqual(snapshot["progress"]["percent"], 87)
+        self.assertEqual(snapshot["level"], 60)
+        self.assertEqual(snapshot["progress"]["percent"], 2)
 
     def test_evolution_announcement_expires_and_renders(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -647,8 +647,100 @@ class M10SupervisorGuardTests(unittest.TestCase):
         self.assertIn("clientY - dragPoint.y", html)
         swift = (ROOT / "tamahermes" / "native_overlay" / "TamaHermesOverlay.swift").read_text(encoding="utf-8")
         self.assertIn("private func movePanel(dx: Double, dy: Double)", swift)
-        self.assertIn("origin.y -= dy", swift)
-        self.assertIn("panel.setFrameOrigin(origin)", swift)
+
+        # Behavioural contract for movePanel: dx must move the panel right by dx and dy
+        # must move it up by dy. This interprets the arithmetic instead of pinning the
+        # source text, so equivalent spellings both pass (`origin.y -= dy` applied with
+        # one `panel.setFrameOrigin(origin)` call, or a single
+        # `setFrameOrigin(NSPoint(x: ..x + dx, y: ..y - dy))` call). It replaced
+        # assertIn("origin.y -= dy") / assertIn("panel.setFrameOrigin(origin)"), which
+        # encoded the old spelling of the same math rather than the behaviour.
+        import ast  # local: only this test interprets Swift arithmetic
+        from typing import Any  # local: the Swift expression walker is inherently dynamic
+
+        def function_body(source: str, signature: str) -> str:
+            """Return the brace-balanced body of the first Swift function matching `signature`."""
+            start = source.index(signature)
+            open_brace = source.index("{", start)
+            depth = 0
+            for index in range(open_brace, len(source)):
+                if source[index] == "{":
+                    depth += 1
+                elif source[index] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        return source[open_brace + 1 : index]
+            raise AssertionError(f"unbalanced braces after {signature!r}")
+
+        def evaluate(expression: str, values: dict) -> float:
+            """Evaluate a Swift arithmetic expression over numbers, dx/dy and dotted members."""
+
+            def resolve(node: ast.AST) -> Any:
+                if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+                    return float(node.value)
+                if isinstance(node, ast.Name) and node.id in values:
+                    return values[node.id]
+                if isinstance(node, ast.Attribute):
+                    return resolve(node.value)[node.attr]
+                if isinstance(node, ast.USub):
+                    return -resolve(node.operand)
+                if isinstance(node, ast.UAdd):
+                    return resolve(node.operand)
+                if isinstance(node, ast.BinOp):
+                    left, right = resolve(node.left), resolve(node.right)
+                    for operator_type, combine in (
+                        (ast.Add, lambda a, b: a + b),
+                        (ast.Sub, lambda a, b: a - b),
+                        (ast.Mult, lambda a, b: a * b),
+                        (ast.Div, lambda a, b: a / b),
+                    ):
+                        if isinstance(node.op, operator_type):
+                            return combine(left, right)
+                raise AssertionError(f"unsupported Swift expression: {expression!r}")
+
+            return resolve(ast.parse(expression.strip(), mode="eval").body)
+
+        move_panel = function_body(swift, "private func movePanel(dx: Double, dy: Double)")
+        # The moved origin must be handed to the panel and the new position persisted.
+        self.assertIn("panel.setFrameOrigin(", move_panel)
+        self.assertIn("persistPanelPosition()", move_panel)
+
+        # Two samples, so an inverted or swapped mapping cannot pass by coincidence.
+        for start_x, start_y, dx, dy in ((100.0, 200.0, 7.0, 3.0), (312.5, 44.0, -11.0, 5.0)):
+            origin = {"x": start_x, "y": start_y}
+            values = {
+                "dx": dx,
+                "dy": dy,
+                "origin": dict(origin),
+                "panel": {"frame": {"origin": dict(origin)}},
+            }
+            point_at = move_panel.find("NSPoint(")
+            if point_at != -1:
+                arguments = move_panel[point_at + len("NSPoint(") :]
+                x_at = arguments.find("x:")
+                y_at = arguments.find(", y:")
+                self.assertNotEqual(x_at, -1, move_panel)
+                self.assertNotEqual(y_at, -1, move_panel)
+                moved = {
+                    "x": evaluate(arguments[x_at + len("x:") : y_at], values),
+                    "y": evaluate(arguments[y_at + len(", y:") : arguments.index(")", y_at)], values),
+                }
+            else:
+                mutated = ""
+                for statement in move_panel.replace(";", "\n").splitlines():
+                    tokens = statement.split()
+                    if len(tokens) != 3 or tokens[1] not in ("+=", "-=") or tokens[2] not in ("dx", "dy"):
+                        continue
+                    path = tokens[0].split(".")
+                    holder = values
+                    for name in path[:-1]:
+                        holder = holder[name]
+                    holder[path[-1]] += values[tokens[2]] * (1 if tokens[1] == "+=" else -1)
+                    mutated = tokens[0]
+                self.assertTrue(mutated, f"movePanel applies no dx/dy movement: {move_panel!r}")
+                moved = values["origin"] if mutated.startswith("origin.") else values["panel"]["frame"]["origin"]
+            self.assertAlmostEqual(moved["x"], start_x + dx, msg=f"dx must move x by +dx: {move_panel!r}")
+            self.assertAlmostEqual(moved["y"], start_y - dy, msg=f"dy must move y by -dy: {move_panel!r}")
         self.assertIn("if event == \"drag\"", swift)
 
     def test_native_overlay_config_preserves_dragged_position(self) -> None:

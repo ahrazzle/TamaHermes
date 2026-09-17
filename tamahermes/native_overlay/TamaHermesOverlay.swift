@@ -38,12 +38,17 @@ final class OverlayController: NSObject, WKScriptMessageHandler {
     private var webView: WKWebView!
     private var lastHTMLPath: String = ""
     private var lastHTMLModified: Date?
+    private var lastHTMLHash: UInt64?
     private var hoverStartedAt: Date?
     private var lastSfxId: String?
     private var lastSfxFilename: String?
     private var lastSfxPlayedAt: String?
     private var lastSfxError: String?
     private var activeSounds: [NSSound] = []
+    private var dragMonitor: Any?
+    private var dragOrigin: NSPoint?
+    private var dragMouseOrigin: NSPoint?
+    private var dragLastEventAt: Date?
 
     init(configPath: String) {
         self.configPath = configPath
@@ -210,21 +215,73 @@ final class OverlayController: NSObject, WKScriptMessageHandler {
         _ = try? FileManager.default.replaceItemAt(URL(fileURLWithPath: configPath), withItemAt: URL(fileURLWithPath: configPath + ".tmp"))
     }
 
-    private func movePanel(dx: Double, dy: Double) {
-        var origin = panel.frame.origin
-        origin.x += dx
-        origin.y -= dy
-        panel.setFrameOrigin(origin)
+    private func beginDrag() {
+        endDrag()
+        dragOrigin = panel.frame.origin
+        dragMouseOrigin = NSEvent.mouseLocation
+        dragLastEventAt = Date()
+        // All drag math stays in global screen coordinates (Cocoa base):
+        // NSEvent.mouseLocation is screen-space, matching panel.frame.origin.
+        // event.locationInWindow must NOT be mixed in here (window-local space).
+        let handler: (NSEvent) -> NSEvent? = { [weak self] event in
+            guard let self else { return event }
+            if event.type == .leftMouseUp {
+                self.persistPanelPosition()
+                self.endDrag()
+            } else if event.type == .leftMouseDragged,
+                      let origin = self.dragOrigin,
+                      let mouse = self.dragMouseOrigin {
+                let current = NSEvent.mouseLocation
+                self.dragLastEventAt = Date()
+                self.panel.setFrameOrigin(NSPoint(x: origin.x + current.x - mouse.x, y: origin.y + current.y - mouse.y))
+                self.persistPanelPosition()
+            }
+            return event
+        }
+        dragMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDragged, .leftMouseUp], handler: handler)
+        if dragMonitor == nil {
+            dragMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDragged, .leftMouseUp]) { [weak self] event in
+                guard let self else { return }
+                if event.type == .leftMouseUp {
+                    self.persistPanelPosition()
+                    self.endDrag()
+                    return
+                }
+                guard event.type == .leftMouseDragged,
+                      let origin = self.dragOrigin,
+                      let mouse = self.dragMouseOrigin else { return }
+                let current = NSEvent.mouseLocation
+                self.dragLastEventAt = Date()
+                self.panel.setFrameOrigin(NSPoint(x: origin.x + current.x - mouse.x, y: origin.y + current.y - mouse.y))
+                self.persistPanelPosition()
+            }
+        }
+    }
+
+    private func endDrag() {
+        if let monitor = dragMonitor { NSEvent.removeMonitor(monitor) }
+        dragMonitor = nil
+        dragOrigin = nil
+        dragMouseOrigin = nil
+        dragLastEventAt = nil
+    }
+
+    private func persistPanelPosition() {
         let screen = panel.screen ?? NSScreen.main ?? NSScreen.screens.first!
-        let topLeftX = origin.x
+        let origin = panel.frame.origin
         let topLeftY = screen.frame.maxY - origin.y - panel.frame.height
         guard let data = FileManager.default.contents(atPath: configPath),
               var object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return }
-        object["x"] = topLeftX
+        object["x"] = origin.x
         object["y"] = topLeftY
         guard JSONSerialization.isValidJSONObject(object), let output = try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted]) else { return }
         try? output.write(to: URL(fileURLWithPath: configPath + ".tmp"))
         _ = try? FileManager.default.replaceItemAt(URL(fileURLWithPath: configPath), withItemAt: URL(fileURLWithPath: configPath + ".tmp"))
+    }
+
+    private func movePanel(dx: Double, dy: Double) {
+        panel.setFrameOrigin(NSPoint(x: panel.frame.origin.x + dx, y: panel.frame.origin.y - dy))
+        persistPanelPosition()
     }
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
@@ -233,6 +290,8 @@ final class OverlayController: NSObject, WKScriptMessageHandler {
               let event = body["event"] as? String else { return }
         if event == "scale-up" { adjustScale(by: 0.1); return }
         if event == "scale-down" { adjustScale(by: -0.1); return }
+        if event == "drag-start" { beginDrag(); return }
+        if event == "drag-end" { persistPanelPosition(); endDrag(); return }
         if event == "drag",
            let dx = body["dx"] as? Double,
            let dy = body["dy"] as? Double {
@@ -263,6 +322,16 @@ final class OverlayController: NSObject, WKScriptMessageHandler {
         }
     }
 
+    private func contentHash(of url: URL) -> UInt64? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        var hash: UInt64 = 14_619_821_125_433_631
+        for byte in data {
+            hash ^= UInt64(byte)
+            hash &*= 1_096_133_665_776_312_903
+        }
+        return hash
+    }
+
     private func reloadIfNeeded(htmlPath: String?) {
         guard let htmlPath = htmlPath else { return }
         let url = URL(fileURLWithPath: htmlPath)
@@ -270,8 +339,17 @@ final class OverlayController: NSObject, WKScriptMessageHandler {
         if htmlPath == lastHTMLPath && modified == lastHTMLModified {
             return
         }
+        // Python rewrites overlay.html every loop with identical bytes; mtime
+        // alone would reload (and flicker) each tick. Compare content hash and
+        // skip the reload when only the mtime changed.
+        let hash = contentHash(of: url)
+        if htmlPath == lastHTMLPath && hash != nil && hash == lastHTMLHash {
+            lastHTMLModified = modified
+            return
+        }
         lastHTMLPath = htmlPath
         lastHTMLModified = modified
+        lastHTMLHash = hash
         webView.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
     }
 
@@ -313,7 +391,20 @@ final class OverlayController: NSObject, WKScriptMessageHandler {
         }
         playSfxIfNeeded()
         panel.ignoresMouseEvents = !(config.visible == true)
-        panel.setFrame(clampedFrame(for: config), display: true)
+        if dragMonitor != nil {
+            // Watchdog: guarantee drag sessions end even if mouse-up was lost
+            // (monitor dropped, event swallowed). Clicks are unaffected: they
+            // only open a session via drag-start and close on mouse-up above.
+            let mouseReleased = NSEvent.pressedMouseButtons == 0
+            let stale = dragLastEventAt.map { Date().timeIntervalSince($0) > 10 } ?? false
+            if mouseReleased || stale {
+                persistPanelPosition()
+                endDrag()
+            }
+        }
+        if dragMonitor == nil {
+            panel.setFrame(clampedFrame(for: config), display: true)
+        }
         reloadIfNeeded(htmlPath: config.htmlPath)
         let point = mouseTopLeftPoint()
         let hasHoverTarget = config.hoverX != nil && config.hoverY != nil && config.hoverWidth != nil && config.hoverHeight != nil

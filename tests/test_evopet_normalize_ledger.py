@@ -42,15 +42,19 @@ TABLE: tuple[tuple[tuple[int, str, int, str], tuple[str, int, str, str | None]],
     # xp 1428 at level 58 "teen": the stale label, and the row the fix was written for.
     ((1428, "teen", 58, "toast_teen_focused"), ("hatchling", 12, "toast_hatchling", None)),
     # the live lugia ledger: 1472 XP, still saying teen at level 59.
-    ((1472, "teen", 59, "toast_teen_focused"), ("hatchling", 12, "toast_hatchling", None)),
+    ((1472, "teen", 59, "toast_teen_focused"), ("hatchling", 13, "toast_hatchling", None)),
     ((0, "adult", 99, "toast_adult_calm"), ("egg", 1, "toast_egg", None)),
     ((1100, "adult", 99, "toast_adult_calm"), ("hatchling", 11, "toast_hatchling", None)),
     # the line's child form is named `toast` -- the first form of the line, not a typo.
     ((6000, "adult", 99, "toast_adult_calm"), ("child", 25, "toast", None)),
-    ((12000, "adult", 99, "toast_adult_calm"), ("teen", 34, "toast_teen_focused", "focused")),
+    ((12000, "adult", 99, "toast_adult_calm"), ("teen", 35, "toast_teen_focused", "focused")),
     ((25000, "adult", 99, "toast_adult_calm"), ("adult", 50, "toast_adult_calm", "calm")),
-    ((60000, "adult", 99, "toast_adult_calm"), ("adult", 76, "toast_adult_calm", "calm")),
-    ((100000, "adult", 99, "toast_adult_calm"), ("adult", 99, "toast_adult_calm", "calm")),
+    ((60000, "adult", 99, "toast_adult_calm"), ("adult", 78, "toast_adult_calm", "calm")),
+    # The old curve's own top: 100,000 XP was "level 99, maxed". The XP is untouched and the
+    # level only moves up -- the stored level is a derived mirror, so it lands on 100.
+    ((100000, "adult", 99, "toast_adult_calm"), ("adult", 100, "toast_adult_calm", "calm")),
+    # The live combined ledger at the migration: 99 (maxed) becomes 123, never lower.
+    ((152_522, "adult", 99, "toast_adult_calm"), ("adult", 123, "toast_adult_calm", "calm")),
 )
 
 
@@ -87,7 +91,7 @@ class AStaleLedgerIsCorrectedToWhatItsXpEarns(NormalizeLedgerCase):
 
         normalize_ledger(state, self.catalog)
 
-        self.assertEqual((state["lifeStage"], state["level"], state["formId"]), ("hatchling", 12, "toast_hatchling"))
+        self.assertEqual((state["lifeStage"], state["level"], state["formId"]), ("hatchling", 13, "toast_hatchling"))
 
     def test_every_row_of_the_table_lands_on_its_measured_stage_level_and_form(self) -> None:
         for (xp, stage, level, form), (want_stage, want_level, want_form, want_branch) in TABLE:
@@ -158,7 +162,7 @@ class HibernationIsAConditionNotAStage(NormalizeLedgerCase):
 
         self.assertEqual(state["lifeStage"], "hibernation", "dormancy is a condition, not a stage")
         self.assertEqual(state["previousActiveStage"], "adult", "the stage it wakes into")
-        self.assertEqual(state["level"], 54)
+        self.assertEqual(state["level"], 55)
         self.assertEqual(state["formId"], self.catalog.find_form(LINE, "hibernation"))
         self.assertIsNone(state["branch"], "a sleeping pet wears the hibernation form, not a branch")
 
@@ -182,7 +186,7 @@ class HibernationIsAConditionNotAStage(NormalizeLedgerCase):
         self.assertEqual(state["lifeStage"], "hibernation")
         self.assertEqual(state["previousActiveStage"], "teen")
         self.assertEqual(state["previousActiveBranch"], "focused")
-        self.assertEqual(state["level"], 34)
+        self.assertEqual(state["level"], 35)
         self.assertIsNotNone(
             self.catalog.find_form(LINE, "teen", state["previousActiveBranch"]),
             "the recorded branch must be a form this catalogue ships",

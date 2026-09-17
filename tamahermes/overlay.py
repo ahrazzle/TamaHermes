@@ -32,6 +32,7 @@ from .overlay_state import (
 from .paths import codex_home as resolve_codex_home
 from .paths import default_state_path, repo_root as resolve_repo_root
 from .state import load_state, passive_rest_plan
+from .visual_state import xp_display_percent
 
 
 def overlay_runtime_state_path(home: Path) -> Path:
@@ -567,9 +568,15 @@ def render_native_overlay_html(snapshot: dict[str, Any], expanded: bool = True) 
     form = html.escape(str(snapshot.get("formId") or "").upper())
     codex_state = html.escape(str(snapshot.get("lastCodexState") or "idle").upper())
     progress = snapshot.get("progress") or {}
-    xp_percent = max(0, min(100, int(progress.get("percent") or 0)))
+    # The drawn value is the display percent, not the raw ladder percent: clamped to 95 below the
+    # top rung so the bar cannot look full early, and 100 only where the ladder says the pet is
+    # maxed. Both the printed percent and the drawn width read this one value.
+    xp_percent = xp_display_percent(progress)
+    xp_maxed = bool(progress.get("maxed") or progress.get("levelMaxed"))
     xp_into = int(progress.get("xpIntoLevel") or 0)
     xp_to_next = int(progress.get("xpToNextLevel") or 0)
+    # At the top of the ladder there is no next rung, so there is no into/next fraction to print.
+    xp_fraction = "" if xp_maxed else f" · {xp_into}/{xp_to_next} XP"
     visual_text = " / ".join(
         [
             f"SAT {str(visual.get('satiety', '?')).upper()}",
@@ -854,7 +861,7 @@ body {{
         <div class="cell"><span>RESIL</span><strong>{int(traits.get("resilience", 0))}</strong></div>
         <div class="cell"><span>RESTLESS</span><strong>{int(traits.get("restlessness", 0))}</strong></div>
       </div>
-      <div class="xp">LEVEL {int(snapshot["level"])} · {xp_percent}% · {xp_into}/{xp_to_next or "MAX"} XP
+      <div class="xp">LEVEL {int(snapshot["level"])} · {xp_percent}%{xp_fraction}
         <div class="xp-track"><div class="xp-fill"></div></div>
       </div>
       <div class="line">{visual_text}</div>
