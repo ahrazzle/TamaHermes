@@ -972,6 +972,97 @@ class M10OverlayWriteSuppressionTests(M10OverlayLoopModeTests):
             self.assertLess(state_writes, 6)
 
 
+class M10NativeSourceGateTests(unittest.TestCase):
+    """Source-level gates for the native helper (this repo has no Swift unit harness)."""
+
+    def swift_source(self) -> str:
+        return (ROOT / "tamahermes" / "native_overlay" / "TamaHermesOverlay.swift").read_text(encoding="utf-8")
+
+    def test_focus_and_click_through_invariants_are_preserved(self) -> None:
+        swift = self.swift_source()
+
+        for forbidden in ("NSApp.activate", "makeKeyAndOrderFront", "panel.makeKey()", "ignoringOtherApps"):
+            self.assertNotIn(forbidden, swift)
+        self.assertIn("override var canBecomeKey: Bool { false }", swift)
+        self.assertIn("override var canBecomeMain: Bool { false }", swift)
+        self.assertIn(".nonactivatingPanel", swift)
+        self.assertIn("panel.ignoresMouseEvents = !(config.visible == true)", swift)
+        self.assertIn("app.setActivationPolicy(.accessory)", swift)
+        self.assertIn("panel.hasShadow = false", swift)
+
+    def test_no_global_hotkey_and_no_quit_item(self) -> None:
+        swift = self.swift_source()
+
+        self.assertNotIn("RegisterEventHotKey", swift)
+        self.assertNotIn('"Quit"', swift)
+
+    def test_glass_chain_is_flag_and_availability_gated(self) -> None:
+        swift = self.swift_source()
+
+        self.assertIn("#if EVOPET_GLASS", swift)
+        self.assertIn("#available(macOS 26.0, *)", swift)
+        self.assertIn("#available(macOS 27.0, *)", swift)
+        self.assertIn("glass.style = .regular", swift)
+        self.assertIn("NSGlassEffectContainerView", swift)
+        self.assertIn("container.spacing = 0", swift)
+        self.assertIn("glass.effectIsInteractive = true", swift)
+        self.assertIn("effect.material = .hudWindow", swift)
+        self.assertIn("effect.blendingMode = .behindWindow", swift)
+        self.assertIn("effect.state = .active", swift)
+        self.assertIn("NSColor.windowBackgroundColor.cgColor", swift)
+        # Chrome is chrome: it must sit below the WebView content layer.
+        self.assertIn("content.addSubview(chrome, positioned: .below, relativeTo: webView)", swift)
+
+    def test_appearance_and_accessibility_are_read_not_overridden(self) -> None:
+        swift = self.swift_source()
+
+        self.assertIn("accessibilityDisplayShouldReduceTransparency", swift)
+        self.assertIn("accessibilityDisplayShouldIncreaseContrast", swift)
+        self.assertIn("accessibilityDisplayOptionsDidChangeNotification", swift)
+        self.assertIn('"reduceTransparency": reduceTransparency', swift)
+        self.assertIn('"increaseContrast": increaseContrast', swift)
+        self.assertIn('"darkMode": darkModeActive', swift)
+        self.assertNotIn("NSApp.appearance", swift)
+
+    def test_mode_aware_frame_contract(self) -> None:
+        swift = self.swift_source()
+
+        self.assertIn("let mode: String?", swift)
+        self.assertIn("let minWidth: Double?", swift)
+        self.assertIn("let minHeight: Double?", swift)
+        self.assertIn('let modeScale = mode == "collapsed" ? 1.0 : scale', swift)
+        self.assertIn("config.minWidth ?? 120", swift)
+        self.assertIn("config.minHeight ?? 80", swift)
+
+    def test_status_item_menu_is_the_locked_four_items(self) -> None:
+        swift = self.swift_source()
+
+        for label in ('"Expand HUD"', '"Collapse to pill"', '"Hide HUD"', '"Show HUD"'):
+            self.assertIn(label, swift)
+        self.assertIn("NSStatusBar.system.statusItem", swift)
+        self.assertIn("writeInteraction(event: event)", swift)
+
+    def test_visibility_events_forward_from_the_webview(self) -> None:
+        self.assertIn('["hide", "show", "collapse", "expand"].contains(event)', self.swift_source())
+
+    def test_tick_cadence_and_status_write_are_throttled(self) -> None:
+        swift = self.swift_source()
+
+        self.assertIn("scheduleTick(panel.isVisible ? 0.25 : 1.0)", swift)
+        self.assertIn('stable.removeValue(forKey: "updatedAt")', swift)
+        self.assertIn("if digest == lastStatusDigest", swift)
+
+    def test_live_behaviours_are_preserved_verbatim(self) -> None:
+        swift = self.swift_source()
+
+        # Screen-space drag math, the drag-end watchdog and the hash-guarded
+        # reload are the live build's behaviour and must not be replaced.
+        self.assertIn("NSEvent.mouseLocation", swift)
+        self.assertIn("dragLastEventAt.map { Date().timeIntervalSince($0) > 10 }", swift)
+        self.assertIn("if htmlPath == lastHTMLPath && hash != nil && hash == lastHTMLHash", swift)
+        self.assertIn("panel.orderFrontRegardless()", swift)
+
+
 class M10OverlayAudioTests(unittest.TestCase):
     def state_with_event(self, event_id: str = "event-1") -> dict[str, object]:
         return {
