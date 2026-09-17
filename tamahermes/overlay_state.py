@@ -15,6 +15,13 @@ TAMAHERMES_AVATAR_ID = "custom:tamahermes"
 GLOBAL_STATE_FILE = ".codex-global-state.json"
 SURFACE_STALE_SECONDS = 10.0
 
+# The user-configurable show/hide hotkey. It lives beside ``hudHidden`` in
+# overlay-state.json and is *documented* with this default: an overlay-state.json
+# that omits the key, or holds a blank value, reads back as Cmd+Shift+H. The
+# native helper registers the configured combo (Carbon RegisterEventHotKey); the
+# Tk fallback has no global hotkey and stays a CLI/UI toggle only.
+DEFAULT_HIDE_HOTKEY = "Cmd+Shift+H"
+
 # Panel modes are *derived* from two durable booleans (never stored a third
 # time): hidden > collapsed > expanded.
 OVERLAY_MODE_EXPANDED = "expanded"
@@ -94,6 +101,7 @@ def default_overlay_state() -> dict[str, Any]:
         "muted": False,
         "quietMode": False,
         "hudHidden": False,
+        "hideHotkey": DEFAULT_HIDE_HOTKEY,
         "quietHours": None,
         "lastInteractionSfx": None,
         "lastAudioError": None,
@@ -115,6 +123,19 @@ def default_overlay_state() -> dict[str, Any]:
         "hudExpandedXY": None,
         "supervisorClaim": None,
     }
+
+
+def hide_hotkey_setting(state: dict[str, Any]) -> str:
+    """The configured show/hide hotkey, falling back to the documented default.
+
+    An absent, blank or non-string value reads as ``DEFAULT_HIDE_HOTKEY``, so a
+    hand-edited or older overlay-state.json can never lose the hotkey by
+    accident.
+    """
+    raw = state.get("hideHotkey")
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip()
+    return DEFAULT_HIDE_HOTKEY
 
 
 def read_json_object(path: Path) -> dict[str, Any]:

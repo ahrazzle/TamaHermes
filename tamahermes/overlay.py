@@ -24,6 +24,7 @@ from .overlay_state import (
     OVERLAY_MODE_COLLAPSED,
     OVERLAY_MODE_EXPANDED,
     OVERLAY_MODE_HIDDEN,
+    hide_hotkey_setting,
     is_tamahermes_selected,
     load_global_state,
     load_overlay_state,
@@ -469,11 +470,50 @@ NATIVE_VISIBILITY_EVENTS = frozenset({"hide", "show", "collapse", "expand"})
 NATIVE_PET_ACTION_EVENTS = frozenset({"care", "feed", "clean", "play", "rest"})
 NATIVE_INTERACTION_EVENTS = NATIVE_VISIBILITY_EVENTS | NATIVE_PET_ACTION_EVENTS
 
+# Polling/cooldown discipline for `hudHidden` flips (contract 1.6). A held
+# global hotkey auto-repeats, so the *rate-limited* paths allow at most one flip
+# per window ("boundary input produces at most one flip"). The timestamp is
+# persisted in overlay-state.json rather than held in memory: the CLI, the
+# native helper's hotkey path and the loop are separate processes, and an
+# in-process timer would reset on every invocation and guard nothing.
+HUD_TOGGLE_COOLDOWN_SECONDS = 0.2
+HUD_FLIP_TIMESTAMP_KEY = "lastHudHiddenFlipAtEpoch"
+
+# The configurable show/hide combo (contract 1.4/1.5). `hideHotkey` is documented
+# with the default `Cmd+Shift+H` and lives beside `hudHidden` in
+# overlay-state.json; it rides every native config payload so the Swift helper
+# can register it (Carbon `RegisterEventHotKey`) and forward hide/show through
+# the interaction file above. The Tk fallback has no global hotkey: it honours
+# the same flag through the CLI/UI only. `DEFAULT_HIDE_HOTKEY` is the single
+# source of that default (overlay_state).
+
+
+def hud_flip_cooldown_remaining(overlay_state: dict[str, Any], now: float | None = None) -> float:
+    """Seconds left in the ``hudHidden`` flip cooldown; ``0.0`` when a flip is allowed.
+
+    A missing or non-numeric timestamp reads as "no recent flip", so a fresh or
+    hand-written overlay-state.json never blocks the first toggle.
+    """
+    last = overlay_state.get(HUD_FLIP_TIMESTAMP_KEY)
+    if isinstance(last, bool) or not isinstance(last, (int, float)):
+        return 0.0
+    elapsed = (time.time() if now is None else float(now)) - float(last)
+    remaining = HUD_TOGGLE_COOLDOWN_SECONDS - elapsed
+    return remaining if remaining > 0.0 else 0.0
+
+
+def record_hud_flip(overlay_state: dict[str, Any], now: float | None = None) -> None:
+    """Stamp the ``hudHidden`` flip clock (persisted with the rest of the state)."""
+    overlay_state[HUD_FLIP_TIMESTAMP_KEY] = time.time() if now is None else float(now)
+
 
 def apply_visibility_interaction(
     overlay_state: dict[str, Any],
     event: Any,
     expanded_xy: dict[str, Any] | None = None,
+    *,
+    enforce_cooldown: bool = False,
+    now: float | None = None,
 ) -> bool | None:
     """Flip the persistent HUD flags for a visibility interaction.
 
@@ -484,14 +524,22 @@ def apply_visibility_interaction(
     kept until the renderer has put the panel back ("restored from
     hudExpandedXY, then cleared"), which is what makes an expand survive both
     the pill click and the CLI.
+
+    ``enforce_cooldown`` rate-limits *hudHidden* flips to one per
+    ``HUD_TOGGLE_COOLDOWN_SECONDS`` (contract 1.6) and is set by the native
+    interaction path — where a held global hotkey auto-repeats. Every flip
+    stamps the clock whether or not the caller enforces the rate limit, so a CLI
+    flip immediately followed by a hotkey flip is still coalesced into one.
+    ``now`` exists so tests can drive the clock deterministically.
     """
-    if event == "hide":
-        changed = not overlay_state.get("hudHidden")
-        overlay_state["hudHidden"] = True
-        return changed
-    if event == "show":
-        changed = bool(overlay_state.get("hudHidden"))
-        overlay_state["hudHidden"] = False
+    if event in {"hide", "show"}:
+        if enforce_cooldown and hud_flip_cooldown_remaining(overlay_state, now=now) > 0.0:
+            return False
+        target_hidden = event == "hide"
+        changed = bool(overlay_state.get("hudHidden")) != target_hidden
+        overlay_state["hudHidden"] = target_hidden
+        if changed:
+            record_hud_flip(overlay_state, now=now)
         return changed
     if event == "collapse":
         changed = not overlay_state.get("hudCollapsed")
@@ -523,7 +571,14 @@ def apply_native_interaction(
     event = interaction.get("event")
     if event in NATIVE_VISIBILITY_EVENTS:
         expanded_xy = expanded_overlay_xy(home) if event == "collapse" else None
-        changed = bool(apply_visibility_interaction(overlay_state, event, expanded_xy=expanded_xy))
+        changed = bool(
+            apply_visibility_interaction(
+                overlay_state,
+                event,
+                expanded_xy=expanded_xy,
+                enforce_cooldown=True,
+            )
+        )
         return "visibility", changed
     if event in NATIVE_PET_ACTION_EVENTS:
         return "pet-action", True
@@ -1685,6 +1740,11 @@ def native_overlay_config_payload(
         "schema": NATIVE_OVERLAY_CONFIG_SCHEMA,
         "visible": visible,
         "mode": mode,
+        # Contract 1.4: the combo the helper registers with Carbon
+        # `RegisterEventHotKey`. It rides *every* config write, including the
+        # hidden one — a config that dropped the key while the panel is hidden
+        # would unregister the one hotkey that can bring the panel back.
+        "hideHotkey": hide_hotkey_setting(load_overlay_state(overlay_state_path(home))),
         "scale": max(0.75, min(1.75, float(existing.get("scale") or 1.0))),
         "x": x,
         "y": y,

@@ -1001,10 +1001,26 @@ class M10NativeSourceGateTests(unittest.TestCase):
         self.assertIn("app.setActivationPolicy(.accessory)", swift)
         self.assertIn("panel.hasShadow = false", swift)
 
-    def test_no_global_hotkey_and_no_quit_item(self) -> None:
-        swift = self.swift_source()
+    def test_the_only_global_hotkey_is_the_configured_visibility_combo(self) -> None:
+        """Supersedes the older "no global hotkey at all" gate.
 
-        self.assertNotIn("RegisterEventHotKey", swift)
+        The locked decision for hide/show is Carbon `RegisterEventHotKey` in this
+        helper, so the gate pins *which* hotkey exists: exactly one registration,
+        paired with an unregistration on teardown, and none of the forbidden
+        input-coercion APIs anywhere near it. The quit item stays absent.
+        """
+        import re  # local: only this gate counts call sites
+
+        swift = self.swift_source()
+        # Call sites only: comments and doc text name the API too, and the law's
+        # static check is about executable code.
+        code = "\n".join(line for line in swift.splitlines() if not line.strip().startswith("//"))
+
+        self.assertEqual(len(re.findall(r"(?<!Un)RegisterEventHotKey\(", code)), 1)
+        self.assertIn("UnregisterEventHotKey(reference)", code)
+        self.assertIn("stopHotKeys()", code)
+        for forbidden in ("CGEventTapCreate", "CGPostEvent", "CGEventCreate", "CGEventSourceCreate", "CGWarpMouseCursorPosition"):
+            self.assertNotIn(forbidden, swift)
         self.assertNotIn('"Quit"', swift)
 
     def test_glass_chain_is_flag_and_availability_gated(self) -> None:
