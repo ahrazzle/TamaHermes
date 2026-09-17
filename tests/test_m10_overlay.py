@@ -43,13 +43,20 @@ from tamahermes.overlay_audio import (
     decide_audio,
 )
 from tamahermes.overlay_state import (
+    OVERLAY_MODE_COLLAPSED,
+    OVERLAY_MODE_EXPANDED,
+    OVERLAY_MODE_HIDDEN,
+    OVERLAY_SCHEMA,
     avatar_overlay_open,
     default_overlay_state,
     is_tamahermes_selected,
     load_global_state,
     load_overlay_state,
+    overlay_mode,
+    overlay_should_run,
     overlay_state_path,
     parse_overlay_bounds,
+    save_overlay_state,
     should_expand_overlay,
     status_snapshot,
     update_surface_activity,
@@ -266,6 +273,122 @@ class M10OverlayStateTests(unittest.TestCase):
 
         self.assertEqual(frame["width"], 274)
         self.assertLess(frame["y"], 230)
+
+
+class M10OverlayModeStateTests(unittest.TestCase):
+    """Durable collapse/visibility state: additive keys, derived mode, live surfaces."""
+
+    def selected_global_state(self, home: Path, *, selected: str | None = "custom:tamahermes", open_overlay: bool = False) -> dict[str, object]:
+        payload: dict[str, object] = {"electron-persisted-atom-state": {"selected-avatar-id": selected}}
+        if open_overlay:
+            payload["electron-avatar-overlay-open"] = True
+        (home / ".codex-global-state.json").write_text(json.dumps(payload), encoding="utf-8")
+        return payload
+
+    def test_state_file_without_mode_keys_loads_expanded_and_shown(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "overlay-state.json"
+            legacy = default_overlay_state()
+            for key in ("hudHidden", "hudCollapsed", "hudExpandedXY", "supervisorClaim"):
+                legacy.pop(key)
+            legacy["lastRenderedLevel"] = 4
+            path.write_text(json.dumps(legacy), encoding="utf-8")
+
+            state = load_overlay_state(path)
+
+            self.assertFalse(state["hudHidden"])
+            self.assertFalse(state["hudCollapsed"])
+            self.assertIsNone(state["hudExpandedXY"])
+            self.assertIsNone(state["supervisorClaim"])
+            self.assertEqual(state["lastRenderedLevel"], 4)
+            self.assertEqual(overlay_mode(state), OVERLAY_MODE_EXPANDED)
+
+    def test_schema_mismatch_still_resets_the_whole_file_to_defaults(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "overlay-state.json"
+            path.write_text(json.dumps({"schema": "tamahermes.sidecar_overlay.v2", "hudCollapsed": True, "lastRenderedLevel": 9}), encoding="utf-8")
+
+            state = load_overlay_state(path)
+
+            self.assertEqual(state["schema"], OVERLAY_SCHEMA)
+            self.assertFalse(state["hudCollapsed"])
+            self.assertIsNone(state.get("lastRenderedLevel"))
+            self.assertEqual(overlay_mode(state), OVERLAY_MODE_EXPANDED)
+
+    def test_new_keys_survive_a_save_and_load_round_trip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "overlay-state.json"
+            state = default_overlay_state()
+            state["hudCollapsed"] = True
+            state["hudExpandedXY"] = {"x": 300, "y": 180}
+            save_overlay_state(path, state)
+
+            reloaded = load_overlay_state(path)
+
+            self.assertTrue(reloaded["hudCollapsed"])
+            self.assertEqual(reloaded["hudExpandedXY"], {"x": 300, "y": 180})
+            self.assertEqual(reloaded["schema"], OVERLAY_SCHEMA)
+
+    def test_mode_derivation_truth_table_covers_all_four_combinations(self) -> None:
+        cases = [
+            (False, False, OVERLAY_MODE_EXPANDED),
+            (True, False, OVERLAY_MODE_COLLAPSED),
+            (False, True, OVERLAY_MODE_HIDDEN),
+            (True, True, OVERLAY_MODE_HIDDEN),
+        ]
+        for collapsed, hidden, expected in cases:
+            with self.subTest(collapsed=collapsed, hidden=hidden):
+                state = default_overlay_state()
+                state["hudCollapsed"] = collapsed
+                state["hudHidden"] = hidden
+                self.assertEqual(overlay_mode(state), expected)
+
+    def test_overlay_should_run_truth_table(self) -> None:
+        cases = [
+            # selected, surface_active, collapsed, hidden, expected
+            (True, True, False, False, True),
+            (True, False, True, False, True),
+            (True, False, False, True, True),
+            (True, False, False, False, False),
+            (False, False, True, False, False),
+            (False, True, False, False, False),
+        ]
+        for selected, surface_active, collapsed, hidden, expected in cases:
+            with self.subTest(selected=selected, surface=surface_active, collapsed=collapsed, hidden=hidden):
+                state = default_overlay_state()
+                state["hudCollapsed"] = collapsed
+                state["hudHidden"] = hidden
+                global_state = {"electron-persisted-atom-state": {"selected-avatar-id": "custom:tamahermes" if selected else "custom:other"}}
+                self.assertEqual(
+                    overlay_should_run(global_state, state, 100.0, surface_active=surface_active),
+                    expected,
+                )
+
+    def test_overlay_should_run_computes_surface_activity_when_not_injected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            self.selected_global_state(home, open_overlay=True)
+            state = default_overlay_state()
+
+            self.assertTrue(overlay_should_run(load_global_state(home), state, 100.0))
+            self.assertTrue(state["surfaceActive"])
+
+    def test_collapsed_pill_keeps_the_child_alive_when_the_pointer_leaves_the_mascot(self) -> None:
+        # D9.1: without this the pill would be reaped the moment the pointer moves.
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            self.selected_global_state(home, open_overlay=False)
+            global_state = load_global_state(home)
+            state = default_overlay_state()
+            surface_active, _bounds = update_surface_activity(global_state, state, 100.0)
+            self.assertFalse(surface_active)
+
+            self.assertFalse(overlay_should_run(global_state, state, 100.0, surface_active=surface_active))
+            state["hudCollapsed"] = True
+            self.assertTrue(overlay_should_run(global_state, state, 100.0, surface_active=surface_active))
+            state["hudCollapsed"] = False
+            state["hudHidden"] = True
+            self.assertTrue(overlay_should_run(global_state, state, 100.0, surface_active=surface_active))
 
 
 class M10OverlayAudioTests(unittest.TestCase):
