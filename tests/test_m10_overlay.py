@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -20,18 +21,30 @@ from tamahermes.feedback import (
     request_avatar_reload,
 )
 from tamahermes.overlay import (
+    COLLAPSED_HEIGHT,
+    COLLAPSED_WIDTH,
     apply_native_interaction,
     apply_native_interaction_audio,
     apply_visibility_interaction,
+    collapsed_overlay_frame,
     consume_native_interaction,
     apply_progress_audio_for_records,
+    expanded_frame_with_restore,
+    expanded_overlay_xy,
     hud_visible_now,
+    native_overlay_a11y,
+    native_overlay_config_payload,
+    native_overlay_frame,
+    native_overlay_min_bounds,
+    overlay_config_mode,
+    overlay_loop_interval,
     queue_native_sfx_request,
     apply_nonactivating_window_style,
     evolution_overlay_frame,
     refresh_installed_pet_for_records,
     render_evolution_announcement_html,
     render_native_overlay_html,
+    run_native_overlay_loop,
     sync_codex_session_events,
     tamago_palette,
     write_native_overlay_config,
@@ -486,6 +499,371 @@ class M10OverlayVisibilityTests(unittest.TestCase):
 
         self.assertIn('data-event="hide"', html)
         self.assertIn('aria-label="Hide HUD"', html)
+
+
+class M10OverlayCollapseTests(unittest.TestCase):
+    """The collapsed pill: geometry, render, transitions and config floors."""
+
+    def bounds(self) -> object:
+        return parse_overlay_bounds(
+            {
+                "x": 100,
+                "y": 200,
+                "width": 160,
+                "height": 120,
+                "mascot": {"left": 20, "top": 30, "width": 40, "height": 40},
+            }
+        )
+
+    def test_collapsed_frame_is_in_place_and_pill_sized(self) -> None:
+        frame = collapsed_overlay_frame(self.bounds())
+        expanded_frame = native_overlay_frame(self.bounds())
+
+        self.assertEqual(frame["width"], COLLAPSED_WIDTH)
+        self.assertEqual(frame["height"], COLLAPSED_HEIGHT)
+        self.assertEqual(frame["x"], expanded_frame["x"])
+        self.assertEqual(frame["y"], expanded_frame["y"])
+
+    def test_config_floors_hand_the_pill_its_own_minimum(self) -> None:
+        self.assertEqual(native_overlay_min_bounds("collapsed"), (COLLAPSED_WIDTH, COLLAPSED_HEIGHT))
+        self.assertEqual(native_overlay_min_bounds("expanded"), (120, 80))
+        self.assertEqual(native_overlay_min_bounds(None), (120, 80))
+
+    def test_config_mode_is_two_valued_and_derived_from_state(self) -> None:
+        state = default_overlay_state()
+        self.assertEqual(overlay_config_mode(state), "expanded")
+        state["hudCollapsed"] = True
+        self.assertEqual(overlay_config_mode(state), "collapsed")
+        state["hudHidden"] = True
+        self.assertEqual(overlay_config_mode(state), "collapsed")
+
+    def test_collapse_saves_the_expanded_position_and_expand_keeps_it_for_the_restore(self) -> None:
+        state = default_overlay_state()
+
+        self.assertTrue(apply_visibility_interaction(state, "collapse", expanded_xy={"x": 300, "y": 180}))
+        self.assertTrue(state["hudCollapsed"])
+        self.assertEqual(state["hudExpandedXY"], {"x": 300, "y": 180})
+        self.assertEqual(apply_visibility_interaction(state, "collapse", expanded_xy={"x": 1, "y": 2}), False)
+        self.assertEqual(state["hudExpandedXY"], {"x": 300, "y": 180})
+
+        self.assertTrue(apply_visibility_interaction(state, "expand"))
+        self.assertFalse(state["hudCollapsed"])
+        # The saved position stays until the renderer has put the panel back.
+        self.assertEqual(state["hudExpandedXY"], {"x": 300, "y": 180})
+        self.assertFalse(apply_visibility_interaction(state, "expand"))
+
+    def test_expanded_frame_with_restore_uses_the_saved_position_once(self) -> None:
+        state = default_overlay_state()
+        frame, restoring = expanded_frame_with_restore(state, self.bounds())
+        self.assertFalse(restoring)
+        self.assertEqual(frame["width"], 376)
+
+        state["hudExpandedXY"] = {"x": 300, "y": 180}
+        frame, restoring = expanded_frame_with_restore(state, self.bounds())
+        self.assertTrue(restoring)
+        self.assertEqual((frame["x"], frame["y"]), (300, 180))
+        self.assertEqual(frame["width"], 376)
+
+    def test_collapsed_overlay_frame_callers_can_restore_from_disk_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            self.assertIsNone(expanded_overlay_xy(home))
+            write_native_overlay_config(home, visible=True, frame={"x": 12, "y": 34, "width": 376, "height": 226})
+            self.assertEqual(expanded_overlay_xy(home), {"x": 12, "y": 34})
+
+    def test_config_payload_carries_mode_and_floors_without_renaming_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            expanded = native_overlay_config_payload(home, visible=True, mode="expanded")
+            collapsed = native_overlay_config_payload(home, visible=True, frame=collapsed_overlay_frame(self.bounds()), mode="collapsed")
+
+            self.assertEqual(expanded["schema"], "tamahermes.native_overlay.config.v1")
+            self.assertEqual(expanded["mode"], "expanded")
+            self.assertEqual((expanded["minWidth"], expanded["minHeight"]), (120, 80))
+            self.assertEqual(collapsed["mode"], "collapsed")
+            self.assertEqual((collapsed["minWidth"], collapsed["minHeight"]), (COLLAPSED_WIDTH, COLLAPSED_HEIGHT))
+            self.assertEqual((collapsed["width"], collapsed["height"]), (COLLAPSED_WIDTH, COLLAPSED_HEIGHT))
+            for key in ("visible", "scale", "x", "y", "width", "height", "htmlPath", "hoverDelaySeconds"):
+                self.assertIn(key, collapsed)
+
+    def test_config_force_xy_restores_the_saved_position_over_a_newer_one(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            write_native_overlay_config(home, visible=True, frame={"x": 900, "y": 700, "width": 376, "height": 226})
+
+            kept = native_overlay_config_payload(home, visible=True, frame={"x": 300, "y": 180, "width": 376, "height": 226})
+            forced = native_overlay_config_payload(home, visible=True, frame={"x": 300, "y": 180, "width": 376, "height": 226}, force_xy=True)
+
+            self.assertEqual((kept["x"], kept["y"]), (900, 700))
+            self.assertEqual((forced["x"], forced["y"]), (300, 180))
+
+    def test_collapsed_html_is_a_transparent_full_panel_button(self) -> None:
+        collapsed = render_native_overlay_html(hud_snapshot(), mode="collapsed")
+        expanded = render_native_overlay_html(hud_snapshot(), expanded=True)
+
+        for html_text in (collapsed, expanded):
+            self.assertIn("background: transparent", html_text)
+            self.assertNotIn("backdrop-filter: blur", html_text)
+        self.assertIn('data-event="expand"', collapsed)
+        self.assertIn('aria-label="Expand HUD"', collapsed)
+        self.assertNotIn('class="lcd"', collapsed)
+        self.assertIn("border-radius: 19px", collapsed)
+        self.assertIn("const threshold = 3;", collapsed)
+        self.assertIn("event: 'drag-start'", collapsed)
+        self.assertIn("event: 'drag-end'", collapsed)
+        self.assertIn("L3 · TamaHermes", collapsed)
+        self.assertIn('class="mini"', collapsed)
+
+    def test_expanded_default_render_is_unchanged_by_the_mode_argument(self) -> None:
+        self.assertEqual(render_native_overlay_html(hud_snapshot(), expanded=True), render_native_overlay_html(hud_snapshot(), mode="expanded"))
+        self.assertEqual(render_native_overlay_html(hud_snapshot(), expanded=False), render_native_overlay_html(hud_snapshot(), mode="collapsed"))
+
+    def test_a11y_mirror_drives_the_body_attributes(self) -> None:
+        self.assertEqual(native_overlay_a11y({}), {})
+        self.assertEqual(native_overlay_a11y({"hoverReady": True}), {})
+        self.assertEqual(
+            native_overlay_a11y({"reduceTransparency": True, "increaseContrast": False, "darkMode": True}),
+            {"reduceTransparency": True, "increaseContrast": False, "darkMode": True},
+        )
+
+        plain = render_native_overlay_html(hud_snapshot(), mode="collapsed")
+        opaque = render_native_overlay_html(hud_snapshot(), mode="collapsed", a11y={"reduceTransparency": True})
+        contrast = render_native_overlay_html(hud_snapshot(), mode="collapsed", a11y={"increaseContrast": True, "darkMode": True})
+
+        self.assertIn("<body>", plain)
+        self.assertNotIn("<body data-a11y", plain)
+        self.assertNotIn("<body data-theme", plain)
+        self.assertIn("<body data-a11y", opaque)
+        self.assertIn('data-a11y="opaque"', opaque)
+        self.assertIn('<body data-contrast="high" data-theme="dark">', contrast)
+
+    def test_a11y_variants_keep_the_no_blur_contract(self) -> None:
+        for a11y in (
+            {"reduceTransparency": True},
+            {"increaseContrast": True},
+            {"reduceTransparency": True, "increaseContrast": True},
+        ):
+            for mode in ("expanded", "collapsed"):
+                html_text = render_native_overlay_html(hud_snapshot(), mode=mode, a11y=a11y)
+                self.assertIn("background: transparent", html_text)
+                self.assertNotIn("backdrop-filter: blur", html_text)
+
+    def test_loop_cadence_slows_down_outside_expanded_mode(self) -> None:
+        self.assertEqual(overlay_loop_interval("expanded", 0.4), 0.4)
+        self.assertEqual(overlay_loop_interval("collapsed", 0.4), 1.0)
+        self.assertEqual(overlay_loop_interval("hidden", 0.4), 1.0)
+
+    def test_collapse_and_expand_never_reach_the_pet_action_spool(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            state = default_overlay_state()
+            with mock.patch("tamahermes.overlay.spool_native_pet_action") as spool:
+                collapsed = apply_native_interaction(home, {"event": "collapse"}, state)
+                expanded = apply_native_interaction(home, {"event": "expand"}, state)
+
+            self.assertEqual(collapsed, ("visibility", True))
+            self.assertEqual(expanded, ("visibility", True))
+            self.assertFalse(state["hudCollapsed"])
+            spool.assert_not_called()
+
+    def test_collapse_interaction_records_the_configured_position(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            write_native_overlay_config(home, visible=True, frame={"x": 640, "y": 360, "width": 376, "height": 226})
+            state = default_overlay_state()
+
+            apply_native_interaction(home, {"event": "collapse"}, state)
+
+            self.assertEqual(state["hudExpandedXY"], {"x": 640, "y": 360})
+
+
+class M10OverlayLoopModeTests(unittest.TestCase):
+    """One panel, three modes: what the loop actually writes each tick."""
+
+    class FakeHelper:
+        def poll(self) -> None:
+            return None
+
+        def terminate(self) -> None:
+            return None
+
+        def wait(self, timeout: float | None = None) -> int:
+            return 0
+
+        def kill(self) -> None:
+            return None
+
+    def write_global_state(self, home: Path, *, selected: str | None = "custom:tamahermes", overlay_open: bool = True) -> None:
+        payload: dict[str, object] = {
+            "electron-persisted-atom-state": {"selected-avatar-id": selected},
+            "electron-avatar-overlay-bounds": {
+                "x": 100,
+                "y": 200,
+                "width": 160,
+                "height": 120,
+                "mascot": {"left": 20, "top": 30, "width": 40, "height": 40},
+            },
+        }
+        if overlay_open:
+            payload["electron-avatar-overlay-open"] = True
+        (home / ".codex-global-state.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    def run_loop(self, home: Path, *, iterations: int = 2) -> None:
+        # The loop must never touch the real EvoPet ledger, the installed pet or
+        # the live helper: the runtime state path is pinned to the temp home and
+        # the builder is stubbed out (no compile, no binary, no process).
+        # File writes are recorded so tests can inspect per-tick output (the
+        # loop's final teardown write would otherwise mask the last tick).
+        self.writes = []
+        real_write_text = Path.write_text
+
+        def record(path: Path, data: str, *args: object, **kwargs: object) -> int:
+            self.writes.append((str(path), data))
+            return real_write_text(path, data, *args, **kwargs)
+
+        with mock.patch.dict(os.environ, {"EVOPET_STATE": str(home / "state.json")}), mock.patch(
+            "tamahermes.overlay.build_native_overlay_helper"
+        ), mock.patch("tamahermes.overlay.refresh_installed_pet_for_records", return_value=None), mock.patch.object(Path, "write_text", record):
+            run_native_overlay_loop(
+                home,
+                ROOT,
+                interval=0.01,
+                popen=lambda *_args, **_kwargs: self.FakeHelper(),
+                max_iterations=iterations,
+            )
+
+    def writes_to(self, name: str) -> list[str]:
+        return [data for path, data in self.writes if path.endswith(name)]
+
+    def config_payloads(self, home: Path) -> list[dict[str, object]]:
+        return [json.loads(data) for data in self.writes_to("overlay-config.json")]
+
+    def visible_config(self, home: Path) -> dict[str, object]:
+        for payload in reversed(self.config_payloads(home)):
+            if payload.get("visible"):
+                return payload
+        raise AssertionError("the loop never wrote a visible native config")
+
+    def native_html(self, home: Path) -> str:
+        return (home / "tamahermes" / "native-overlay" / "overlay.html").read_text(encoding="utf-8")
+
+    def test_expanded_tick_renders_the_expanded_panel(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            self.write_global_state(home)
+
+            self.run_loop(home)
+
+            config = self.visible_config(home)
+            self.assertEqual(config["mode"], "expanded")
+            self.assertEqual((config["minWidth"], config["minHeight"]), (120, 80))
+            self.assertIn('class="lcd"', self.native_html(home))
+
+    def test_collapsed_state_renders_the_pill_in_place(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            self.write_global_state(home)
+            state = default_overlay_state()
+            state["hudCollapsed"] = True
+            save_overlay_state(overlay_state_path(home), state)
+
+            self.run_loop(home)
+
+            config = self.visible_config(home)
+            self.assertEqual(config["mode"], "collapsed")
+            self.assertEqual((config["width"], config["height"]), (COLLAPSED_WIDTH, COLLAPSED_HEIGHT))
+            self.assertEqual((config["minWidth"], config["minHeight"]), (COLLAPSED_WIDTH, COLLAPSED_HEIGHT))
+            html = self.native_html(home)
+            self.assertIn('data-event="expand"', html)
+            self.assertNotIn('class="lcd"', html)
+            self.assertIn("background: transparent", html)
+
+    def test_hidden_state_never_renders_a_panel(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            self.write_global_state(home)
+            state = default_overlay_state()
+            state["hudHidden"] = True
+            save_overlay_state(overlay_state_path(home), state)
+
+            self.run_loop(home)
+
+            self.assertEqual(self.config_payloads(home)[-1]["visible"], False)
+            self.assertFalse((home / "tamahermes" / "native-overlay" / "overlay.html").exists())
+
+    def test_not_selected_never_renders_a_panel(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            self.write_global_state(home, selected="custom:other")
+
+            self.run_loop(home)
+
+            self.assertEqual(self.config_payloads(home)[-1]["visible"], False)
+            self.assertFalse((home / "tamahermes" / "native-overlay" / "overlay.html").exists())
+
+    def test_collapsed_pill_keeps_running_without_an_active_surface(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            self.write_global_state(home, overlay_open=False)
+            state = default_overlay_state()
+            state["hudCollapsed"] = True
+            save_overlay_state(overlay_state_path(home), state)
+
+            self.run_loop(home)
+
+            self.assertEqual(self.visible_config(home)["mode"], "collapsed")
+
+    def test_pending_expanded_position_is_restored_and_cleared(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            self.write_global_state(home)
+            write_native_overlay_config(home, visible=True, frame={"x": 900, "y": 700, "width": 376, "height": 226})
+            state = default_overlay_state()
+            state["hudExpandedXY"] = {"x": 300, "y": 180}
+            save_overlay_state(overlay_state_path(home), state)
+
+            self.run_loop(home, iterations=1)
+
+            config = self.visible_config(home)
+            self.assertEqual((config["x"], config["y"]), (300, 180))
+            self.assertEqual((config["width"], config["height"]), (376, 226))
+            self.assertIsNone(load_overlay_state(overlay_state_path(home))["hudExpandedXY"])
+
+    def test_pill_interaction_collapses_the_panel_on_the_next_tick(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            self.write_global_state(home)
+            write_native_overlay_config(home, visible=True, frame={"x": 512, "y": 256, "width": 376, "height": 226})
+            request_dir = home / "tamahermes" / "native-overlay"
+            request_dir.mkdir(parents=True, exist_ok=True)
+            (request_dir / "overlay-interaction-request.json").write_text(json.dumps({"event": "collapse", "id": "one"}), encoding="utf-8")
+
+            self.run_loop(home, iterations=2)
+
+            state = load_overlay_state(overlay_state_path(home))
+            self.assertTrue(state["hudCollapsed"])
+            self.assertEqual(state["hudExpandedXY"], {"x": 512, "y": 256})
+            config = self.visible_config(home)
+            self.assertEqual(config["mode"], "collapsed")
+            self.assertEqual((config["width"], config["height"]), (COLLAPSED_WIDTH, COLLAPSED_HEIGHT))
+
+    def test_visible_config_is_rewritten_when_the_mode_changes_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            self.write_global_state(home)
+            write_native_overlay_config(home, visible=True, frame={"x": 512, "y": 256, "width": 376, "height": 226})
+            request_dir = home / "tamahermes" / "native-overlay"
+            request_dir.mkdir(parents=True, exist_ok=True)
+            (request_dir / "overlay-interaction-request.json").write_text(json.dumps({"event": "expand", "id": "one"}), encoding="utf-8")
+            state = default_overlay_state()
+            state["hudCollapsed"] = True
+            state["hudExpandedXY"] = {"x": 512, "y": 256}
+            save_overlay_state(overlay_state_path(home), state)
+
+            self.run_loop(home, iterations=2)
+
+            self.assertFalse(load_overlay_state(overlay_state_path(home))["hudCollapsed"])
+            self.assertEqual(self.visible_config(home)["mode"], "expanded")
 
 
 class M10OverlayAudioTests(unittest.TestCase):
@@ -1078,6 +1456,35 @@ class M10OverlayCliTests(unittest.TestCase):
 
             self.assertTrue(hidden["hudHidden"])
             self.assertFalse(shown["hudHidden"])
+
+    def test_overlay_cli_collapses_expands_and_toggles_the_pill(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            expanded = self.run_overlay_cli(home, "status")
+
+            collapsed = self.run_overlay_cli(home, "collapse")
+            toggled_back = self.run_overlay_cli(home, "toggle")
+            toggled_down = self.run_overlay_cli(home, "toggle")
+
+            self.assertEqual(expanded["mode"], "expanded")
+            self.assertFalse(expanded["hudCollapsed"])
+            self.assertTrue(collapsed["hudCollapsed"])
+            self.assertEqual(collapsed["mode"], "collapsed")
+            self.assertFalse(toggled_back["hudCollapsed"])
+            self.assertEqual(toggled_back["mode"], "expanded")
+            self.assertTrue(toggled_down["hudCollapsed"])
+            self.assertEqual(toggled_down["mode"], "collapsed")
+            self.assertFalse(toggled_down["hudHidden"])
+
+    def test_overlay_cli_collapse_records_the_panel_position_for_the_restore(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            write_native_overlay_config(home, visible=True, frame={"x": 512, "y": 256, "width": 376, "height": 226})
+
+            self.run_overlay_cli(home, "collapse")
+
+            state = load_overlay_state(overlay_state_path(home))
+            self.assertEqual(state["hudExpandedXY"], {"x": 512, "y": 256})
 
 
 if __name__ == "__main__":
