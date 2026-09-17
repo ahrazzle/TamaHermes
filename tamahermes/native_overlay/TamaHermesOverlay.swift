@@ -1,4 +1,5 @@
 import AppKit
+import Carbon
 import Foundation
 import WebKit
 
@@ -21,6 +22,10 @@ struct OverlayConfig: Decodable {
     let mode: String?
     let minWidth: Double?
     let minHeight: Double?
+    /// Contract 1.4: the user-configurable show/hide combo. The Python loop
+    /// writes it into *every* config payload (documented default Cmd+Shift+H),
+    /// so an old config that omits it falls back to that same default below.
+    let hideHotkey: String?
 }
 
 struct SfxRequest: Decodable {
@@ -29,6 +34,127 @@ struct SfxRequest: Decodable {
     let volume: Double?
     let expiresAt: Double?
 }
+
+// MARK: - Hide/show hotkey (pure logic, exercised by tests/test_swift_hotkey.swift)
+
+/// A parsed `hideHotkey` combo: one Carbon virtual key code plus a Carbon
+/// modifier mask. Deliberately free of AppKit so the Swift harness can compile
+/// the same source and drive it. The registration the helper performs is
+/// `RegisterEventHotKey(combo.keyCode, combo.modifiers, ...)`, so this value is
+/// the registration request.
+struct HotKeyCombo: Equatable {
+    let keyCode: UInt32
+    let modifiers: UInt32
+
+    /// The documented default of the `hideHotkey` key (contract 1.4). The Python
+    /// side owns the same default in overlay-state.json (`DEFAULT_HIDE_HOTKEY`);
+    /// a config payload that predates the key falls back to this value.
+    static let documentedDefault = "Cmd+Shift+H"
+
+    /// Carbon signature for this helper's single registered hotkey.
+    static let signature: OSType = 0x4556_4F50  // 'EVOP'
+
+    /// Parse a combo such as `Cmd+Shift+H`.
+    ///
+    /// Tokens are case-insensitive and `+`-separated. Modifiers: `Cmd`/`Command`,
+    /// `Shift`, `Opt`/`Option`/`Alt`, `Ctrl`/`Control`. The key is one letter or
+    /// digit, or `Space`/`Tab`/`Return`/`Escape`.
+    ///
+    /// Returns nil for anything else, *including a modifier-less key*: a bare
+    /// key would swallow ordinary typing in every application, so an unusable
+    /// combo leaves the helper with no global hotkey rather than a key grab.
+    static func parse(_ raw: String?) -> HotKeyCombo? {
+        guard let raw else { return nil }
+        let tokens = raw
+            .split(separator: "+")
+            .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
+            .filter { !$0.isEmpty }
+        guard !tokens.isEmpty else { return nil }
+
+        var modifiers: UInt32 = 0
+        var keyToken: String?
+        for token in tokens {
+            switch token {
+            case "cmd", "command", "⌘": modifiers |= UInt32(cmdKey)
+            case "shift", "⇧": modifiers |= UInt32(shiftKey)
+            case "opt", "option", "alt", "⌥": modifiers |= UInt32(optionKey)
+            case "ctrl", "control", "⌃": modifiers |= UInt32(controlKey)
+            default:
+                // A second non-modifier token means the combo is malformed.
+                if keyToken != nil { return nil }
+                keyToken = token
+            }
+        }
+        guard modifiers != 0, let keyToken, let keyCode = keyCode(for: keyToken) else { return nil }
+        return HotKeyCombo(keyCode: keyCode, modifiers: modifiers)
+    }
+
+    static func keyCode(for token: String) -> UInt32? {
+        switch token {
+        case "space": return UInt32(kVK_Space)
+        case "tab": return UInt32(kVK_Tab)
+        case "return", "enter": return UInt32(kVK_Return)
+        case "escape", "esc": return UInt32(kVK_Escape)
+        default: break
+        }
+        guard token.count == 1, let character = token.first else { return nil }
+        return letterKeyCodes[character] ?? digitKeyCodes[character]
+    }
+
+    // Carbon virtual key codes (HIToolbox Events.h).
+    private static let letterKeyCodes: [Character: UInt32] = [
+        "a": UInt32(kVK_ANSI_A), "b": UInt32(kVK_ANSI_B), "c": UInt32(kVK_ANSI_C),
+        "d": UInt32(kVK_ANSI_D), "e": UInt32(kVK_ANSI_E), "f": UInt32(kVK_ANSI_F),
+        "g": UInt32(kVK_ANSI_G), "h": UInt32(kVK_ANSI_H), "i": UInt32(kVK_ANSI_I),
+        "j": UInt32(kVK_ANSI_J), "k": UInt32(kVK_ANSI_K), "l": UInt32(kVK_ANSI_L),
+        "m": UInt32(kVK_ANSI_M), "n": UInt32(kVK_ANSI_N), "o": UInt32(kVK_ANSI_O),
+        "p": UInt32(kVK_ANSI_P), "q": UInt32(kVK_ANSI_Q), "r": UInt32(kVK_ANSI_R),
+        "s": UInt32(kVK_ANSI_S), "t": UInt32(kVK_ANSI_T), "u": UInt32(kVK_ANSI_U),
+        "v": UInt32(kVK_ANSI_V), "w": UInt32(kVK_ANSI_W), "x": UInt32(kVK_ANSI_X),
+        "y": UInt32(kVK_ANSI_Y), "z": UInt32(kVK_ANSI_Z),
+    ]
+
+    private static let digitKeyCodes: [Character: UInt32] = [
+        "0": UInt32(kVK_ANSI_0), "1": UInt32(kVK_ANSI_1), "2": UInt32(kVK_ANSI_2),
+        "3": UInt32(kVK_ANSI_3), "4": UInt32(kVK_ANSI_4), "5": UInt32(kVK_ANSI_5),
+        "6": UInt32(kVK_ANSI_6), "7": UInt32(kVK_ANSI_7), "8": UInt32(kVK_ANSI_8),
+        "9": UInt32(kVK_ANSI_9),
+    ]
+}
+
+// HOTKEY-GATE-BEGIN
+/// Rate limit for hotkey-driven visibility flips (contract 1.6).
+///
+/// A held global hotkey auto-repeats, so this gate allows at most one flip per
+/// cooldown window ("boundary input produces at most one flip"), and refuses
+/// every flip once the helper has been stopped (contract 1.3c). Pure value type,
+/// no AppKit: `tests/test_swift_hotkey.swift` compiles this block verbatim and
+/// exercises it.
+struct HotKeyFlipGate {
+    static let cooldownSeconds: Double = 0.2
+
+    private var lastFlipAt: Double?
+    private(set) var stopped = false
+
+    /// The kill-switch state: a stopped helper never flips the panel again.
+    mutating func stop() {
+        stopped = true
+    }
+
+    mutating func reset() {
+        stopped = false
+        lastFlipAt = nil
+    }
+
+    /// True when a flip is allowed now; records it when it returns true.
+    mutating func allowsFlip(now: Double) -> Bool {
+        if stopped { return false }
+        if let last = lastFlipAt, now - last < Self.cooldownSeconds { return false }
+        lastFlipAt = now
+        return true
+    }
+}
+// HOTKEY-GATE-END
 
 final class NonActivatingPanel: NSPanel {
     override var canBecomeKey: Bool { false }
@@ -65,6 +191,24 @@ final class OverlayController: NSObject, WKScriptMessageHandler {
     private var statusItem: NSStatusItem?
     private var lastMode: String = "expanded"
     private var lastHiddenRequested: Bool = false
+    // Hide/show hotkey (contract 1.3/1.6) + the optimistic direction of a flip
+    // that the Python loop has not published back into the config yet.
+    private var hotKeyRef: EventHotKeyRef?
+    private var hotKeyHandlerRef: EventHandlerRef?
+    private var attemptedHotKey: String = ""
+    private var hotKeyFlipGate = HotKeyFlipGate()
+    private var pendingHiddenRequest: Bool?
+
+    /// The combo currently armed by Carbon, or "" when none is registered.
+    private var registeredHotKey: String {
+        hotKeyRef != nil ? attemptedHotKey : ""
+    }
+
+    deinit {
+        // Contract 1.3(c): the overlay stop path tears the helper down, so the
+        // hotkey must go with it — a stopped overlay never keeps a global key.
+        stopHotKeys()
+    }
 
     init(configPath: String) {
         self.configPath = configPath
@@ -75,6 +219,9 @@ final class OverlayController: NSObject, WKScriptMessageHandler {
         super.init()
         buildPanel()
         buildStatusItem()
+        // Contract 1.3: the hotkey is registered at construction rather than on
+        // first use, so a panel that starts hidden can still be brought back.
+        registerConfiguredHotKey(readConfig())
         NSWorkspace.shared.notificationCenter.addObserver(
             self,
             selector: #selector(accessibilityOptionsChanged),
@@ -336,6 +483,11 @@ final class OverlayController: NSObject, WKScriptMessageHandler {
             // read Reduce Transparency / Increase Contrast, so the helper
             // reports what the native chrome is actually drawing.
             "mode": config.mode ?? "expanded",
+            // Contract 1.4: what the helper was asked to register, and what
+            // Carbon actually armed. A refused combo reads back as null rather
+            // than silently claiming a hotkey that is not there.
+            "hideHotkey": config.hideHotkey ?? NSNull(),
+            "hotkey": registeredHotKey.isEmpty ? NSNull() : registeredHotKey,
             "reduceTransparency": reduceTransparency,
             "increaseContrast": increaseContrast,
             "darkMode": darkModeActive,
@@ -386,6 +538,115 @@ final class OverlayController: NSObject, WKScriptMessageHandler {
         } else {
             _ = try? FileManager.default.moveItem(at: URL(fileURLWithPath: temporary), to: destination)
         }
+    }
+
+    // MARK: - Global hide/show hotkey (Carbon registration, contract 1.3)
+
+    /// Register the combo published by the Python loop in the config payload.
+    ///
+    /// Idempotent per requested combo: a tick that sees the same `hideHotkey`
+    /// does no Carbon work. A combo that will not parse falls back to the
+    /// documented default, and a modifier-less combo is refused outright — the
+    /// helper then runs with no hotkey rather than grabbing a bare key from
+    /// every other application.
+    private func registerConfiguredHotKey(_ config: OverlayConfig?) {
+        let configured = config?.hideHotkey?.trimmingCharacters(in: .whitespaces) ?? ""
+        let requested = configured.isEmpty ? HotKeyCombo.documentedDefault : configured
+        guard requested != attemptedHotKey else { return }
+        attemptedHotKey = requested
+        unregisterHotKey()
+        guard let combo = HotKeyCombo.parse(requested) ?? HotKeyCombo.parse(HotKeyCombo.documentedDefault) else { return }
+        installHotKeyHandlerIfNeeded()
+        guard hotKeyHandlerRef != nil else { return }
+        var reference: EventHotKeyRef?
+        let status = RegisterEventHotKey(
+            combo.keyCode,
+            combo.modifiers,
+            EventHotKeyID(signature: HotKeyCombo.signature, id: 1),
+            GetApplicationEventTarget(),
+            0,
+            &reference
+        )
+        guard status == noErr, let reference else { return }
+        hotKeyRef = reference
+        hotKeyFlipGate.reset()
+    }
+
+    private func installHotKeyHandlerIfNeeded() {
+        guard hotKeyHandlerRef == nil else { return }
+        var eventType = EventTypeSpec(
+            eventClass: OSType(kEventClassKeyboard),
+            eventKind: UInt32(kEventHotKeyPressed)
+        )
+        let status = InstallEventHandler(
+            GetApplicationEventTarget(),
+            OverlayController.hotKeyEventHandler,
+            1,
+            &eventType,
+            Unmanaged.passUnretained(self).toOpaque(),
+            &hotKeyHandlerRef
+        )
+        if status != noErr {
+            hotKeyHandlerRef = nil
+        }
+    }
+
+    /// Unregister the combo (the process keeps running; used by the kill-switch).
+    private func unregisterHotKey() {
+        if let reference = hotKeyRef {
+            UnregisterEventHotKey(reference)
+        }
+        hotKeyRef = nil
+    }
+
+    /// Contract 1.3(c): the kill-switch state. The registration goes first, then
+    /// the gate refuses every later flip.
+    func stopHotKeys() {
+        hotKeyFlipGate.stop()
+        unregisterHotKey()
+        if let handler = hotKeyHandlerRef {
+            RemoveEventHandler(handler)
+            hotKeyHandlerRef = nil
+        }
+        attemptedHotKey = ""
+        pendingHiddenRequest = nil
+    }
+
+    /// Carbon delivers a registered hotkey as an ordinary application event: the
+    /// overlay only reads the one it registered, and nothing is captured or
+    /// swallowed on the way to the foreground application.
+    fileprivate func handleHotKeyEvent(_ event: EventRef?) {
+        guard hotKeyRef != nil else { return }  // stopped/unregistered: ignore
+        guard let event else { return }
+        var identifier = EventHotKeyID()
+        let status = GetEventParameter(
+            event,
+            EventParamName(kEventParamDirectObject),
+            EventParamType(typeEventHotKeyID),
+            nil,
+            MemoryLayout<EventHotKeyID>.size,
+            nil,
+            &identifier
+        )
+        guard status == noErr, identifier.signature == HotKeyCombo.signature else { return }
+        toggleHiddenRequest()
+    }
+
+    /// Flip the panel through the existing interaction file — the same channel
+    /// the HUD buttons and the status menu use, so the Python loop stays the one
+    /// writer of `hudHidden`. At most one flip per cooldown window (contract
+    /// 1.6): a held key auto-repeats, and repeats must not flicker the panel.
+    private func toggleHiddenRequest() {
+        guard hotKeyFlipGate.allowsFlip(now: Date().timeIntervalSince1970) else { return }
+        let event = (pendingHiddenRequest ?? lastHiddenRequested) ? "show" : "hide"
+        writeInteraction(event: event)
+        pendingHiddenRequest = (event == "hide")
+    }
+
+    private static let hotKeyEventHandler: EventHandlerUPP = { _, event, userData in
+        guard let userData else { return noErr }
+        Unmanaged<OverlayController>.fromOpaque(userData).takeUnretainedValue().handleHotKeyEvent(event)
+        return noErr
     }
 
     // MARK: - Drag (screen-space math, preserved from the live build)
@@ -646,6 +907,12 @@ final class OverlayController: NSObject, WKScriptMessageHandler {
         }
         lastMode = mode
         lastHiddenRequested = config.visible != true
+        if pendingHiddenRequest == lastHiddenRequested {
+            // The loop has published the flip the hotkey asked for: drop the
+            // optimistic override so the next press reads the real state again.
+            pendingHiddenRequest = nil
+        }
+        registerConfiguredHotKey(config)
         updateStatusMenu()
         writeStatus(config: config, point: point, ready: ready)
     }
@@ -660,4 +927,19 @@ guard CommandLine.arguments.count >= 2 else {
 }
 
 let controller = OverlayController(configPath: CommandLine.arguments[1])
+
+// Contract 1.3(c) kill-switch: `tamahermes overlay stop` reaches the helper as
+// SIGTERM from the sidecar loop. The hotkey is surrendered first, then the
+// default disposition is restored and re-raised so the process still reports as
+// signal-terminated to anything watching it (an ignored signal would let the
+// registration outlive a stopped overlay).
+signal(SIGTERM, SIG_IGN)
+let terminationSource = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+terminationSource.setEventHandler {
+    controller.stopHotKeys()
+    signal(SIGTERM, SIG_DFL)
+    raise(SIGTERM)
+}
+terminationSource.resume()
+
 app.run()
