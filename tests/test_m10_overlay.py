@@ -38,6 +38,7 @@ from tamahermes.overlay import (
     native_overlay_min_bounds,
     overlay_config_mode,
     overlay_loop_interval,
+    NativeOverlayWriter,
     queue_native_sfx_request,
     apply_nonactivating_window_style,
     evolution_overlay_frame,
@@ -864,6 +865,94 @@ class M10OverlayLoopModeTests(unittest.TestCase):
 
             self.assertFalse(load_overlay_state(overlay_state_path(home))["hudCollapsed"])
             self.assertEqual(self.visible_config(home)["mode"], "expanded")
+
+
+class M10OverlayWriteSuppressionTests(M10OverlayLoopModeTests):
+    """Write suppression (D8): an unchanged tick costs no file write."""
+
+    def test_writer_skips_identical_payloads_and_writes_on_change(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            writer = NativeOverlayWriter(home)
+
+            self.assertTrue(writer.write_html("<html>a</html>"))
+            self.assertFalse(writer.write_html("<html>a</html>"))
+            self.assertTrue(writer.write_html("<html>b</html>"))
+            self.assertTrue(writer.write_config(visible=True, mode="expanded"))
+            self.assertFalse(writer.write_config(visible=True, mode="expanded"))
+            self.assertTrue(writer.write_config(visible=False, mode="expanded"))
+
+            state = default_overlay_state()
+            state["createdAt"] = "2026-01-01T00:00:00Z"
+            self.assertTrue(writer.write_state(state))
+            self.assertFalse(writer.write_state(dict(state)))
+            state["hudCollapsed"] = True
+            self.assertTrue(writer.write_state(state))
+
+            # Observation timestamps are not tracked: they churn every tick.
+            untouched = default_overlay_state()
+            untouched["createdAt"] = "2026-01-01T00:00:00Z"
+            untouched["updatedAt"] = "2099-01-01T00:00:00Z"
+            untouched["lastSurfaceCheckedAtEpoch"] = 999.0
+            untouched["hudCollapsed"] = True
+            self.assertFalse(writer.write_state(untouched))
+
+            self.assertEqual((writer.html_writes, writer.config_writes, writer.state_writes), (2, 2, 2))
+
+    def visible_config_payloads(self, home: Path) -> list[dict[str, object]]:
+        return [payload for payload in self.config_payloads(home) if payload.get("visible")]
+
+    def test_unchanged_expanded_ticks_render_once(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            self.write_global_state(home)
+
+            self.run_loop(home, iterations=8)
+
+            # One render for eight ticks; the pre-start and teardown writes are
+            # the only other config writes (visible=False).
+            self.assertEqual(len(self.writes_to("overlay.html")), 1)
+            self.assertEqual(len(self.visible_config_payloads(home)), 1)
+            self.assertLessEqual(len(self.writes_to("overlay-config.json")), 3)
+
+    def test_collapsed_ticks_render_the_pill_once_and_then_go_quiet(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            self.write_global_state(home)
+            state = default_overlay_state()
+            state["hudCollapsed"] = True
+            save_overlay_state(overlay_state_path(home), state)
+
+            self.run_loop(home, iterations=6)
+
+            self.assertEqual(len(self.writes_to("overlay.html")), 1)
+            self.assertEqual(len(self.visible_config_payloads(home)), 1)
+            self.assertLessEqual(len(self.writes_to("overlay-config.json")), 3)
+
+    def test_hidden_ticks_never_write_html(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            self.write_global_state(home)
+            state = default_overlay_state()
+            state["hudHidden"] = True
+            save_overlay_state(overlay_state_path(home), state)
+
+            self.run_loop(home, iterations=6)
+
+            self.assertEqual(self.writes_to("overlay.html"), [])
+            self.assertEqual(self.visible_config_payloads(home), [])
+
+    def test_state_is_not_rewritten_on_every_tick(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            self.write_global_state(home)
+
+            self.run_loop(home, iterations=6)
+
+            state_writes = len(self.writes_to("overlay-state.json"))
+            # One write seeds the pid claim, and the periodic codex-event sync
+            # records its own timestamp; the other ticks are unchanged.
+            self.assertLess(state_writes, 6)
 
 
 class M10OverlayAudioTests(unittest.TestCase):

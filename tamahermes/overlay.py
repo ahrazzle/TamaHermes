@@ -1468,6 +1468,72 @@ def write_native_overlay_config(
     paths["config"].write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
 
+# Observation timestamps never count as "something changed": `updatedAt` is set
+# by the save itself, `lastSurfaceCheckedAtEpoch` is a pure tick heartbeat, and
+# `lastBoundsChangedAtEpoch` is refreshed on every tick while the overlay is
+# open. Persisting them per tick is exactly the write churn this replaces; a
+# real bounds change still lands because `lastBoundsSignature` is tracked.
+STATE_WRITE_IGNORED_KEYS = frozenset(
+    {"updatedAt", "lastSurfaceCheckedAtEpoch", "lastBoundsChangedAtEpoch"}
+)
+
+
+def overlay_state_fingerprint(overlay_state: dict[str, Any]) -> str:
+    """A stable digest of the parts of the overlay state worth persisting."""
+    tracked = {key: value for key, value in overlay_state.items() if key not in STATE_WRITE_IGNORED_KEYS}
+    return json.dumps(tracked, sort_keys=True, default=str)
+
+
+class NativeOverlayWriter:
+    """Write suppression for the files the Python loop owns.
+
+    The loop used to rewrite overlay.html and overlay-config.json on every tick
+    and re-save overlay-state.json on every branch, even when nothing had
+    changed. Each method here compares the payload it would write with the one
+    it last wrote and skips the write when they are identical.
+    """
+
+    def __init__(self, home: Path) -> None:
+        self.home = home
+        self.paths = native_overlay_paths(home)
+        self.paths["root"].mkdir(parents=True, exist_ok=True)
+        self.html_writes = 0
+        self.config_writes = 0
+        self.state_writes = 0
+        self._html_body: str | None = None
+        self._config_body: str | None = None
+        self._state_fingerprint: str | None = None
+
+    def write_html(self, content: str) -> bool:
+        if self._html_body == content:
+            return False
+        self.paths["html"].write_text(content, encoding="utf-8")
+        self._html_body = content
+        self.html_writes += 1
+        return True
+
+    def write_config(self, visible: bool, **kwargs: Any) -> bool:
+        paths = self.paths
+        paths["root"].mkdir(parents=True, exist_ok=True)
+        payload = native_overlay_config_payload(self.home, visible, **kwargs)
+        body = json.dumps(payload, sort_keys=True, default=str)
+        if body == self._config_body:
+            return False
+        paths["config"].write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        self._config_body = body
+        self.config_writes += 1
+        return True
+
+    def write_state(self, overlay_state: dict[str, Any]) -> bool:
+        fingerprint = overlay_state_fingerprint(overlay_state)
+        if fingerprint == self._state_fingerprint:
+            return False
+        save_overlay_state(overlay_state_path(self.home), overlay_state)
+        self._state_fingerprint = overlay_state_fingerprint(overlay_state)
+        self.state_writes += 1
+        return True
+
+
 def run_native_overlay_loop(
     home: Path,
     root: Path,
@@ -1482,6 +1548,7 @@ def run_native_overlay_loop(
     state_path = overlay_runtime_state_path(home)
     overlay_file = overlay_state_path(home)
     player = native_sfx_player(home)
+    writer = NativeOverlayWriter(home)
     stopped = False
     iterations = 0
 
@@ -1530,9 +1597,9 @@ def run_native_overlay_loop(
                                 overlay_state["lastInstallRefreshError"] = str(exc)
                         except Exception as exc:  # noqa: BLE001
                             overlay_state["lastInteractionError"] = str(exc)
-                            save_overlay_state(overlay_file, overlay_state)
+                            writer.write_state(overlay_state)
                     elif changed:
-                        save_overlay_state(overlay_file, overlay_state)
+                        writer.write_state(overlay_state)
             mode = overlay_mode(overlay_state)
             # A collapsed pill or a hidden HUD is still a live surface: the loop
             # keeps running so the restore affordance cannot delete itself.
@@ -1582,9 +1649,8 @@ def run_native_overlay_loop(
                     hud_shown = hud_visible_now(selected, surface_active, overlay_state)
                     config_mode = overlay_config_mode(overlay_state)
                     if announcement and hud_shown:
-                        paths["html"].write_text(render_evolution_announcement_html(str(announcement.get("message") or "")), encoding="utf-8")
-                        write_native_overlay_config(
-                            home,
+                        writer.write_html(render_evolution_announcement_html(str(announcement.get("message") or "")))
+                        writer.write_config(
                             visible=True,
                             frame=evolution_overlay_frame(bounds),
                             html_path=paths["html"],
@@ -1592,12 +1658,8 @@ def run_native_overlay_loop(
                             mode=OVERLAY_MODE_EXPANDED,
                         )
                     elif hud_shown and config_mode == OVERLAY_MODE_COLLAPSED:
-                        paths["html"].write_text(
-                            render_native_overlay_html(snapshot, mode=OVERLAY_MODE_COLLAPSED, a11y=a11y),
-                            encoding="utf-8",
-                        )
-                        write_native_overlay_config(
-                            home,
+                        writer.write_html(render_native_overlay_html(snapshot, mode=OVERLAY_MODE_COLLAPSED, a11y=a11y))
+                        writer.write_config(
                             visible=True,
                             frame=collapsed_overlay_frame(bounds),
                             html_path=paths["html"],
@@ -1606,12 +1668,8 @@ def run_native_overlay_loop(
                         )
                     elif hud_shown:
                         frame, restoring = expanded_frame_with_restore(overlay_state, bounds)
-                        paths["html"].write_text(
-                            render_native_overlay_html(snapshot, mode=OVERLAY_MODE_EXPANDED, a11y=a11y),
-                            encoding="utf-8",
-                        )
-                        write_native_overlay_config(
-                            home,
+                        writer.write_html(render_native_overlay_html(snapshot, mode=OVERLAY_MODE_EXPANDED, a11y=a11y))
+                        writer.write_config(
                             visible=True,
                             frame=frame,
                             html_path=paths["html"],
@@ -1622,21 +1680,21 @@ def run_native_overlay_loop(
                         if restoring:
                             overlay_state["hudExpandedXY"] = None
                     else:
-                        write_native_overlay_config(home, visible=False, mode=config_mode)
+                        writer.write_config(visible=False, mode=config_mode)
                         overlay_state["lastHoverReady"] = False
                         overlay_state["lastAudioMascotRect"] = None
                     apply_audio_decision(state, overlay_state, selected=surface_active, player=player)
                     if surface_active:
                         apply_native_interaction_audio(overlay_state, helper_status, hover, selected=True, player=player)
-                    save_overlay_state(overlay_file, overlay_state)
+                    writer.write_state(overlay_state)
                 else:
-                    write_native_overlay_config(home, visible=False, mode=overlay_config_mode(overlay_state))
-                    save_overlay_state(overlay_file, overlay_state)
+                    writer.write_config(visible=False, mode=overlay_config_mode(overlay_state))
+                    writer.write_state(overlay_state)
             else:
-                write_native_overlay_config(home, visible=False, mode=overlay_config_mode(overlay_state))
+                writer.write_config(visible=False, mode=overlay_config_mode(overlay_state))
                 overlay_state["lastHoverReady"] = False
                 overlay_state["lastAudioMascotRect"] = None
-                save_overlay_state(overlay_file, overlay_state)
+                writer.write_state(overlay_state)
             if helper.poll() is not None:
                 helper = popen([str(binary), str(paths["config"])], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             iterations += 1
