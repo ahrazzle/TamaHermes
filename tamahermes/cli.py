@@ -36,6 +36,7 @@ from .hermes_events import (
 )
 from .paths import codex_home as resolve_codex_home
 from .paths import default_state_path, hermes_home as resolve_hermes_home, repo_root as resolve_repo_root
+from .overlay import apply_visibility_interaction
 from .overlay_state import global_state_path, is_tamahermes_selected, load_global_state, load_overlay_state, overlay_state_path, save_overlay_state
 from .overlay_supervisor import ensure_overlay_supervisor, overlay_process_alive, pid_running, read_pid, stop_overlay_process, supervisor_pid_path
 from .state import apply_event, apply_passive_rest, default_state, load_state, record_install_metadata, save_state
@@ -513,12 +514,8 @@ def cmd_overlay(args: argparse.Namespace) -> None:
     elif args.action == "normal":
         state["quietMode"] = False
         changed = True
-    elif args.action == "hide":
-        state["hudHidden"] = True
-        changed = True
-    elif args.action == "show":
-        state["hudHidden"] = False
-        changed = True
+    elif args.action in {"hide", "show"}:
+        changed = bool(apply_visibility_interaction(state, args.action))
     elif args.action == "stop":
         report["stopped"] = stop_overlay_process(home)
     elif args.action == "start":

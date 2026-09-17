@@ -20,9 +20,12 @@ from tamahermes.feedback import (
     request_avatar_reload,
 )
 from tamahermes.overlay import (
+    apply_native_interaction,
     apply_native_interaction_audio,
+    apply_visibility_interaction,
     consume_native_interaction,
     apply_progress_audio_for_records,
+    hud_visible_now,
     queue_native_sfx_request,
     apply_nonactivating_window_style,
     evolution_overlay_frame,
@@ -69,6 +72,29 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def rollout_line(timestamp: str, payload: dict[str, object]) -> str:
     return json.dumps({"timestamp": timestamp, "type": "event_msg", "payload": payload})
+
+
+def hud_snapshot(**overrides: object) -> dict[str, object]:
+    """A representative status_snapshot() payload for render tests."""
+    snapshot: dict[str, object] = {
+        "displayName": "TamaHermes",
+        "lineId": "toast",
+        "machineId": "aurora",
+        "formId": "toast",
+        "lastCodexState": "running",
+        "level": 3,
+        "lifeStage": "child",
+        "branch": None,
+        "xp": 54,
+        "progress": {"percent": 56, "xpIntoLevel": 5, "xpToNextLevel": 9},
+        "stats": {"energy": 80, "health": 91, "bond": 20, "mood": 77, "mess": 32},
+        "traits": {"focus": 12, "resilience": 8, "restlessness": 1, "care": 2},
+        "visual": {"alert": "review", "satiety": "hungry", "energy": "ok", "health": "ok"},
+        "counters": {"workRuns": 7, "completedRuns": 4, "failedRuns": 1, "reviews": 2, "totalTokens": 1234},
+        "latestEvent": {"event": "task_success", "at": "2026-05-07T00:00:00Z"},
+    }
+    snapshot.update(overrides)
+    return snapshot
 
 
 class M10OverlayStateTests(unittest.TestCase):
@@ -389,6 +415,77 @@ class M10OverlayModeStateTests(unittest.TestCase):
             state["hudCollapsed"] = False
             state["hudHidden"] = True
             self.assertTrue(overlay_should_run(global_state, state, 100.0, surface_active=surface_active))
+
+
+class M10OverlayVisibilityTests(unittest.TestCase):
+    """The hide/show toggle, routed before the pet-action spool."""
+
+    def test_hide_and_show_report_change_exactly_once(self) -> None:
+        state = default_overlay_state()
+
+        self.assertIsNone(apply_visibility_interaction(state, "care"))
+        self.assertIsNone(apply_visibility_interaction(state, "not-an-event"))
+        self.assertTrue(apply_visibility_interaction(state, "hide"))
+        self.assertFalse(apply_visibility_interaction(state, "hide"))
+        self.assertTrue(state["hudHidden"])
+        self.assertTrue(apply_visibility_interaction(state, "show"))
+        self.assertFalse(apply_visibility_interaction(state, "show"))
+        self.assertFalse(state["hudHidden"])
+
+    def test_hud_visible_now_requires_selected_surfaced_and_not_hidden(self) -> None:
+        state = default_overlay_state()
+
+        self.assertTrue(hud_visible_now(True, True, state))
+        self.assertFalse(hud_visible_now(True, False, state))
+        self.assertFalse(hud_visible_now(False, True, state))
+        state["hudHidden"] = True
+        self.assertFalse(hud_visible_now(True, True, state))
+
+    def test_interaction_allowlist_accepts_visibility_events_and_rejects_junk(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            request_dir = home / "tamahermes" / "native-overlay"
+            request_dir.mkdir(parents=True)
+            request = request_dir / "overlay-interaction-request.json"
+
+            for event in ("hide", "show"):
+                request.write_text(json.dumps({"event": event}), encoding="utf-8")
+                consumed = consume_native_interaction(home)
+                self.assertIsNotNone(consumed)
+                self.assertEqual(consumed["event"], event)
+
+            request.write_text(json.dumps({"event": "explode"}), encoding="utf-8")
+            self.assertIsNone(consume_native_interaction(home))
+
+    def test_visibility_interactions_never_reach_the_pet_action_spool(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            state = default_overlay_state()
+            with mock.patch("tamahermes.overlay.spool_native_pet_action") as spool:
+                first = apply_native_interaction(home, {"event": "hide"}, state)
+                second = apply_native_interaction(home, {"event": "hide"}, state)
+
+            self.assertEqual(first, ("visibility", True))
+            self.assertEqual(second, ("visibility", False))
+            self.assertTrue(state["hudHidden"])
+            spool.assert_not_called()
+
+    def test_care_interactions_still_route_to_the_pet_action_spool(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            state = default_overlay_state()
+
+            disposition, changed = apply_native_interaction(home, {"event": "feed"}, state)
+
+            self.assertEqual(disposition, "pet-action")
+            self.assertTrue(changed)
+            self.assertFalse(state["hudHidden"])
+
+    def test_expanded_html_carries_the_hide_control(self) -> None:
+        html = render_native_overlay_html(hud_snapshot(), expanded=True)
+
+        self.assertIn('data-event="hide"', html)
+        self.assertIn('aria-label="Hide HUD"', html)
 
 
 class M10OverlayAudioTests(unittest.TestCase):
@@ -971,6 +1068,16 @@ class M10OverlayCliTests(unittest.TestCase):
             self.assertTrue(quiet["quietMode"])
             self.assertFalse(normal["quietMode"])
             self.assertFalse(unmuted["muted"])
+
+    def test_overlay_cli_hides_and_shows_the_hud(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+
+            hidden = self.run_overlay_cli(home, "hide")
+            shown = self.run_overlay_cli(home, "show")
+
+            self.assertTrue(hidden["hudHidden"])
+            self.assertFalse(shown["hudHidden"])
 
 
 if __name__ == "__main__":

@@ -395,6 +395,22 @@ def apply_progress_audio_for_records(records: list[dict[str, Any]], overlay_stat
     return apply_interaction_audio("progress", overlay_state, selected=selected)
 
 
+def spool_native_pet_action(event: str) -> bool:
+    """Send a green-HUD action through the native pet animation mailbox."""
+    action = "clean" if event == "care" else event
+    if action not in {"clean", "feed", "play"}:
+        return False
+    root = Path.home() / ".petdex" / "runtime" / "evo-queue"
+    root.mkdir(parents=True, exist_ok=True)
+    payload = {"event": "care", "action": action, "agent_source": "evopet"}
+    path = root / f"{os.getpid()}-{time.time_ns()}-{action}-care.json"
+    try:
+        path.write_text(json.dumps(payload, separators=(",", ":")) + "\n", encoding="utf-8")
+    except OSError:
+        return False
+    return True
+
+
 def consume_native_interaction(home: Path) -> dict[str, Any] | None:
     path = native_overlay_paths(home)["interaction"]
     try:
@@ -402,24 +418,24 @@ def consume_native_interaction(home: Path) -> dict[str, Any] | None:
         path.unlink(missing_ok=True)
     except (FileNotFoundError, OSError, json.JSONDecodeError):
         return None
-    if not isinstance(payload, dict) or payload.get("event") not in {
-        "care",
-        "feed",
-        "rest",
-        "clean",
-        "play",
-        "hide",
-        "show",
-    }:
+    if not isinstance(payload, dict) or payload.get("event") not in NATIVE_INTERACTION_EVENTS:
         return None
     return payload
 
 
-def apply_visibility_interaction(overlay_state: dict[str, Any], event: Any) -> bool | None:
-    """Flip the persistent HUD flag for a hide/show interaction.
+# Events the native helper may forward through the interaction file. Visibility
+# events move the panel state; the rest are pet-care actions. Widened additively
+# (schema id unchanged) so `hide`/`show` no longer land on the pet-action spool.
+NATIVE_VISIBILITY_EVENTS = frozenset({"hide", "show"})
+NATIVE_PET_ACTION_EVENTS = frozenset({"care", "feed", "clean", "play", "rest"})
+NATIVE_INTERACTION_EVENTS = NATIVE_VISIBILITY_EVENTS | NATIVE_PET_ACTION_EVENTS
 
-    Returns True when the flag changed, False when it already had that value,
-    and None when *event* is not a visibility event.
+
+def apply_visibility_interaction(overlay_state: dict[str, Any], event: Any) -> bool | None:
+    """Flip the persistent HUD flags for a visibility interaction.
+
+    Returns True when a flag changed, False when it already had that value, and
+    None when *event* is not a visibility event.
     """
     if event == "hide":
         changed = not overlay_state.get("hudHidden")
@@ -430,6 +446,28 @@ def apply_visibility_interaction(overlay_state: dict[str, Any], event: Any) -> b
         overlay_state["hudHidden"] = False
         return changed
     return None
+
+
+def apply_native_interaction(
+    home: Path,
+    interaction: dict[str, Any],
+    overlay_state: dict[str, Any],
+) -> tuple[str, bool]:
+    """Route one consumed native interaction.
+
+    Returns ``(disposition, changed)`` where disposition is ``"visibility"``
+    (the panel state was asked to change; never a pet action), ``"pet-action"``
+    (an existing care event for the pet spool) or ``"unknown"``. Visibility
+    events are consumed here even when they are a no-op, so they can never fall
+    through onto the pet-action path.
+    """
+    event = interaction.get("event")
+    if event in NATIVE_VISIBILITY_EVENTS:
+        changed = bool(apply_visibility_interaction(overlay_state, event))
+        return "visibility", changed
+    if event in NATIVE_PET_ACTION_EVENTS:
+        return "pet-action", True
+    return "unknown", False
 
 
 def hud_visible_now(selected: bool, surface_active: bool, overlay_state: dict[str, Any]) -> bool:
@@ -846,7 +884,7 @@ body {{
     <div class="scale-controls" aria-label="HUD scale">
       <button data-event="scale-down" aria-label="Scale HUD down">−</button>
       <button data-event="scale-up" aria-label="Scale HUD up">+</button>
-      <button data-event="hide" class="wide" aria-label="Hide HUD (re-show with: tamahermes overlay show)">HIDE</button>
+      <button data-event="hide" class="wide" aria-label="Hide HUD">HIDE</button>
     </div>
     <section class="lcd">
       <div class="top"><span>{title}</span><span class="pill">{line}/{machine}</span></div>
@@ -1021,18 +1059,36 @@ def run_native_overlay_loop(home: Path, root: Path, interval: float = 0.4) -> No
             if selected:
                 interaction = consume_native_interaction(home)
                 if interaction:
-                    if apply_visibility_interaction(overlay_state, interaction.get("event")) is not None:
+                    disposition, changed = apply_native_interaction(home, interaction, overlay_state)
+                    if disposition == "pet-action":
+                        try:
+                            record = {
+                                "event": "care",
+                                "action": interaction["event"],
+                                "id": interaction.get("id"),
+                                "source": "native-overlay",
+                                "amount": 1,
+                                "at": interaction.get("updatedAt"),
+                            }
+                            spool_native_pet_action(str(interaction["event"]))
+                            from .evopet_drain import default_consumed_dir, default_spool, run as drain_run
+                            drain_run(
+                                default_spool(),
+                                state_path,
+                                default_consumed_dir(),
+                                apply=True,
+                                hermes_root=Path.home() / ".hermes",
+                                mirror=False,
+                            )
+                            try:
+                                refresh_installed_pet_for_records([record], catalog, state_path, home)
+                            except Exception as exc:  # noqa: BLE001
+                                overlay_state["lastInstallRefreshError"] = str(exc)
+                        except Exception as exc:  # noqa: BLE001
+                            overlay_state["lastInteractionError"] = str(exc)
+                            save_overlay_state(overlay_file, overlay_state)
+                    elif changed:
                         save_overlay_state(overlay_file, overlay_state)
-                    else:
-                        record = {
-                            "event": interaction["event"],
-                            "id": interaction.get("id"),
-                            "source": "native-overlay",
-                            "amount": 1,
-                            "at": interaction.get("updatedAt"),
-                        }
-                        apply_bridge_event(catalog, state_path, record)
-                        refresh_installed_pet_for_records([record], catalog, state_path, home)
                 try:
                     now = time.monotonic()
                     if now - last_codex_event_sync >= 1.0:
