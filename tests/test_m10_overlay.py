@@ -79,7 +79,18 @@ from tamahermes.overlay_state import (
     update_surface_activity,
 )
 from tamahermes.state import default_state, save_state
-from tamahermes.overlay_supervisor import claim_pid_file, launch_agent_plist, pid_running, start_overlay_process, supervise_once, write_pid
+from tamahermes.overlay_supervisor import (
+    CLAIMED,
+    DUPLICATE_PEER,
+    RECOVERED_STALE,
+    UNVERIFIED_PEER,
+    claim_pid_file,
+    launch_agent_plist,
+    pid_running,
+    start_overlay_process,
+    supervise_once,
+    write_pid,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -1242,9 +1253,10 @@ class M10SupervisorGuardTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "supervisor.pid"
             write_pid(path, 111)
-            self.assertFalse(claim_pid_file(path, pid=222, is_running=lambda pid: pid == 111))
+            supervisor = lambda pid: f"/usr/bin/python3 -m tamahermes.overlay_supervisor supervisor --codex-home /x"
+            self.assertEqual(claim_pid_file(path, pid=222, is_running=lambda pid: pid == 111, identity_reader=supervisor), DUPLICATE_PEER)
             self.assertEqual(path.read_text(encoding="utf-8").strip(), "111")
-            self.assertTrue(claim_pid_file(path, pid=222, is_running=lambda pid: False))
+            self.assertEqual(claim_pid_file(path, pid=222, is_running=lambda pid: False, identity_reader=supervisor), CLAIMED)
             self.assertEqual(path.read_text(encoding="utf-8").strip(), "222")
 
     def test_pid_running_treats_zombie_process_as_stopped(self) -> None:
@@ -1267,16 +1279,17 @@ class M10SupervisorGuardTests(unittest.TestCase):
             home = Path(tmp)
             starts: list[int] = []
             stops: list[bool] = []
+            identity = lambda _pid: "/usr/bin/python3 -m tamahermes.overlay --codex-home x"
 
             self.write_global_state(home, "custom:tamahermes", bounds=True)
-            first = supervise_once(home, is_running=lambda pid: True, starter=lambda _home, _root, _python: starts.append(777) or 777)
-            second = supervise_once(home, is_running=lambda pid: pid == 777, starter=lambda _home, _root, _python: starts.append(888) or 888)
+            first = supervise_once(home, is_running=lambda pid: pid == 777, starter=lambda _home, _root, _python: starts.append(777) or 777, identity_reader=identity)
+            second = supervise_once(home, is_running=lambda pid: pid == 777, starter=lambda _home, _root, _python: starts.append(888) or 888, identity_reader=identity)
             self.assertEqual(first["startedPid"], 777)
             self.assertIsNone(second["startedPid"])
             self.assertEqual(starts, [777])
 
             self.write_global_state(home, "custom:other")
-            inactive = supervise_once(home, is_running=lambda pid: pid == 777, stopper=lambda _home: stops.append(True) or True)
+            inactive = supervise_once(home, is_running=lambda pid: pid == 777, stopper=lambda _home: stops.append(True) or True, identity_reader=identity)
             self.assertFalse(inactive["selected"])
             self.assertTrue(inactive["stopped"])
             self.assertEqual(stops, [True])
