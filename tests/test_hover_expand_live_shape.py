@@ -17,13 +17,17 @@ from tamahermes.overlay import (
     COLLAPSED_HEIGHT,
     COLLAPSED_WIDTH,
     collapsed_overlay_frame,
+    native_overlay_frame,
     native_overlay_pointer,
     panel_rect_from_config,
     write_native_overlay_config,
 )
 from tamahermes.overlay_state import (
+    HOVER_COLLAPSE_TICKS,
+    HOVER_EXPAND_TICKS,
     HOVER_PADDING,
     Rect,
+    decide_hover_expand,
     hover_target_rect,
     parse_overlay_bounds,
     pet_window_rect,
@@ -216,6 +220,132 @@ class ConfigWriterWithLiveShapeTests(unittest.TestCase):
             config = json.loads((home / "tamahermes" / "native-overlay" / "overlay-config.json").read_text(encoding="utf-8"))
             self.assertEqual((config["x"], config["y"]), (667, 435))
             self.assertEqual((config["width"], config["height"]), (376, 226))
+
+
+class HoverHysteresisTests(unittest.TestCase):
+    """The stability fix: a shape change has to earn consecutive ticks.
+
+    The sidecar decides once per 0.4s tick from the pointer the native helper
+    reported. A raw point-in-rect test flipped the panel on the tick the pointer
+    grazed the boundary, which the owner felt as the HUD popping open and shut;
+    these sequences are exactly the ticks that used to flip it.
+    """
+
+    PANEL = Rect(x=667, y=435, width=452, height=272)  # live 376x226 @ scale 1.2
+    ON_PET = (864, 287)  # inside LIVE_PET_RECT
+    AWAY = (400, 800)  # clear of both the pet box and the panel box
+    ON_PANEL = (700, 600)  # on the panel, below the pet box
+
+    def drive(self, ticks, *, start_expanded=False):
+        expanded = start_expanded
+        expand_ticks = collapse_ticks = 0
+        trace = []
+        for pointer in ticks:
+            decision = decide_hover_expand(
+                expanded, expand_ticks, collapse_ticks, pointer, LIVE_PET_RECT, self.PANEL
+            )
+            expanded = decision.expanded
+            expand_ticks = decision.expand_ticks
+            collapse_ticks = decision.collapse_ticks
+            trace.append(decision)
+        return trace
+
+    def test_the_zones_are_what_the_test_claims(self) -> None:
+        self.assertTrue(LIVE_PET_RECT.contains(*self.ON_PET, padding=HOVER_PADDING))
+        self.assertFalse(LIVE_PET_RECT.contains(*self.AWAY, padding=HOVER_PADDING))
+        self.assertFalse(self.PANEL.contains(*self.AWAY))
+        self.assertFalse(LIVE_PET_RECT.contains(*self.ON_PANEL, padding=HOVER_PADDING))
+        self.assertTrue(self.PANEL.contains(*self.ON_PANEL))
+
+    def test_one_tick_on_the_pet_does_not_expand(self) -> None:
+        [first] = self.drive([self.ON_PET])
+        self.assertFalse(first.expanded, "a single tick on the pet must not open the readout")
+        self.assertEqual(first.expand_ticks, 1)
+
+    def test_two_consecutive_ticks_on_the_pet_expand(self) -> None:
+        trace = self.drive([self.ON_PET, self.ON_PET])
+        self.assertEqual([d.expanded for d in trace], [False, True])
+
+    def test_one_tick_away_keeps_the_readout_open(self) -> None:
+        [first] = self.drive([self.AWAY], start_expanded=True)
+        self.assertTrue(first.expanded)
+        self.assertEqual(first.collapse_ticks, 1)
+
+    def test_four_ticks_clear_of_pet_and_panel_collapse(self) -> None:
+        trace = self.drive([self.AWAY] * HOVER_COLLAPSE_TICKS, start_expanded=True)
+        self.assertEqual(
+            [d.expanded for d in trace],
+            [True] * (HOVER_COLLAPSE_TICKS - 1) + [False],
+            "collapse must wait for the full run of clear ticks",
+        )
+
+    def test_a_grazing_pointer_never_flips_the_shape(self) -> None:
+        # The old raw test flipped on every one of these ticks.
+        trace = self.drive([self.ON_PET, self.AWAY] * 4)
+        self.assertEqual([d.expanded for d in trace], [False] * 8)
+
+    def test_a_parked_pointer_settles_and_stays_settled(self) -> None:
+        trace = self.drive([self.ON_PET] * 6)
+        self.assertEqual([d.expanded for d in trace], [False, True, True, True, True, True])
+
+    def test_panel_pointer_resets_the_collapse_counter(self) -> None:
+        trace = self.drive(
+            [self.AWAY, self.AWAY, self.AWAY, self.ON_PANEL, self.AWAY, self.AWAY, self.AWAY],
+            start_expanded=True,
+        )
+        self.assertEqual([d.expanded for d in trace], [True] * 7, "reaching for the care buttons must not collapse it")
+        self.assertEqual(trace[3].source, "panel")
+        self.assertEqual(trace[4].collapse_ticks, 1, "the run restarts after the panel resets it")
+
+    def test_panel_pointer_opens_the_readout_from_collapsed(self) -> None:
+        [first] = self.drive([self.ON_PANEL])
+        self.assertTrue(first.expanded)
+
+    def test_thresholds_match_the_locked_spec(self) -> None:
+        self.assertEqual(HOVER_EXPAND_TICKS, 2)
+        self.assertEqual(HOVER_COLLAPSE_TICKS, 4)
+
+    def test_no_target_or_pointer_falls_back_to_the_open_flag(self) -> None:
+        for target, pointer in ((None, self.ON_PET), (LIVE_PET_RECT, None)):
+            on = decide_hover_expand(False, 0, 0, pointer, target, self.PANEL, overlay_open=True)
+            off = decide_hover_expand(True, 0, 0, pointer, target, self.PANEL, overlay_open=False)
+            self.assertTrue(on.expanded)
+            self.assertFalse(off.expanded)
+            self.assertEqual(on.source, "fallback")
+
+
+class NativeShapeTests(unittest.TestCase):
+    """The two panel shapes main draws, pinned to the locked sizes.
+
+    The PR's frame_rewrite_needed gate is not ported: main's
+    NativeOverlayWriter already compares the full config payload before
+    every write, which subsumes a shape-only comparison.
+    """
+
+    def test_the_two_shapes_are_the_locked_sizes(self) -> None:
+        bounds = parse_overlay_bounds({"electron-avatar-overlay-bounds": dict(LIVE_BOUNDS_SHAPE, width=160, height=120)})
+        expanded = native_overlay_frame(bounds)
+        collapsed = collapsed_overlay_frame(bounds)
+        self.assertEqual((expanded["width"], expanded["height"]), (376, 226))
+        self.assertEqual((collapsed["width"], collapsed["height"]), (COLLAPSED_WIDTH, COLLAPSED_HEIGHT))
+        self.assertEqual((expanded["x"], expanded["y"]), (collapsed["x"], collapsed["y"]), "collapse happens in place")
+
+
+class HoverStateKeysTests(unittest.TestCase):
+    """The counters ride in overlay_state: additive keys, schema id unchanged."""
+
+    def test_default_state_carries_the_counters(self) -> None:
+        from tamahermes.overlay_state import OVERLAY_SCHEMA, default_overlay_state, consecutive_ticks
+
+        state = default_overlay_state()
+        self.assertEqual(state["schema"], OVERLAY_SCHEMA)
+        self.assertEqual(state["lastHoverExpandTicks"], 0)
+        self.assertEqual(state["lastHoverCollapseTicks"], 0)
+        # A state file written by the previous build has no counters at all.
+        self.assertEqual(consecutive_ticks(None), 0)
+        self.assertEqual(consecutive_ticks(-3), 0)
+        self.assertEqual(consecutive_ticks(True), 0)
+        self.assertEqual(consecutive_ticks(7), 7)
 
 
 if __name__ == "__main__":

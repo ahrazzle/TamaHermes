@@ -178,6 +178,8 @@ final class OverlayController: NSObject, WKScriptMessageHandler {
     private var lastSfxPlayedAt: String?
     private var lastSfxError: String?
     private var activeSounds: [NSSound] = []
+    private var lastAppliedFrame: NSRect?
+    private var lastTickPanelVisible = false
     private var dragMonitor: Any?
     private var dragOrigin: NSPoint?
     private var dragMouseOrigin: NSPoint?
@@ -249,6 +251,9 @@ final class OverlayController: NSObject, WKScriptMessageHandler {
         panel.level = .floating
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient, .ignoresCycle]
         panel.ignoresMouseEvents = true
+        // The panel keeps its care buttons clickable while visible, but it must
+        // never take keyboard focus off whatever the owner is typing in.
+        panel.becomesKeyOnlyIfNeeded = true
 
         content = NSView(frame: initialFrame)
         content.wantsLayer = true
@@ -700,6 +705,9 @@ final class OverlayController: NSObject, WKScriptMessageHandler {
         dragOrigin = nil
         dragMouseOrigin = nil
         dragLastEventAt = nil
+        // Dropping the cached frame makes the next tick re-apply the clamped
+        // frame once after a drag, instead of trusting a pre-drag cache.
+        lastAppliedFrame = nil
     }
 
     private func persistPanelPosition() {
@@ -868,12 +876,14 @@ final class OverlayController: NSObject, WKScriptMessageHandler {
     @objc private func tick() {
         guard let config = readConfig() else {
             panel.orderOut(nil)
+            lastTickPanelVisible = false
             return
         }
         // Cadence: 0.25 s keeps dragging smooth while the panel is on screen;
         // an invisible panel only needs to wake for a state change once a
         // second. Same single timer, interval adjusted by visibility.
         scheduleTick(panel.isVisible ? 0.25 : 1.0)
+        let wasVisible = panel.isVisible
         playSfxIfNeeded()
         panel.ignoresMouseEvents = !(config.visible == true)
         if dragMonitor != nil {
@@ -892,7 +902,16 @@ final class OverlayController: NSObject, WKScriptMessageHandler {
             chromeView?.frame = content.bounds
         }
         if dragMonitor == nil {
-            panel.setFrame(clampedFrame(for: config), display: true)
+            // clampedFrame is a pure function of the config, so re-applying an
+            // unchanged frame every tick only churns the window server — that
+            // is what read as the panel being yanked open and shut while the
+            // pointer moved near it. Apply on a real change, and once when a
+            // hidden panel comes back (orderOut -> orderFront).
+            let target = clampedFrame(for: config)
+            if lastAppliedFrame != target || (wasVisible && !lastTickPanelVisible) {
+                panel.setFrame(target, display: true)
+                lastAppliedFrame = target
+            }
         }
         reloadIfNeeded(htmlPath: config.htmlPath)
         let point = mouseTopLeftPoint()
@@ -915,6 +934,7 @@ final class OverlayController: NSObject, WKScriptMessageHandler {
         registerConfiguredHotKey(config)
         updateStatusMenu()
         writeStatus(config: config, point: point, ready: ready)
+        lastTickPanelVisible = panel.isVisible
     }
 }
 

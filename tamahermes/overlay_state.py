@@ -16,6 +16,13 @@ TAMAHERMES_AVATAR_ID = "custom:tamahermes"
 GLOBAL_STATE_FILE = ".codex-global-state.json"
 SURFACE_STALE_SECONDS = 10.0
 HOVER_PADDING = 56
+# Hysteresis: a raw point-in-rect test re-read every tick flipped the HUD shape
+# on the tick the pointer grazed the boundary, which the owner saw as the panel
+# popping open and shut. A shape change now has to survive consecutive ticks in
+# the new zone: two ticks on the pet to expand, four ticks clear of both the pet
+# and the panel to collapse.
+HOVER_EXPAND_TICKS = 2
+HOVER_COLLAPSE_TICKS = 4
 
 # The EvoPet native pet app records only its window origin (``pet_x``/``pet_y``)
 # and the display ``scale`` in ``desktop-native-settings.json``. Its window is
@@ -136,10 +143,14 @@ def default_overlay_state() -> dict[str, Any]:
         "hudExpandedXY": None,
         "supervisorClaim": None,
         # Additive hover read-back (schema id unchanged): the pointer the native
-        # backend last tested, the rect it tested against, and the verdict.
+        # backend last tested, the rect it tested against, the verdict, and the
+        # consecutive-tick counters the verdict is decided from.
         "lastHoverExpanded": False,
         "lastHoverPointer": None,
         "lastHoverTarget": None,
+        "lastHoverExpandTicks": 0,
+        "lastHoverCollapseTicks": 0,
+        "lastHoverSource": None,
     }
 
 
@@ -444,6 +455,78 @@ def should_expand_overlay(
         x, y = pointer
         return target.contains(x, y, padding=HOVER_PADDING)
     return avatar_overlay_open(global_state)
+
+
+@dataclass(frozen=True)
+class HoverDecision:
+    """One tick's hover verdict plus the counters the next tick continues from."""
+
+    expanded: bool
+    expand_ticks: int
+    collapse_ticks: int
+    pointer_on_target: bool
+    pointer_on_panel: bool
+    source: str
+
+
+def consecutive_ticks(value: Any) -> int:
+    """A persisted tick counter, defensively read back from JSON state."""
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return 0
+    return value
+
+
+def decide_hover_expand(
+    previous_expanded: bool,
+    expand_ticks: int,
+    collapse_ticks: int,
+    pointer: tuple[int, int] | None,
+    target: Rect | None,
+    panel_rect: Rect | None = None,
+    *,
+    overlay_open: bool = False,
+    padding: int = HOVER_PADDING,
+) -> HoverDecision:
+    """Decide the HUD shape for this tick, with hysteresis.
+
+    ``should_expand_overlay`` answers "is the pointer on the pet right now", which
+    a raw per-tick read turns into a flicker whenever the pointer sits near the
+    boundary. This keeps the same rule but makes a shape change *earn* its ticks:
+
+    - expand only after :data:`HOVER_EXPAND_TICKS` consecutive ticks on the pet;
+    - collapse only after :data:`HOVER_COLLAPSE_TICKS` consecutive ticks clear of
+      both the pet and the panel;
+    - a pointer on the panel holds the readout open and zeroes the collapse
+      counter, so reaching for the care buttons never snatches the panel away.
+
+    With neither a pointer nor a target rect there is nothing to test, and the
+    ``electron-avatar-overlay-open`` flag decides as before (that is what keeps a
+    bounds-less machine expanded instead of blank).
+    """
+    if target is None or pointer is None:
+        return HoverDecision(bool(overlay_open), 0, 0, False, False, "fallback")
+
+    x, y = pointer
+    on_target = target.contains(x, y, padding=padding)
+    on_panel = bool(panel_rect is not None and panel_rect.contains(x, y))
+    if on_target:
+        expand_ticks += 1
+        collapse_ticks = 0
+    elif on_panel:
+        expand_ticks = 0
+        collapse_ticks = 0
+    else:
+        expand_ticks = 0
+        collapse_ticks += 1
+
+    if on_panel:
+        expanded = True
+    elif previous_expanded:
+        expanded = collapse_ticks < HOVER_COLLAPSE_TICKS
+    else:
+        expanded = expand_ticks >= HOVER_EXPAND_TICKS
+    source = "panel" if on_panel else ("target" if on_target else "away")
+    return HoverDecision(expanded, expand_ticks, collapse_ticks, on_target, on_panel, source)
 
 
 def status_snapshot(state: dict[str, Any]) -> dict[str, Any]:
