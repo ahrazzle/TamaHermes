@@ -5,7 +5,7 @@ growth/XP bar and the bond heart (how it is doing), and now *what level it has r
 number is not computed in the drawing code: it rides ``derive_visual_state`` from ``state``,
 whose ``level`` is derived from the shared combined ledger's XP by the fixed EvoPet curve, so
 every surface reads the same number. The readout is persistent -- it paints at level 1 as much
-as at level 99 -- and it must not remove or move the XP bar beside it.
+as at level 999 -- and it must not remove or move the XP bar beside it.
 
 The readout is free-floating: no bubble or container, just enlarged 3x pixel-art digits in a
 fixed bright ink with a near-black halo, so the number stays legible when the pet is
@@ -87,7 +87,7 @@ class LevelReadoutSource(unittest.TestCase):
     def test_the_visual_state_carries_the_level_from_the_shared_xp(self) -> None:
         catalog = load_catalog(ROOT)
         state = default_state(catalog)
-        for xp in (0, 1041, 10_000, levels.CAP_XP):
+        for xp in (0, 1_000, 10_000, levels.TOP_XP):
             with self.subTest(xp=xp):
                 state["xp"] = xp
                 self.assertEqual(
@@ -119,7 +119,7 @@ class LevelReadoutSource(unittest.TestCase):
 class LevelReadoutRendering(unittest.TestCase):
     def test_the_floating_hud_paints_a_level_number_at_every_level(self) -> None:
         catalog = load_catalog(ROOT)
-        for xp in (0, 5_000, levels.CAP_XP):
+        for xp in (0, 5_000, levels.TOP_XP):
             with self.subTest(xp=xp):
                 state = default_state(catalog)
                 state["xp"] = xp
@@ -131,11 +131,45 @@ class LevelReadoutRendering(unittest.TestCase):
         low = default_state(catalog)
         low["xp"] = 0                       # level 1
         high = default_state(catalog)
-        high["xp"] = levels.CAP_XP          # level 99
+        high["xp"] = levels.TOP_XP         # level 999
         self.assertNotEqual(
             band_pixels(render_float(low), level_rect()),
             band_pixels(render_float(high), level_rect()),
         )
+
+    def test_a_three_digit_level_is_not_clamped_to_two(self) -> None:
+        """The live combined ledger is level 123; the readout must print 123, not 99.
+
+        The reserved rect has to hold three digits plus the caret plus the halo, or the drawn
+        number runs outside the rect the collision guard and the build report agree on.
+        """
+        self.assertEqual(pet_compiler.level_text(123), "123")
+        self.assertEqual(pet_compiler.level_text(999), "999")
+        self.assertEqual(pet_compiler.level_text(1500), "999")
+
+        digit_w = pet_compiler._LEVEL_GLYPH_W * pet_compiler._LEVEL_GLYPH_SCALE
+        drawn = (
+            pet_compiler._LEVEL_CARET_W
+            + pet_compiler._LEVEL_CARET_GAP
+            + 3 * digit_w
+            + 2 * pet_compiler._LEVEL_DIGIT_GAP
+        )
+        self.assertGreaterEqual(
+            FLOATING_LEVEL_RECT["width"], drawn + 2, "the halo needs 1px a side"
+        )
+
+        catalog = load_catalog(ROOT)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = default_state(catalog)
+            state["xp"] = 152_522          # the live combined ledger: level 123
+            report = build_codex_pet(catalog, state, root / "live", layout="floating")
+            self.assertEqual(report["levelBadge"]["level"], "123")
+            rect = level_rect()
+            self.assertEqual(report["levelBadge"]["rect"], list(rect))
+            with Image.open(report["atlas"]["png"]) as sheet:
+                first_cell = sheet.convert("RGBA").crop((0, 0, CELL_WIDTH, CELL_HEIGHT))
+            self.assertGreater(painted_pixels(first_cell, rect), 0)
 
     def test_the_number_is_inside_the_cell_and_clear_of_the_creature(self) -> None:
         catalog = load_catalog(ROOT)
@@ -164,7 +198,7 @@ class LevelReadoutRendering(unittest.TestCase):
             low = default_state(catalog)
             low["xp"] = 0                       # level 1
             high = default_state(catalog)
-            high["xp"] = levels.CAP_XP          # level 99
+            high["xp"] = levels.TOP_XP         # level 999
             low_report = build_codex_pet(catalog, low, root / "low", layout="floating")
             high_report = build_codex_pet(catalog, high, root / "high", layout="floating")
             rect = level_rect()
@@ -181,7 +215,7 @@ class LevelReadoutRendering(unittest.TestCase):
                 diff = ImageChops.difference(
                     a.convert("RGBA").crop(window), b.convert("RGBA").crop(window)
                 )
-                self.assertIsNotNone(diff.getbbox(), "level 1 and level 99 must not render the same")
+                self.assertIsNotNone(diff.getbbox(), "level 1 and level 999 must not render the same")
 
     def test_the_xp_bar_is_untouched_by_the_level_readout(self) -> None:
         # The level rect must not sit on the XP bar: both are persistent and both must show.
@@ -219,7 +253,7 @@ class LevelReadoutFreeFloating(unittest.TestCase):
     def test_no_bubble_track_color_in_the_level_band(self) -> None:
         catalog = load_catalog(ROOT)
         track = (26, 30, 40, 205)
-        for xp in (0, levels.CAP_XP):
+        for xp in (0, levels.TOP_XP):
             with self.subTest(xp=xp):
                 state = default_state(catalog)
                 state["xp"] = xp

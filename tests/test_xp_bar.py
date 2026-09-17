@@ -91,24 +91,25 @@ class StageProgressTests(unittest.TestCase):
     def test_progress_is_measured_within_the_current_stage(self) -> None:
         """The bar fills against the current LEVEL band; the stage only picks the form.
 
-        The ladder is EvoPet's (99 levels, 100,000 XP at the top) and a pet evolves only at
-        the creator's level gates, so the bar moves ~100 times per lifetime. The anchors below
-        are level-relative: a level's floor is 0%, the middle of its band is ~50%, and the XP
-        just before the next level is 90-100% depending on how wide that level's band is. The
-        stage column is the creator's gates, so a pet in the child form still fills per level.
+        The ladder is EvoPet's (each level costs more than the last, up to 999 at 998,019,880 XP)
+        and a pet evolves only at the creator's level gates, so the bar moves once per level. The
+        anchors below are level-relative: a level's floor is 0%, the middle of its band is ~50%,
+        and the XP just before the next level is 90-100% depending on how wide that level's band
+        is. The stage column is the creator's gates, so a pet in the child form still fills per
+        level.
         """
         cases = [
             (0, "egg", 1, 0),
             (9, "egg", 1, 90),
             (10, "egg", 2, 0),
-            (843, "egg", 10, 0),
-            (1040, "egg", 10, 99),
-            (1041, "hatchling", 11, 0),
-            (2000, "hatchling", 14, 85),
-            (5040, "child", 23, 0),
-            (7877, "child", 28, 50),
-            (10006, "teen", 32, 0),
-            (20158, "adult", 45, 0),
+            (810, "egg", 10, 0),
+            (999, "egg", 10, 99),
+            (1000, "hatchling", 11, 0),
+            (2000, "hatchling", 15, 14),
+            (4840, "child", 23, 0),
+            (7840, "child", 29, 0),
+            (9611, "teen", 32, 0),
+            (19367, "adult", 45, 0),
         ]
         for xp, stage, level, percent in cases:
             with self.subTest(xp=xp):
@@ -127,9 +128,9 @@ class StageProgressTests(unittest.TestCase):
         """The top of the ladder is terminal; the adult form is where the ladder stops mattering.
 
         ``adult`` is the terminal form, so the stage has no ceiling to fill and the bar reports
-        a full stage. ``levelMaxed`` is the ladder's own end: level 99 at the cap.
+        a full stage. ``levelMaxed`` is the ladder's own end: level 999 at the top rung.
         """
-        _catalog, adult = grown(levels.CAP_XP)
+        _catalog, adult = grown(levels.TOP_XP)
         progress = stage_progress(adult)
         self.assertTrue(progress["terminal"])
         self.assertIsNone(progress["ceiling"])
@@ -147,8 +148,8 @@ class StageProgressTests(unittest.TestCase):
         _catalog, adult = grown(33_318)
         progress = stage_progress(adult)
         self.assertEqual(progress["stage"], "adult")
-        self.assertEqual(progress["level"], 57)
-        self.assertEqual(progress["percent"], 56)
+        self.assertEqual(progress["level"], 58)
+        self.assertEqual(progress["percent"], 69)
         self.assertLess(progress["percent"], 100)
 
     def test_a_dormant_pet_still_shows_the_progress_it_has_made(self) -> None:
@@ -228,13 +229,48 @@ class BucketTests(unittest.TestCase):
         self.assertEqual(visual["stage"], "child")
         self.assertEqual(visual["xpPercent"], "50")
 
+    def test_a_hundred_thousand_xp_is_not_a_full_bar(self) -> None:
+        """The bug this curve removes: 100,000 XP used to be the cap, so the bar read full there.
+
+        It is level 100 of 999 now — a real position inside a real band — so neither the derived
+        value nor the drawn bar may be complete.
+        """
+        catalog = load_catalog(ROOT)
+        state = default_state(catalog, line_id="toast", machine_id="aurora")
+        state["xp"] = 100_000
+        visual = derive_visual_state(state)
+        self.assertEqual(visual["level"], str(levels.level_for_xp(100_000)))
+        self.assertEqual(visual["level"], "100")
+        self.assertNotEqual(visual["xpPercent"], "100")
+        self.assertLessEqual(int(visual["xpPercent"]), 95)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            report = build_codex_pet(catalog, state, root / "hundred-k", layout=DEFAULT_LAYOUT)
+            self.assertEqual(report["xpBar"]["percent"], visual["xpPercent"])
+            self.assertNotEqual(report["xpBar"]["percent"], "100")
+
+            top = default_state(catalog, line_id="toast", machine_id="aurora")
+            top["xp"] = levels.TOP_XP
+            top_report = build_codex_pet(catalog, top, root / "top", layout=DEFAULT_LAYOUT)
+            self.assertEqual(top_report["xpBar"]["percent"], "100")
+
+            bar = FLOATING_XP_BAR if DEFAULT_LAYOUT == "floating" else XP_BAR
+            probe = (bar["x"] + bar["width"] - 4, bar["y"] + bar["height"] // 2)
+            partial = cell_at(root / "hundred-k" / "spritesheet.png")
+            complete = cell_at(root / "top" / "spritesheet.png")
+            self.assertNotEqual(
+                partial.getpixel(probe), complete.getpixel(probe),
+                "the bar at 100,000 XP is drawn as full",
+            )
+
 
 class RebuildDisciplineTests(unittest.TestCase):
     """The bar must not turn every XP tick into a full 72-cell recompile."""
 
     def test_tiny_xp_change_does_not_rebuild_but_a_bucket_crossing_does(self) -> None:
         catalog = load_catalog(ROOT)
-        # Level 10 is a wide band inside the egg stage (843 XP up to the hatch gate at 1,041),
+        # Level 10 is a wide band inside the egg stage (810 XP up to the hatch gate at 1,000),
         # so a one-XP step stays inside a 5% bucket while the middle of the band crosses one.
         floor = levels.xp_for_level(10)
         ceiling = levels.xp_for_level(11)
@@ -336,7 +372,7 @@ class BarRenderingTests(unittest.TestCase):
         bar = FLOATING_XP_BAR if DEFAULT_LAYOUT == "floating" else XP_BAR
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            _c, adult = grown(levels.CAP_XP)
+            _c, adult = grown(levels.TOP_XP)
             report = build_codex_pet(catalog, adult, root / "adult", layout=DEFAULT_LAYOUT)
             self.assertEqual(report["xpBar"]["percent"], "100")
             cell = cell_at(root / "adult" / "spritesheet.png")

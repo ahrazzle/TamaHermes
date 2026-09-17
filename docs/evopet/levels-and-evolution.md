@@ -12,30 +12,32 @@ ledger, and the running pet evolves on the ledger's copy, not on the manifest (Â
 Every pet in every package climbs the same ladder, so a level means the same work in every pet.
 Everything here is implemented in `tamahermes/levels.py` unless a section says otherwise.
 
-    level 1              0 XP
-    level 99       100,000 XP
-    xp_for_level(L) = round(100_000 * ((L - 1) / 98) ** 2.0)
+    level 1                      0 XP
+    level 999          998,019,880 XP
+    xp_for_level(L) = 10 * (L - 1) ** 2 + round((L - 1) ** 6 / 1_000_000_000)
 
-XP is cumulative and never decreases, so a level once reached is never lost; the exponent of 2.0 makes
-the early levels cheap and the last ones long.
+XP is cumulative and never decreases, so a level once reached is never lost. Every level costs more than
+the one before it: the first level-up is 10 XP and the last rung is 5,945,329 XP, so the ladder stays
+cheap where pets actually live and its top is decades away rather than closed at a round number.
 
     level   cumulative XP   this level costs
         1               0                  -
         2              10                 10
-       20           3,759                385
-       50          25,000              1,010
-       70          49,573              1,426
-       99         100,000              2,030
+       20           3,610                370
+       50          24,024                972
+       70          47,718              1,379
+       99          96,926              2,003
 
-The first level costs 10 XP, which one prompt and one success covers (4 + 14 = 18 XP). Level 50 sits at
-exactly a quarter of the cap, half the cap (50,000 XP) lands inside level 70, and the climb from level 50
-to level 99 costs 75,000 XP.
+The first level costs 10 XP, which one prompt and one success covers (4 + 14 = 18 XP). The `10 * u ** 2`
+term is the ladder's whole shape over the levels a pet actually reaches: the `u ** 6` tail is under 1 XP
+through level 31 and 886 XP (0.9 %) at level 99, and only becomes the dominant term past level 300.
 
 **The bar fills against the level, not the form.** `level_progress(xp)` reports the level and your
-position between its floor (`xp_for_level(L)`) and ceiling (`xp_for_level(L + 1)`), so the bar fills
-about a hundred times in a pet's life and resets at every level-up; it changes only when the pet
-crosses a gate, since a gate is the only thing that changes the sprite. At level 99 the ceiling is
-`None`, the bar reports 100%, and `visual_state.percent_bucket` snaps it to 20 buckets of 5%.
+position between its floor (`xp_for_level(L)`) and ceiling (`xp_for_level(L + 1)`), so the bar resets at
+every level-up; the sprite changes only when the pet crosses a gate. Every level below the top of the
+ladder has a real ceiling, and the drawn value is clamped there so the bar can never look full. Only
+level 999 has no rung above it: there the level number is 999, the bar is complete, and
+`visual_state.percent_bucket` snaps the drawn value to 20 buckets of 5%.
 
 ## 2. Evolution gates (your choice)
 
@@ -47,7 +49,7 @@ A gate is a level the pet *reaches*: when cumulative XP first equals or passes `
 pet moves to the next form. There is always one more form than gate, the first form being the one it
 starts in; four gates (five forms) is the maximum, one gate (two forms) the minimum.
 `levels.validate_gates` enforces exactly that, and names the problem when it refuses: `evolution gate
-120 is outside 1..99`, `evolution gates must strictly increase; 10 follows 30`, `a pet needs at least
+120 is outside 1..999`, `evolution gates must strictly increase; 10 follows 30`, `a pet needs at least
 one evolution gate`, `at most 4 gates supported (5 forms); got 5`.
 
 Form names are positional, not yours to name: `egg`, `hatchling`, `child`, `teen`, `adult` â€” three gates
@@ -85,17 +87,17 @@ runtime, deliberately, because a growth event that raises would strand a user mi
 
 | gate level | cumulative XP | from | to |
 |---|---|---|---|
-| 11 | 1,041 | egg | hatchling |
-| 23 | 5,040 | hatchling | child |
-| 32 | 10,006 | child | teen |
-| 45 | 20,158 | teen | adult |
+| 11 | 1,000 | egg | hatchling |
+| 23 | 4,840 | hatchling | child |
+| 32 | 9,611 | child | teen |
+| 45 | 19,367 | teen | adult |
 
 The gate levels were picked against the curve, not round XP numbers: at 18 XP per prompt-and-success turn
-they cost about 58, 280, 556 and 1,120 turns.
+they cost about 56, 269, 534 and 1,076 turns.
 
 Two properties make a reached gate safe to rely on. The gate level becomes a floor in the ledger table
 (`ledger_thresholds`) and XP only rises, so a pet cannot regress out of a form. The terminal form is
-absent from that table (for the default pet, `{egg: 1041, hatchling: 5040, child: 10006, teen: 20158}`),
+absent from that table (for the default pet, `{egg: 1000, hatchling: 4840, child: 9611, teen: 19367}`),
 so the last form has nothing to grow into. Dormancy is a condition, not a stage, so a hibernating pet
 still reports the progress it has genuinely made.
 
@@ -109,20 +111,20 @@ Four forms, named `egg`, `hatchling`, `child` and `teen`:
 
 | gate level | cumulative XP | from | to | XP this step costs |
 |---|---|---|---|---|
-| 20 | 3,759 | egg | hatchling | 3,759 |
-| 40 | 15,837 | hatchling | child | 12,078 |
-| 60 | 36,245 | child | teen | 20,408 |
+| 20 | 3,610 | egg | hatchling | 3,610 |
+| 40 | 15,214 | hatchling | child | 11,604 |
+| 60 | 34,852 | child | teen | 19,638 |
 
-That is about 209, 880 and 2,014 turns at 18 XP each. The gates sit 20 levels apart and nowhere near
+That is about 201, 845 and 1,936 turns at 18 XP each. The gates sit 20 levels apart and nowhere near
 evenly spaced in XP: the third step costs 1.69 times what the second costs, because the same 20 levels
 are worth less work near the bottom of the curve.
 
-- Front-load: the whole climb to level 20 costs 3,759 XP, under 4% of the cap. Gates below level 30
-  feel fast, gates above level 50 do not.
-- Price a gate in turns, not in levels: a gate at 40 is 880 turns, a gate at 60 is 2,014.
+- Front-load: the whole climb to level 20 costs 3,610 XP, a fraction of a percent of the top rung.
+  Gates below level 30 feel fast, gates above level 50 do not.
+- Price a gate in turns, not in levels: a gate at 40 is 845 turns, a gate at 60 is 1,936.
 - Keep the first gate above level 1, or your starting form is never displayed.
-- Expect the last form to be most of the pet's life: the shipping pet reaches adult at 20,158 XP, a
-  fifth of the cap, and stays there.
+- Expect the last form to be most of the pet's life: the shipping pet reaches adult at 19,367 XP and
+  stays there.
 
 `state.EVENT_DELTAS` values a turn: `prompt_sent` 4 XP, `task_success` 14, `task_failure` 5,
 `recovery` 6, `review_opened` 5, `care` 3, `session_start` 2, so a bad day is the slow path.
@@ -143,7 +145,8 @@ are worth less work near the bottom of the curve.
 
 In `tamahermes/levels.py`:
 
-    MAX_LEVEL = 99        CAP_XP = 100_000        EXPONENT = 2.0        MANIFEST_KEY = "evopet"
+    MAX_LEVEL = 999       QUADRATIC_TERM = 10     TAIL_DIVISOR = 1_000_000_000
+    TOP_XP = 998_019_880  MANIFEST_KEY = "evopet"
     STAGE_ORDER = ("egg", "hatchling", "child", "teen", "adult")
     DEFAULT_EVOLUTION_GATES = (11, 23, 32, 45)
 
@@ -161,6 +164,6 @@ installer's side is `pet_compiler.py` (`CURVE`, `evolution_block`, `declared_gat
 `read_manifest`); `evopet_drain.curve_block()` stamps the combined ledger.
 
 Every number here was printed from the real formula, not remembered, and the whole contract is covered by
-the suite (`uv run --quiet python -m unittest discover -s tests -t tests`, 183 tests, OK):
+the suite (`uv run --quiet python -m unittest discover -s tests -t tests`):
 
     uv run --quiet python -c "from tamahermes import levels; print(levels.curve_report()); print(levels.gate_report()); print(levels.gate_report((20,40,60)))"

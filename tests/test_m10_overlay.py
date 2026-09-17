@@ -198,8 +198,8 @@ class M10OverlayStateTests(unittest.TestCase):
             "traits": {},
             "counters": {},
         })
-        self.assertEqual(snapshot["level"], 58)
-        self.assertEqual(snapshot["progress"]["percent"], 87)
+        self.assertEqual(snapshot["level"], 60)
+        self.assertEqual(snapshot["progress"]["percent"], 2)
 
     def test_evolution_announcement_expires_and_renders(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
