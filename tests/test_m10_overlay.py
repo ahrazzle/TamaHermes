@@ -21,12 +21,9 @@ from tamahermes.feedback import (
     request_avatar_reload,
 )
 from tamahermes.overlay import (
-    COLLAPSED_HEIGHT,
-    COLLAPSED_WIDTH,
     apply_native_interaction,
     apply_native_interaction_audio,
     apply_visibility_interaction,
-    collapsed_overlay_frame,
     consume_native_interaction,
     apply_progress_audio_for_records,
     expanded_frame_with_restore,
@@ -424,8 +421,9 @@ class M10OverlayModeStateTests(unittest.TestCase):
             self.assertTrue(overlay_should_run(load_global_state(home), state, 100.0))
             self.assertTrue(state["surfaceActive"])
 
-    def test_collapsed_pill_keeps_the_child_alive_when_the_pointer_leaves_the_mascot(self) -> None:
-        # D9.1: without this the pill would be reaped the moment the pointer moves.
+    def test_hidden_hud_keeps_the_child_alive_when_the_pointer_leaves_the_mascot(self) -> None:
+        # D9.1 (restored contract): a hidden HUD must survive the pointer
+        # leaving, otherwise the hotkey/CLI restore surface reaps itself.
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp)
             self.selected_global_state(home, open_overlay=False)
@@ -435,10 +433,12 @@ class M10OverlayModeStateTests(unittest.TestCase):
             self.assertFalse(surface_active)
 
             self.assertFalse(overlay_should_run(global_state, state, 100.0, surface_active=surface_active))
-            state["hudCollapsed"] = True
-            self.assertTrue(overlay_should_run(global_state, state, 100.0, surface_active=surface_active))
-            state["hudCollapsed"] = False
             state["hudHidden"] = True
+            self.assertTrue(overlay_should_run(global_state, state, 100.0, surface_active=surface_active))
+            # A legacy hudCollapsed value still counts as live (the predicate's
+            # truth table is stable; the shape it once selected is inert).
+            state["hudHidden"] = False
+            state["hudCollapsed"] = True
             self.assertTrue(overlay_should_run(global_state, state, 100.0, surface_active=surface_active))
 
 
@@ -510,11 +510,11 @@ class M10OverlayVisibilityTests(unittest.TestCase):
         html = render_native_overlay_html(hud_snapshot(), expanded=True)
 
         self.assertIn('data-event="hide"', html)
-        self.assertIn('aria-label="Hide HUD"', html)
+        self.assertIn('aria-label="Hide HUD (re-show with: tamahermes overlay show)"', html)
 
 
 class M10OverlayCollapseTests(unittest.TestCase):
-    """The collapsed pill: geometry, render, transitions and config floors."""
+    """Restored single-surface contract: legacy verbs touch state, one panel draws."""
 
     def bounds(self) -> object:
         return parse_overlay_bounds(
@@ -527,27 +527,23 @@ class M10OverlayCollapseTests(unittest.TestCase):
             }
         )
 
-    def test_collapsed_frame_is_in_place_and_pill_sized(self) -> None:
-        frame = collapsed_overlay_frame(self.bounds())
-        expanded_frame = native_overlay_frame(self.bounds())
+    def test_the_frame_helper_draws_the_one_panel(self) -> None:
+        frame = native_overlay_frame(self.bounds())
+        self.assertEqual(frame["width"], 376)
+        self.assertEqual(frame["height"], 226)
 
-        self.assertEqual(frame["width"], COLLAPSED_WIDTH)
-        self.assertEqual(frame["height"], COLLAPSED_HEIGHT)
-        self.assertEqual(frame["x"], expanded_frame["x"])
-        self.assertEqual(frame["y"], expanded_frame["y"])
-
-    def test_config_floors_hand_the_pill_its_own_minimum(self) -> None:
-        self.assertEqual(native_overlay_min_bounds("collapsed"), (COLLAPSED_WIDTH, COLLAPSED_HEIGHT))
+    def test_config_floors_are_the_single_panel_minimum(self) -> None:
+        self.assertEqual(native_overlay_min_bounds("collapsed"), (120, 80))
         self.assertEqual(native_overlay_min_bounds("expanded"), (120, 80))
         self.assertEqual(native_overlay_min_bounds(None), (120, 80))
 
-    def test_config_mode_is_two_valued_and_derived_from_state(self) -> None:
+    def test_config_mode_is_single_shaped_regardless_of_legacy_state(self) -> None:
         state = default_overlay_state()
         self.assertEqual(overlay_config_mode(state), "expanded")
         state["hudCollapsed"] = True
-        self.assertEqual(overlay_config_mode(state), "collapsed")
+        self.assertEqual(overlay_config_mode(state), "expanded")
         state["hudHidden"] = True
-        self.assertEqual(overlay_config_mode(state), "collapsed")
+        self.assertEqual(overlay_config_mode(state), "expanded")
 
     def test_collapse_saves_the_expanded_position_and_expand_keeps_it_for_the_restore(self) -> None:
         state = default_overlay_state()
@@ -587,16 +583,18 @@ class M10OverlayCollapseTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp)
             expanded = native_overlay_config_payload(home, visible=True, mode="expanded")
-            collapsed = native_overlay_config_payload(home, visible=True, frame=collapsed_overlay_frame(self.bounds()), mode="collapsed")
+            # A caller may still pass the legacy collapsed mode with its own
+            # frame (boot reconcile of a pre-revert config file); the payload
+            # carries the geometry but the floors never leave the one panel.
+            legacy = native_overlay_config_payload(home, visible=True, frame={"x": 100, "y": 200, "width": 148, "height": 38}, mode="collapsed")
 
             self.assertEqual(expanded["schema"], "tamahermes.native_overlay.config.v1")
             self.assertEqual(expanded["mode"], "expanded")
             self.assertEqual((expanded["minWidth"], expanded["minHeight"]), (120, 80))
-            self.assertEqual(collapsed["mode"], "collapsed")
-            self.assertEqual((collapsed["minWidth"], collapsed["minHeight"]), (COLLAPSED_WIDTH, COLLAPSED_HEIGHT))
-            self.assertEqual((collapsed["width"], collapsed["height"]), (COLLAPSED_WIDTH, COLLAPSED_HEIGHT))
+            self.assertEqual((legacy["width"], legacy["height"]), (148, 38))
+            self.assertEqual((legacy["minWidth"], legacy["minHeight"]), (120, 80))
             for key in ("visible", "scale", "x", "y", "width", "height", "htmlPath", "hoverDelaySeconds"):
-                self.assertIn(key, collapsed)
+                self.assertIn(key, legacy)
 
     def test_config_force_xy_restores_the_saved_position_over_a_newer_one(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -609,54 +607,42 @@ class M10OverlayCollapseTests(unittest.TestCase):
             self.assertEqual((kept["x"], kept["y"]), (900, 700))
             self.assertEqual((forced["x"], forced["y"]), (300, 180))
 
-    def test_collapsed_html_is_a_drag_pill_with_a_dedicated_expand_button(self) -> None:
-        collapsed = render_native_overlay_html(hud_snapshot(), mode="collapsed")
-        expanded = render_native_overlay_html(hud_snapshot(), expanded=True)
-
-        for html_text in (collapsed, expanded):
+    def test_every_render_mode_produces_the_single_lcd_surface(self) -> None:
+        plain = render_native_overlay_html(hud_snapshot())
+        for html_text in (
+            plain,
+            render_native_overlay_html(hud_snapshot(), mode="collapsed"),
+            render_native_overlay_html(hud_snapshot(), expanded=False),
+        ):
+            self.assertIn('class="lcd"', html_text)
             self.assertIn("background: transparent", html_text)
             self.assertNotIn("backdrop-filter: blur", html_text)
-        # The pill root is a drag surface: a div that carries no event.
-        self.assertIn('<div class="pill">', collapsed)
-        self.assertNotIn('<button class="pill"', collapsed)
-        # One dedicated native child button does the expanding (focusable,
-        # Enter/Space fire click), with a >= 28 pt hit target.
-        self.assertIn(
-            '<button class="expand" type="button" data-event="expand" aria-label="Expand HUD">',
-            collapsed,
-        )
-        self.assertEqual(collapsed.count("data-event="), 1)
-        self.assertIn("min-width: 28px", collapsed)
-        self.assertIn("min-height: 28px", collapsed)
-        # The pill's pointer-up only finishes/aborts a drag; the expand post
-        # lives in the child button's click handler, never on the bar body.
-        pill_up = collapsed.split("pill.addEventListener('pointerup'")[1].split("pill.addEventListener('pointercancel'")[0]
-        self.assertNotIn("event: 'expand'", pill_up)
-        self.assertIn("event: 'drag-end'", pill_up)
-        button_block = collapsed.split("expandButton.addEventListener('pointerdown'")[1]
-        self.assertIn("event.stopPropagation()", button_block)
-        self.assertNotIn('class="lcd"', collapsed)
-        self.assertIn("border-radius: 19px", collapsed)
-        self.assertIn("const threshold = 3;", collapsed)
-        self.assertIn("event: 'drag-start'", collapsed)
-        self.assertIn("event: 'drag-end'", collapsed)
-        self.assertIn("L3 · TamaHermes", collapsed)
-        self.assertIn('class="mini"', collapsed)
+            # The pill page is gone: no expand affordance, no chrome radius,
+            # no chrome tokens anywhere in the page.
+            self.assertNotIn('data-event="expand"', html_text)
+            self.assertNotIn("border-radius: 19px", html_text)
+            self.assertNotIn("--chrome", html_text)
+            self.assertNotIn("prefers-color-scheme", html_text)
+        # The drag handle and care buttons stay on the one page.
+        self.assertIn("event: 'drag'", plain)
+        self.assertIn('data-event="care"', plain)
 
-    def test_expanded_html_carries_a_dedicated_collapse_button(self) -> None:
+    def test_scale_control_row_carries_exactly_three_baseline_buttons(self) -> None:
         expanded = render_native_overlay_html(hud_snapshot(), expanded=True)
+        # Restored markup: minus / plus / HIDE with the baseline copy verbatim.
         self.assertIn(
-            '<button data-event="collapse" class="wide collapse" aria-label="Collapse HUD">PILL</button>',
+            '<button data-event="hide" class="wide" aria-label="Hide HUD (re-show with: tamahermes overlay show)">HIDE</button>',
             expanded,
         )
-        self.assertEqual(expanded.count('aria-label="Collapse HUD"'), 1)
-        # Hide and the scale buttons stay exactly where they were.
-        self.assertIn('data-event="hide"', expanded)
+        self.assertNotIn('data-event="collapse"', expanded)
+        self.assertNotIn(">PILL<", expanded)
+        self.assertEqual(expanded.count('aria-label="Collapse HUD"'), 0)
+        scale_row = expanded.split('<div class="scale-controls"', 1)[1].split("</div>", 1)[0]
+        self.assertEqual(scale_row.count("<button"), 3)
         self.assertIn('aria-label="Scale HUD down"', expanded)
         self.assertIn('aria-label="Scale HUD up"', expanded)
-        # The collapse control meets the same 28 pt hit-target floor.
-        self.assertIn("min-width: 28px", expanded)
-        self.assertIn("min-height: 28px", expanded)
+        # The 28 pt collapse control is gone with the pill.
+        self.assertNotIn("min-width: 28px", expanded)
         # The .top handle remains a drag surface only.
         self.assertIn("event: 'drag'", expanded)
         self.assertIn("clientX - dragPoint.x", expanded)
@@ -687,9 +673,9 @@ class M10OverlayCollapseTests(unittest.TestCase):
             {"reduceTransparency": True, "increaseContrast": False, "darkMode": True},
         )
 
-        plain = render_native_overlay_html(hud_snapshot(), mode="collapsed")
-        opaque = render_native_overlay_html(hud_snapshot(), mode="collapsed", a11y={"reduceTransparency": True})
-        contrast = render_native_overlay_html(hud_snapshot(), mode="collapsed", a11y={"increaseContrast": True, "darkMode": True})
+        plain = render_native_overlay_html(hud_snapshot())
+        opaque = render_native_overlay_html(hud_snapshot(), a11y={"reduceTransparency": True})
+        contrast = render_native_overlay_html(hud_snapshot(), a11y={"increaseContrast": True, "darkMode": True})
 
         self.assertIn("<body>", plain)
         self.assertNotIn("<body data-a11y", plain)
@@ -697,6 +683,12 @@ class M10OverlayCollapseTests(unittest.TestCase):
         self.assertIn("<body data-a11y", opaque)
         self.assertIn('data-a11y="opaque"', opaque)
         self.assertIn('<body data-contrast="high" data-theme="dark">', contrast)
+        # Inert mirror: the restored skin ships no CSS that reacts to the
+        # attributes (the theme/a11y stylesheet was reverted with the glass).
+        style = contrast.split("<style>", 1)[1].split("</style>", 1)[0]
+        self.assertNotIn("data-a11y", style)
+        self.assertNotIn("data-contrast", style)
+        self.assertNotIn("data-theme", style)
 
     def test_a11y_variants_keep_the_no_blur_contract(self) -> None:
         for a11y in (
@@ -704,10 +696,9 @@ class M10OverlayCollapseTests(unittest.TestCase):
             {"increaseContrast": True},
             {"reduceTransparency": True, "increaseContrast": True},
         ):
-            for mode in ("expanded", "collapsed"):
-                html_text = render_native_overlay_html(hud_snapshot(), mode=mode, a11y=a11y)
-                self.assertIn("background: transparent", html_text)
-                self.assertNotIn("backdrop-filter: blur", html_text)
+            html_text = render_native_overlay_html(hud_snapshot(), a11y=a11y)
+            self.assertIn("background: transparent", html_text)
+            self.assertNotIn("backdrop-filter: blur", html_text)
 
     def test_loop_cadence_slows_down_outside_expanded_mode(self) -> None:
         self.assertEqual(overlay_loop_interval("expanded", 0.4), 0.4)
@@ -820,7 +811,7 @@ class M10OverlayLoopModeTests(unittest.TestCase):
             self.assertEqual((config["minWidth"], config["minHeight"]), (120, 80))
             self.assertIn('class="lcd"', self.native_html(home))
 
-    def test_collapsed_state_renders_the_pill_in_place(self) -> None:
+    def test_legacy_collapsed_state_boots_the_single_panel(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp)
             self.write_global_state(home)
@@ -831,12 +822,12 @@ class M10OverlayLoopModeTests(unittest.TestCase):
             self.run_loop(home)
 
             config = self.visible_config(home)
-            self.assertEqual(config["mode"], "collapsed")
-            self.assertEqual((config["width"], config["height"]), (COLLAPSED_WIDTH, COLLAPSED_HEIGHT))
-            self.assertEqual((config["minWidth"], config["minHeight"]), (COLLAPSED_WIDTH, COLLAPSED_HEIGHT))
+            self.assertEqual(config["mode"], "expanded")
+            self.assertEqual((config["width"], config["height"]), (376, 226))
+            self.assertEqual((config["minWidth"], config["minHeight"]), (120, 80))
             html = self.native_html(home)
-            self.assertIn('data-event="expand"', html)
-            self.assertNotIn('class="lcd"', html)
+            self.assertIn('class="lcd"', html)
+            self.assertNotIn('data-event="expand"', html)
             self.assertIn("background: transparent", html)
 
     def test_hidden_state_never_renders_a_panel(self) -> None:
@@ -862,17 +853,23 @@ class M10OverlayLoopModeTests(unittest.TestCase):
             self.assertEqual(self.config_payloads(home)[-1]["visible"], False)
             self.assertFalse((home / "tamahermes" / "native-overlay" / "overlay.html").exists())
 
-    def test_collapsed_pill_keeps_running_without_an_active_surface(self) -> None:
+    def test_hidden_hud_without_an_active_surface_writes_only_hidden_configs(self) -> None:
+        # Restored contract: no surface ever renders while the panel is hidden
+        # and un-surfaced; the sidecar stays alive for the hotkey/CLI restore
+        # path (liveness itself is gated by overlay_should_run in the supervisor
+        # tests above).
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp)
             self.write_global_state(home, overlay_open=False)
             state = default_overlay_state()
-            state["hudCollapsed"] = True
+            state["hudHidden"] = True
             save_overlay_state(overlay_state_path(home), state)
 
             self.run_loop(home)
 
-            self.assertEqual(self.visible_config(home)["mode"], "collapsed")
+            payloads = self.config_payloads(home)
+            self.assertTrue(payloads)
+            self.assertTrue(all(payload["visible"] is False for payload in payloads))
 
     def test_pending_expanded_position_is_restored_and_cleared(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -890,7 +887,7 @@ class M10OverlayLoopModeTests(unittest.TestCase):
             self.assertEqual((config["width"], config["height"]), (376, 226))
             self.assertIsNone(load_overlay_state(overlay_state_path(home))["hudExpandedXY"])
 
-    def test_pill_interaction_collapses_the_panel_on_the_next_tick(self) -> None:
+    def test_legacy_collapse_interaction_records_state_without_changing_the_surface(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp)
             self.write_global_state(home)
@@ -903,10 +900,13 @@ class M10OverlayLoopModeTests(unittest.TestCase):
 
             state = load_overlay_state(overlay_state_path(home))
             self.assertTrue(state["hudCollapsed"])
-            self.assertEqual(state["hudExpandedXY"], {"x": 512, "y": 256})
+            # The saved position is restored by the single-surface draw and
+            # then cleared (no second shape waits for it).
+            self.assertIsNone(state["hudExpandedXY"])
             config = self.visible_config(home)
-            self.assertEqual(config["mode"], "collapsed")
-            self.assertEqual((config["width"], config["height"]), (COLLAPSED_WIDTH, COLLAPSED_HEIGHT))
+            self.assertEqual(config["mode"], "expanded")
+            self.assertEqual((config["width"], config["height"]), (376, 226))
+            self.assertEqual((config["x"], config["y"]), (512, 256))
 
     def test_visible_config_is_rewritten_when_the_mode_changes_only(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -926,10 +926,10 @@ class M10OverlayLoopModeTests(unittest.TestCase):
             self.assertFalse(load_overlay_state(overlay_state_path(home))["hudCollapsed"])
             self.assertEqual(self.visible_config(home)["mode"], "expanded")
 
-    def test_toggle_button_events_expand_and_collapse_across_loop_runs(self) -> None:
-        # End-to-end mirror of the dedicated button clicks: each WebView click
-        # posts an interaction event; the loop flips hudCollapsed, restores the
-        # saved position and re-renders the other shape's control.
+    def test_legacy_collapse_and_expand_events_converge_on_the_single_surface(self) -> None:
+        # The dead-but-harmless glass-era verbs: each interaction event still
+        # flips hudCollapsed and saves/restores the position, but the loop only
+        # ever renders the one LCD surface.
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp)
             self.write_global_state(home)
@@ -940,8 +940,9 @@ class M10OverlayLoopModeTests(unittest.TestCase):
             (request_dir / "overlay-interaction-request.json").write_text(json.dumps({"event": "collapse", "id": "one"}), encoding="utf-8")
             self.run_loop(home, iterations=2)
             self.assertTrue(load_overlay_state(overlay_state_path(home))["hudCollapsed"])
-            self.assertEqual(self.visible_config(home)["mode"], "collapsed")
-            self.assertIn('aria-label="Expand HUD"', self.native_html(home))
+            self.assertEqual(self.visible_config(home)["mode"], "expanded")
+            self.assertIn('class="lcd"', self.native_html(home))
+            self.assertNotIn('aria-label="Expand HUD"', self.native_html(home))
 
             (request_dir / "overlay-interaction-request.json").write_text(json.dumps({"event": "expand", "id": "two"}), encoding="utf-8")
             self.run_loop(home, iterations=2)
@@ -951,7 +952,7 @@ class M10OverlayLoopModeTests(unittest.TestCase):
             config = self.visible_config(home)
             self.assertEqual(config["mode"], "expanded")
             self.assertEqual((config["x"], config["y"]), (512, 256))
-            self.assertIn('aria-label="Collapse HUD"', self.native_html(home))
+            self.assertNotIn('aria-label="Collapse HUD"', self.native_html(home))
 
 
 class M10OverlayWriteSuppressionTests(M10OverlayLoopModeTests):
@@ -1002,7 +1003,7 @@ class M10OverlayWriteSuppressionTests(M10OverlayLoopModeTests):
             self.assertEqual(len(self.visible_config_payloads(home)), 1)
             self.assertLessEqual(len(self.writes_to("overlay-config.json")), 3)
 
-    def test_collapsed_ticks_render_the_pill_once_and_then_go_quiet(self) -> None:
+    def test_legacy_collapsed_ticks_render_the_single_panel_once_and_then_go_quiet(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp)
             self.write_global_state(home)
@@ -1099,51 +1100,70 @@ class M10NativeSourceGateTests(unittest.TestCase):
             self.assertNotIn(forbidden, swift)
         self.assertNotIn('"Quit"', swift)
 
-    def test_glass_chain_is_flag_and_availability_gated(self) -> None:
+    def test_no_glass_or_material_chrome_in_the_helper(self) -> None:
+        """G6 (restored contract): the window contributes no material at all.
+
+        The pre-glass baseline (be9419c) had zero chrome in the helper; the
+        liquid-glass chain — NSGlassEffectView, NSVisualEffectView vibrancy,
+        the EVOPET_GLASS compile gate, corner radii, opaque fallback backing and
+        the pill scale-skip — must stay absent.
+        """
         swift = self.swift_source()
 
-        self.assertIn("#if EVOPET_GLASS", swift)
-        self.assertIn("#available(macOS 26.0, *)", swift)
-        self.assertIn("#available(macOS 27.0, *)", swift)
-        self.assertIn("glass.style = .regular", swift)
-        self.assertIn("NSGlassEffectContainerView", swift)
-        self.assertIn("container.spacing = 0", swift)
-        self.assertIn("glass.effectIsInteractive = true", swift)
-        self.assertIn("effect.material = .hudWindow", swift)
-        self.assertIn("effect.blendingMode = .behindWindow", swift)
-        self.assertIn("effect.state = .active", swift)
-        self.assertIn("NSColor.windowBackgroundColor.cgColor", swift)
-        # Chrome is chrome: it must sit below the WebView content layer.
-        self.assertIn("content.addSubview(chrome, positioned: .below, relativeTo: webView)", swift)
+        for forbidden in (
+            "NSGlassEffectView",
+            "NSGlassEffectContainerView",
+            "NSVisualEffectView",
+            "EVOPET_GLASS",
+            "makeChrome",
+            "refreshChrome",
+            "cornerRadius",
+            "modeScale",
+            "windowBackgroundColor",
+            "hudWindow",
+            "behindWindow",
+        ):
+            self.assertNotIn(forbidden, swift)
+        # Every pixel is HTML: a clear, borderless, shadowless panel.
+        self.assertIn("panel.backgroundColor = .clear", swift)
+        self.assertIn("panel.isOpaque = false", swift)
+        self.assertIn("panel.hasShadow = false", swift)
+        self.assertIn("content.layer?.backgroundColor = NSColor.clear.cgColor", swift)
 
     def test_appearance_and_accessibility_are_read_not_overridden(self) -> None:
         swift = self.swift_source()
 
         self.assertIn("accessibilityDisplayShouldReduceTransparency", swift)
         self.assertIn("accessibilityDisplayShouldIncreaseContrast", swift)
-        self.assertIn("accessibilityDisplayOptionsDidChangeNotification", swift)
         self.assertIn('"reduceTransparency": reduceTransparency', swift)
         self.assertIn('"increaseContrast": increaseContrast', swift)
         self.assertIn('"darkMode": darkModeActive', swift)
         self.assertNotIn("NSApp.appearance", swift)
 
-    def test_mode_aware_frame_contract(self) -> None:
+    def test_single_frame_contract(self) -> None:
         swift = self.swift_source()
 
-        self.assertIn("let mode: String?", swift)
-        self.assertIn("let minWidth: Double?", swift)
-        self.assertIn("let minHeight: Double?", swift)
-        self.assertIn('let modeScale = mode == "collapsed" ? 1.0 : scale', swift)
-        self.assertIn("config.minWidth ?? 120", swift)
-        self.assertIn("config.minHeight ?? 80", swift)
+        # The pill's mode/floor keys are gone from the decoder...
+        self.assertNotIn("let mode: String?", swift)
+        self.assertNotIn("let minWidth: Double?", swift)
+        self.assertNotIn("let minHeight: Double?", swift)
+        # ...and clampedFrame is the baseline math again: one floor set, one
+        # scale multiply.
+        self.assertIn("let width = max(120, (config.width ?? 260) * scale)", swift)
+        self.assertIn("let height = max(80, (config.height ?? 120) * scale)", swift)
+        # The hide/show hotkey still rides every config payload.
+        self.assertIn("let hideHotkey: String?", swift)
 
-    def test_status_item_menu_is_the_locked_four_items(self) -> None:
+    def test_the_status_item_surface_is_gone_but_hide_restore_stays(self) -> None:
         swift = self.swift_source()
 
-        for label in ('"Expand HUD"', '"Collapse to pill"', '"Hide HUD"', '"Show HUD"'):
-            self.assertIn(label, swift)
-        self.assertIn("NSStatusBar.system.statusItem", swift)
-        self.assertIn("writeInteraction(event: event)", swift)
+        for forbidden in ("NSStatusBar", "statusItem", "NSMenu", "NSMenuItem",
+                          '"Expand HUD"', '"Collapse to pill"', '"Show HUD"'):
+            self.assertNotIn(forbidden, swift)
+        # Restore path without any native menu: the hotkey forwards a toggle
+        # request through the interaction file.
+        self.assertIn('writeInteraction(event: "toggle")', swift)
+        self.assertIn("RegisterEventHotKey(", swift)
 
     def test_visibility_events_forward_from_the_webview(self) -> None:
         self.assertIn('["hide", "show", "collapse", "expand"].contains(event)', self.swift_source())

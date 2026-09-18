@@ -214,8 +214,8 @@ class HotkeyConfigTests(unittest.TestCase):
                 native_overlay_config_payload(home, visible=False)["hideHotkey"], "Ctrl+Opt+J"
             )
 
-    def test_hidden_state_wins_over_the_pill_so_no_pixel_survives(self) -> None:
-        """AC1: hide must clear *every* surface, the glass pill included."""
+    def test_hidden_state_wins_over_legacy_shape_flags_so_no_pixel_survives(self) -> None:
+        """AC1: hide must clear *every* surface (legacy hudCollapsed included)."""
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp)
             (home / ".codex-global-state.json").write_text(

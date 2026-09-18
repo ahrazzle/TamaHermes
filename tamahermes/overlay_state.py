@@ -482,10 +482,12 @@ def overlay_should_run(
 ) -> bool:
     """Whether the overlay sidecar should be alive at all.
 
-    The selected pet plus an active surface is the classic condition; a
-    collapsed pill or a hidden (status-item restorable) HUD also counts as a
-    live surface, otherwise the feature would reap its own restore surface as
-    soon as the pointer leaves the mascot.
+    The selected pet plus an active surface is the classic condition; a hidden
+    HUD (restorable via the global hotkey or `tamahermes overlay show`) also
+    counts as a live surface, otherwise the feature would reap its own restore
+    surface as soon as the pointer leaves the mascot. The `hudCollapsed` leg is
+    inert after the liquid-glass revert (the panel draws one shape) and is kept
+    only so the predicate's truth table stays stable across the schema.
 
     ``surface_active`` may be passed in by callers that already ran
     :func:`update_surface_activity` this tick; when omitted it is computed here.

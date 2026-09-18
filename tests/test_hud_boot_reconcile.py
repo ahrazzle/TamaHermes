@@ -213,11 +213,13 @@ class PageScaleTests(unittest.TestCase):
             payload = native_overlay_config_payload(home, visible=True)
             self.assertEqual(native_overlay_page_scale(home), payload["scale"])
 
-    def test_pill_html_is_not_zoomed(self) -> None:
-        # The helper never scales the pill (modeScale == 1.0), so the pill page
-        # must not zoom either.
+    def test_legacy_collapsed_mode_renders_the_zoomed_lcd(self) -> None:
+        # Restored contract: there is one surface. A caller still passing the
+        # glass-era collapsed mode gets the same expanded LCD page, and the
+        # C1.4 zoom lock applies to every page that is drawn.
         html = render_native_overlay_html(hud_snapshot(), mode=OVERLAY_MODE_COLLAPSED, scale=1.2)
-        self.assertNotIn("zoom:", html)
+        self.assertIn("html { zoom: 1.200; }", html)
+        self.assertIn('class="lcd"', html)
 
 
 class ToggleDirectionTests(unittest.TestCase):
