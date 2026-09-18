@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import json
+import math
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .paths import now_iso
+from .paths import now_iso, petdex_home
 from .state import stage_progress
 from .visual_state import derive_visual_state
 
@@ -14,6 +15,25 @@ OVERLAY_SCHEMA = "tamahermes.sidecar_overlay.v1"
 TAMAHERMES_AVATAR_ID = "custom:tamahermes"
 GLOBAL_STATE_FILE = ".codex-global-state.json"
 SURFACE_STALE_SECONDS = 10.0
+HOVER_PADDING = 56
+# Hysteresis: a raw point-in-rect test re-read every tick flipped the HUD shape
+# on the tick the pointer grazed the boundary, which the owner saw as the panel
+# popping open and shut. A shape change now has to survive consecutive ticks in
+# the new zone: two ticks on the pet to expand, four ticks clear of both the pet
+# and the panel to collapse.
+HOVER_EXPAND_TICKS = 2
+HOVER_COLLAPSE_TICKS = 4
+
+# The EvoPet native pet app records only its window origin (``pet_x``/``pet_y``)
+# and the display ``scale`` in ``desktop-native-settings.json``. Its window is
+# the sprite frame scaled -- 192x208 pt, see EvoPet
+# packages/petdex-desktop-native/src/main.zig (``frame_w``/``frame_h``) -- which
+# is what lets the sidecar rebuild a hover target on machines whose Codex
+# ``electron-avatar-overlay-bounds`` payload carries no mascot/anchor child.
+PETDEX_SETTINGS_FILE = "desktop-native-settings.json"
+PETDEX_BASE_PET_WIDTH = 192
+PETDEX_BASE_PET_HEIGHT = 208
+DEFAULT_PETDEX_HOME = ".petdex"
 
 # The user-configurable show/hide hotkey. It lives beside ``hudHidden`` in
 # overlay-state.json and is *documented* with this default: an overlay-state.json
@@ -122,6 +142,15 @@ def default_overlay_state() -> dict[str, Any]:
         "hudCollapsed": False,
         "hudExpandedXY": None,
         "supervisorClaim": None,
+        # Additive hover read-back (schema id unchanged): the pointer the native
+        # backend last tested, the rect it tested against, the verdict, and the
+        # consecutive-tick counters the verdict is decided from.
+        "lastHoverExpanded": False,
+        "lastHoverPointer": None,
+        "lastHoverTarget": None,
+        "lastHoverExpandTicks": 0,
+        "lastHoverCollapseTicks": 0,
+        "lastHoverSource": None,
     }
 
 
@@ -239,6 +268,66 @@ def parse_overlay_bounds(global_state: dict[str, Any]) -> OverlayBounds | None:
     )
 
 
+def petdex_settings_path(petdex_home_dir: Path | None = None) -> Path | None:
+    """The Petdex desktop settings file, when this machine has one.
+
+    ``TAMAHERMES_PETDEX_HOME`` wins; else the default ``~/.petdex`` is used, and
+    only if it already holds the file. Read-only: mirroring stays opt-in, this
+    only ever reads a settings file the pet app itself writes.
+    """
+    configured = petdex_home(str(petdex_home_dir)) if petdex_home_dir is not None else petdex_home()
+    candidate = configured or Path.home() / DEFAULT_PETDEX_HOME
+    path = candidate / PETDEX_SETTINGS_FILE
+    return path if path.is_file() else None
+
+
+def pet_window_rect(petdex_home_dir: Path | None = None) -> Rect | None:
+    """The EvoPet pet's on-screen box in top-left screen coordinates.
+
+    The pet app stores the window origin while it runs and the size is its own
+    frame constant times the stored display scale. ``None`` when the settings
+    file or the origin is missing, so callers keep their old behaviour instead of
+    testing a pointer against invented geometry.
+    """
+    path = petdex_settings_path(petdex_home_dir)
+    if path is None:
+        return None
+    settings = read_json_object(path)
+    x = _int_value(settings.get("pet_x"))
+    y = _int_value(settings.get("pet_y"))
+    if x is None or y is None:
+        return None
+    raw_scale = settings.get("scale")
+    scale = float(raw_scale) if isinstance(raw_scale, (int, float)) and not isinstance(raw_scale, bool) else 1.0
+    scale = max(0.5, min(3.0, scale))
+    return Rect(
+        x=x,
+        y=y,
+        # Ceil, matching the pet app's own window: 192x208 @ scale 1.2 measured
+        # on-screen as 231x250.
+        width=max(1, int(math.ceil(PETDEX_BASE_PET_WIDTH * scale))),
+        height=max(1, int(math.ceil(PETDEX_BASE_PET_HEIGHT * scale))),
+    )
+
+
+def hover_target_rect(bounds: OverlayBounds | None, fallback_rect: Rect | None = None) -> Rect | None:
+    """The rect the pointer has to reach for the HUD to expand.
+
+    The Codex overlay bounds win whenever they carry a mascot/anchor child
+    *anchored on a sized root*: that is the payload shape the parser's
+    relative-offset rule is written for. A bounds object whose root has no size
+    (this machine writes origin-only bounds) cannot anchor those offsets, so an
+    unanchored child rect is discarded rather than tested as if it were absolute
+    screen geometry -- that would park the hover target somewhere the pointer can
+    never reach and the HUD would never expand again.
+    """
+    if bounds is not None and bounds.root is not None:
+        target = bounds.mascot or bounds.anchor
+        if target is not None:
+            return target
+    return fallback_rect
+
+
 def bounds_signature(bounds: OverlayBounds | None) -> str | None:
     if bounds is None:
         return None
@@ -345,14 +434,99 @@ def avatar_overlay_open(global_state: dict[str, Any]) -> bool:
     return bool(global_state.get("electron-avatar-overlay-open"))
 
 
-def should_expand_overlay(global_state: dict[str, Any], bounds: OverlayBounds | None, pointer: tuple[int, int] | None) -> bool:
-    if avatar_overlay_open(global_state):
-        return True
-    if pointer is None or bounds is None:
-        return False
+def should_expand_overlay(
+    global_state: dict[str, Any],
+    bounds: OverlayBounds | None,
+    pointer: tuple[int, int] | None,
+    fallback_rect: Rect | None = None,
+) -> bool:
+    """Whether the HUD draws its expanded panel this tick.
+
+    Pointer proximity to the pet (mascot/anchor plus :data:`HOVER_PADDING`) wins
+    whenever both a pointer and a target rect are known, so the panel collapses
+    again as soon as the pointer leaves the pet -- the ``electron-avatar-overlay-open``
+    flag only decides when there is nothing to test (no pointer, or no rect),
+    which is also what keeps a bounds-less machine expanded rather than blank.
+    ``fallback_rect`` lets a caller supply the pet box when the Codex bounds carry
+    no mascot/anchor child.
+    """
+    target = hover_target_rect(bounds, fallback_rect)
+    if target is not None and pointer is not None:
+        x, y = pointer
+        return target.contains(x, y, padding=HOVER_PADDING)
+    return avatar_overlay_open(global_state)
+
+
+@dataclass(frozen=True)
+class HoverDecision:
+    """One tick's hover verdict plus the counters the next tick continues from."""
+
+    expanded: bool
+    expand_ticks: int
+    collapse_ticks: int
+    pointer_on_target: bool
+    pointer_on_panel: bool
+    source: str
+
+
+def consecutive_ticks(value: Any) -> int:
+    """A persisted tick counter, defensively read back from JSON state."""
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return 0
+    return value
+
+
+def decide_hover_expand(
+    previous_expanded: bool,
+    expand_ticks: int,
+    collapse_ticks: int,
+    pointer: tuple[int, int] | None,
+    target: Rect | None,
+    panel_rect: Rect | None = None,
+    *,
+    overlay_open: bool = False,
+    padding: int = HOVER_PADDING,
+) -> HoverDecision:
+    """Decide the HUD shape for this tick, with hysteresis.
+
+    ``should_expand_overlay`` answers "is the pointer on the pet right now", which
+    a raw per-tick read turns into a flicker whenever the pointer sits near the
+    boundary. This keeps the same rule but makes a shape change *earn* its ticks:
+
+    - expand only after :data:`HOVER_EXPAND_TICKS` consecutive ticks on the pet;
+    - collapse only after :data:`HOVER_COLLAPSE_TICKS` consecutive ticks clear of
+      both the pet and the panel;
+    - a pointer on the panel holds the readout open and zeroes the collapse
+      counter, so reaching for the care buttons never snatches the panel away.
+
+    With neither a pointer nor a target rect there is nothing to test, and the
+    ``electron-avatar-overlay-open`` flag decides as before (that is what keeps a
+    bounds-less machine expanded instead of blank).
+    """
+    if target is None or pointer is None:
+        return HoverDecision(bool(overlay_open), 0, 0, False, False, "fallback")
+
     x, y = pointer
-    mascot = bounds.mascot or bounds.anchor
-    return bool(mascot and mascot.contains(x, y, padding=56))
+    on_target = target.contains(x, y, padding=padding)
+    on_panel = bool(panel_rect is not None and panel_rect.contains(x, y))
+    if on_target:
+        expand_ticks += 1
+        collapse_ticks = 0
+    elif on_panel:
+        expand_ticks = 0
+        collapse_ticks = 0
+    else:
+        expand_ticks = 0
+        collapse_ticks += 1
+
+    if on_panel:
+        expanded = True
+    elif previous_expanded:
+        expanded = collapse_ticks < HOVER_COLLAPSE_TICKS
+    else:
+        expanded = expand_ticks >= HOVER_EXPAND_TICKS
+    source = "panel" if on_panel else ("target" if on_target else "away")
+    return HoverDecision(expanded, expand_ticks, collapse_ticks, on_target, on_panel, source)
 
 
 def status_snapshot(state: dict[str, Any]) -> dict[str, Any]:

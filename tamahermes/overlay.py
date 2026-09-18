@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import html
 import json
+import math
 import os
 import platform
 import re
@@ -21,6 +22,7 @@ from .codex_events import default_cursor, load_cursor, resolve_session_inputs, s
 from .feedback import active_evolution_announcement
 from .overlay_audio import apply_audio_decision, apply_interaction_audio, sfx_resource_path
 from .overlay_state import (
+    Rect,
     OVERLAY_MODE_COLLAPSED,
     OVERLAY_MODE_EXPANDED,
     OVERLAY_MODE_HIDDEN,
@@ -929,6 +931,49 @@ def native_overlay_hover_rect(bounds: Any) -> dict[str, int] | None:
     if not target:
         return None
     return {"x": target.x, "y": target.y, "width": target.width, "height": target.height}
+
+
+def native_overlay_pointer(helper_status: dict[str, Any]) -> tuple[int, int] | None:
+    """The pointer in top-left screen coordinates, from the helper's own report.
+
+    The native helper publishes ``mouseX``/``mouseY`` every tick and the native
+    backend has no other pointer source (the Tk backend reads the pointer
+    directly); a helper that has not reported yet yields ``None``.
+    """
+    x = helper_status.get("mouseX")
+    y = helper_status.get("mouseY")
+    if isinstance(x, bool) or isinstance(y, bool):
+        return None
+    if not isinstance(x, (int, float)) or not isinstance(y, (int, float)):
+        return None
+    return (int(round(x)), int(round(y)))
+
+
+def panel_rect_from_config(config: dict[str, Any]) -> Rect | None:
+    """The live panel box, in top-left screen coordinates.
+
+    The native helper draws the config's width/height times its own scale clamp
+    (and floors at 120x80), so this mirrors that math. Used to keep the panel
+    open while the pointer is *on the panel itself*: the care buttons live down
+    there, and a hover-off collapse that snatched the panel away mid-reach would
+    trade one bug for a worse one.
+    """
+    x = config.get("x")
+    y = config.get("y")
+    width = config.get("width")
+    height = config.get("height")
+    values = (x, y, width, height)
+    if any(isinstance(v, bool) or not isinstance(v, (int, float)) for v in values):
+        return None
+    scale = config.get("scale")
+    scale = float(scale) if isinstance(scale, (int, float)) and not isinstance(scale, bool) else 1.0
+    scale = max(0.75, min(1.75, scale))
+    return Rect(
+        x=int(x),
+        y=int(y),
+        width=max(120, int(math.ceil(width * scale))),
+        height=max(80, int(math.ceil(height * scale))),
+    )
 
 
 def overlay_config_mode(overlay_state: dict[str, Any]) -> str:
