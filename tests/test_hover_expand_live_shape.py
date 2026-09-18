@@ -14,9 +14,6 @@ import unittest
 from pathlib import Path
 
 from tamahermes.overlay import (
-    COLLAPSED_HEIGHT,
-    COLLAPSED_WIDTH,
-    collapsed_overlay_frame,
     native_overlay_frame,
     native_overlay_pointer,
     panel_rect_from_config,
@@ -164,12 +161,13 @@ class PointerReadBackTests(unittest.TestCase):
         self.assertIsNone(native_overlay_pointer({"mouseX": True, "mouseY": 5.0}))
 
 
-class CollapsedShapeTests(unittest.TestCase):
-    def test_collapsed_frame_keeps_the_expanded_top_left(self) -> None:
+class SingleShapeTests(unittest.TestCase):
+    """Restored contract: the frame helper draws the one 376x226 panel."""
+
+    def test_frame_is_the_locked_panel_size(self) -> None:
         bounds = parse_overlay_bounds({"electron-avatar-overlay-bounds": dict(LIVE_BOUNDS_SHAPE, width=160, height=120)})
-        expanded = collapsed_overlay_frame(bounds)
-        self.assertEqual(expanded["width"], COLLAPSED_WIDTH)
-        self.assertEqual(expanded["height"], COLLAPSED_HEIGHT)
+        frame = native_overlay_frame(bounds)
+        self.assertEqual((frame["width"], frame["height"]), (376, 226))
 
 
 class PanelKeepOpenTests(unittest.TestCase):
@@ -208,11 +206,13 @@ class ConfigWriterWithLiveShapeTests(unittest.TestCase):
     def test_live_shape_writes_null_hover_and_keeps_position(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp)
+            # A legacy small shape (the glass-era pill's 148x38) written by an
+            # older build must still survive the payload math unchanged.
             write_native_overlay_config(
-                home, visible=True, frame={"x": 667, "y": 435, "width": COLLAPSED_WIDTH, "height": COLLAPSED_HEIGHT}, hover=None
+                home, visible=True, frame={"x": 667, "y": 435, "width": 148, "height": 38}, hover=None
             )
             config = json.loads((home / "tamahermes" / "native-overlay" / "overlay-config.json").read_text(encoding="utf-8"))
-            self.assertEqual((config["width"], config["height"]), (COLLAPSED_WIDTH, COLLAPSED_HEIGHT))
+            self.assertEqual((config["width"], config["height"]), (148, 38))
             self.assertIsNone(config["hoverX"])
             self.assertEqual(config["x"], 667)
             # A later expanded write must not move the panel: only its size changes.
@@ -315,20 +315,17 @@ class HoverHysteresisTests(unittest.TestCase):
 
 
 class NativeShapeTests(unittest.TestCase):
-    """The two panel shapes main draws, pinned to the locked sizes.
+    """The one panel shape main draws, pinned to the locked size.
 
     The PR's frame_rewrite_needed gate is not ported: main's
     NativeOverlayWriter already compares the full config payload before
     every write, which subsumes a shape-only comparison.
     """
 
-    def test_the_two_shapes_are_the_locked_sizes(self) -> None:
+    def test_the_shape_is_the_locked_size(self) -> None:
         bounds = parse_overlay_bounds({"electron-avatar-overlay-bounds": dict(LIVE_BOUNDS_SHAPE, width=160, height=120)})
-        expanded = native_overlay_frame(bounds)
-        collapsed = collapsed_overlay_frame(bounds)
-        self.assertEqual((expanded["width"], expanded["height"]), (376, 226))
-        self.assertEqual((collapsed["width"], collapsed["height"]), (COLLAPSED_WIDTH, COLLAPSED_HEIGHT))
-        self.assertEqual((expanded["x"], expanded["y"]), (collapsed["x"], collapsed["y"]), "collapse happens in place")
+        frame = native_overlay_frame(bounds)
+        self.assertEqual((frame["width"], frame["height"]), (376, 226))
 
 
 class HoverStateKeysTests(unittest.TestCase):

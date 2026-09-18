@@ -236,7 +236,7 @@ class SuperviseOnceSurfaceTests(unittest.TestCase):
             payload["electron-avatar-overlay-open"] = True
         (home / ".codex-global-state.json").write_text(json.dumps(payload), encoding="utf-8")
 
-    def test_collapsed_pill_counts_as_a_live_surface_for_the_supervisor(self) -> None:
+    def test_legacy_collapsed_flag_keeps_the_child_alive_for_the_supervisor(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp)
             self.write_global_state(home)
@@ -276,7 +276,7 @@ class SuperviseOnceSurfaceTests(unittest.TestCase):
             self.assertEqual(report["startedPid"], 555)
             self.assertEqual(stops, [])
 
-    def test_closed_pet_still_stops_the_child_with_the_pill_open(self) -> None:
+    def test_closed_pet_still_stops_the_child_with_the_legacy_flag_set(self) -> None:
         # The by-design idle child stop (EvoPet closed) survives the feature.
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp)
@@ -298,7 +298,7 @@ class SuperviseOnceSurfaceTests(unittest.TestCase):
 
             self.assertEqual(stops, [True])
 
-    def test_other_pet_never_starts_the_child_even_with_the_pill(self) -> None:
+    def test_other_pet_never_starts_the_child_even_with_the_legacy_flag_set(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp)
             self.write_global_state(home, selected="custom:other")

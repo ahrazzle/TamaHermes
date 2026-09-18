@@ -16,12 +16,6 @@ struct OverlayConfig: Decodable {
     let hoverWidth: Double?
     let hoverHeight: Double?
     let hoverDelaySeconds: Double?
-    // Additive keys (schema id unchanged). An old config file without them
-    // decodes to nil, which keeps today's behaviour; a new config file with
-    // extra keys still decodes because Swift's Decodable ignores unknowns.
-    let mode: String?
-    let minWidth: Double?
-    let minHeight: Double?
     /// Contract 1.4: the user-configurable show/hide combo. The Python loop
     /// writes it into *every* config payload (documented default Cmd+Shift+H),
     /// so an old config that omits it falls back to that same default below.
@@ -168,7 +162,6 @@ final class OverlayController: NSObject, WKScriptMessageHandler {
     private let interactionPath: String
     private var panel: NonActivatingPanel!
     private var webView: WKWebView!
-    private var content: NSView!
     private var lastHTMLPath: String = ""
     private var lastHTMLModified: Date?
     private var lastHTMLHash: UInt64?
@@ -184,22 +177,15 @@ final class OverlayController: NSObject, WKScriptMessageHandler {
     private var dragOrigin: NSPoint?
     private var dragMouseOrigin: NSPoint?
     private var dragLastEventAt: Date?
-    private var chromeView: NSView?
-    private var chromeKind: String = ""
-    private var chromeCornerRadius: CGFloat = -1
     private var lastStatusDigest: Data?
     private var tickTimer: Timer?
     private var tickInterval: TimeInterval = 0.25
-    private var statusItem: NSStatusItem?
-    private var lastMode: String = "expanded"
-    private var lastHiddenRequested: Bool = false
     // Hide/show hotkey (contract 1.3/1.6) + the optimistic direction of a flip
     // that the Python loop has not published back into the config yet.
     private var hotKeyRef: EventHotKeyRef?
     private var hotKeyHandlerRef: EventHandlerRef?
     private var attemptedHotKey: String = ""
     private var hotKeyFlipGate = HotKeyFlipGate()
-    private var pendingHiddenRequest: Bool?
 
     /// The combo currently armed by Carbon, or "" when none is registered.
     private var registeredHotKey: String {
@@ -220,16 +206,9 @@ final class OverlayController: NSObject, WKScriptMessageHandler {
         self.interactionPath = root + "/overlay-interaction-request.json"
         super.init()
         buildPanel()
-        buildStatusItem()
         // Contract 1.3: the hotkey is registered at construction rather than on
         // first use, so a panel that starts hidden can still be brought back.
         registerConfiguredHotKey(readConfig())
-        NSWorkspace.shared.notificationCenter.addObserver(
-            self,
-            selector: #selector(accessibilityOptionsChanged),
-            name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
-            object: nil
-        )
         scheduleTick(0.25)
         tick()
     }
@@ -255,15 +234,11 @@ final class OverlayController: NSObject, WKScriptMessageHandler {
         // never take keyboard focus off whatever the owner is typing in.
         panel.becomesKeyOnlyIfNeeded = true
 
-        content = NSView(frame: initialFrame)
+        let content = NSView(frame: initialFrame)
         content.wantsLayer = true
         content.layer?.backgroundColor = NSColor.clear.cgColor
         panel.contentView = content
 
-        // Chrome goes in FIRST so the WebView stays the topmost content layer:
-        // the glass/vibrancy material is chrome *behind* transparent HTML, never
-        // part of the content layer itself.
-        refreshChrome(mode: "expanded")
 
         let configuration = WKWebViewConfiguration()
         configuration.userContentController.add(self, name: "tamahermes")
@@ -279,7 +254,6 @@ final class OverlayController: NSObject, WKScriptMessageHandler {
         content.addSubview(webView)
     }
 
-    // MARK: - Chrome (three-step degradation chain)
 
     private var reduceTransparency: Bool {
         NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
@@ -293,93 +267,10 @@ final class OverlayController: NSObject, WKScriptMessageHandler {
         NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
     }
 
-    private func cornerRadius(forMode mode: String) -> CGFloat {
-        // Expanded panel radius and the fully rounded pill (design lock).
-        mode == "collapsed" ? 19 : 16
-    }
 
-    private func desiredChromeKind() -> String {
-        if reduceTransparency || increaseContrast {
-            // Hard switch: no translucency at all under the a11y settings.
-            return "opaque"
-        }
-        #if EVOPET_GLASS
-        if #available(macOS 26.0, *) {
-            return "glass"
-        }
-        #endif
-        return "vibrancy"
-    }
 
-    @discardableResult
-    private func refreshChrome(mode: String) -> Bool {
-        let kind = desiredChromeKind()
-        let radius = cornerRadius(forMode: mode)
-        if kind == chromeKind, radius == chromeCornerRadius, chromeView != nil {
-            return false
-        }
-        chromeView?.removeFromSuperview()
-        let chrome = makeChrome(kind: kind, cornerRadius: radius)
-        chrome.frame = content.bounds
-        chrome.autoresizingMask = [.width, .height]
-        content.addSubview(chrome, positioned: .below, relativeTo: webView)
-        chromeView = chrome
-        chromeKind = kind
-        chromeCornerRadius = radius
-        return true
-    }
 
-    private func makeChrome(kind: String, cornerRadius: CGFloat) -> NSView {
-        let host = NSView()
-        host.wantsLayer = true
-        host.layer?.cornerRadius = cornerRadius
-        host.layer?.masksToBounds = true
-        switch kind {
-        case "glass":
-            #if EVOPET_GLASS
-            if #available(macOS 26.0, *) {
-                let glass = NSGlassEffectView()
-                glass.style = .regular
-                glass.cornerRadius = cornerRadius
-                glass.contentView = NSView()
-                if #available(macOS 27.0, *) {
-                    glass.effectIsInteractive = true
-                }
-                let container = NSGlassEffectContainerView()
-                container.spacing = 0
-                container.contentView = glass
-                container.wantsLayer = true
-                host.layer?.backgroundColor = NSColor.clear.cgColor
-                host.addSubview(container)
-                container.frame = host.bounds
-                container.autoresizingMask = [.width, .height]
-                return host
-            }
-            #endif
-            return makeChrome(kind: "vibrancy", cornerRadius: cornerRadius)
-        case "vibrancy":
-            let effect = NSVisualEffectView()
-            effect.material = .hudWindow
-            effect.blendingMode = .behindWindow
-            effect.state = .active
-            host.layer?.backgroundColor = NSColor.clear.cgColor
-            host.addSubview(effect)
-            effect.frame = host.bounds
-            effect.autoresizingMask = [.width, .height]
-            return host
-        default:
-            // Opaque backing (also the terminal fallback): a never-transparent
-            // panel so text stays readable over any desktop.
-            host.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
-            return host
-        }
-    }
 
-    @objc private func accessibilityOptionsChanged() {
-        // Force the next tick to rebuild the chrome for the new a11y flags;
-        // the status digest changes too, so the mirror file is rewritten.
-        chromeKind = ""
-    }
 
     // MARK: - Config and geometry
 
@@ -406,13 +297,9 @@ final class OverlayController: NSObject, WKScriptMessageHandler {
     }
 
     private func clampedFrame(for config: OverlayConfig) -> NSRect {
-        let mode = config.mode ?? "expanded"
         let scale = max(0.75, min(1.75, config.scale ?? 1.0))
-        // The pill is not user-scalable: collapsed mode skips the scale multiply
-        // and brings its own floors, so a 38 pt pill is never clamped away.
-        let modeScale = mode == "collapsed" ? 1.0 : scale
-        let width = max(config.minWidth ?? 120, (config.width ?? 260) * modeScale)
-        let height = max(config.minHeight ?? 80, (config.height ?? 120) * modeScale)
+        let width = max(120, (config.width ?? 260) * scale)
+        let height = max(80, (config.height ?? 120) * scale)
         let screen = screen(forTopLeftX: config.x, topLeftY: config.y)
         let frame = screen.visibleFrame
         let rawX = config.x ?? (frame.maxX - width - 18)
@@ -484,10 +371,6 @@ final class OverlayController: NSObject, WKScriptMessageHandler {
             "lastSfxFilename": lastSfxFilename ?? NSNull(),
             "lastSfxPlayedAt": lastSfxPlayedAt ?? NSNull(),
             "lastSfxError": lastSfxError ?? NSNull(),
-            // Additive a11y/appearance mirror (schema id unchanged): CSS cannot
-            // read Reduce Transparency / Increase Contrast, so the helper
-            // reports what the native chrome is actually drawing.
-            "mode": config.mode ?? "expanded",
             // Contract 1.4: what the helper was asked to register, and what
             // Carbon actually armed. A refused combo reads back as null rather
             // than silently claiming a hotkey that is not there.
@@ -614,7 +497,6 @@ final class OverlayController: NSObject, WKScriptMessageHandler {
             hotKeyHandlerRef = nil
         }
         attemptedHotKey = ""
-        pendingHiddenRequest = nil
     }
 
     /// Carbon delivers a registered hotkey as an ordinary application event: the
@@ -637,15 +519,17 @@ final class OverlayController: NSObject, WKScriptMessageHandler {
         toggleHiddenRequest()
     }
 
-    /// Flip the panel through the existing interaction file — the same channel
-    /// the HUD buttons and the status menu use, so the Python loop stays the one
-    /// writer of `hudHidden`. At most one flip per cooldown window (contract
-    /// 1.6): a held key auto-repeats, and repeats must not flicker the panel.
+    /// Ask Python to flip the panel through the existing interaction file — the
+    /// same channel the HUD buttons use, so the Python loop
+    /// stays the one writer of `hudHidden`. Contract C2.2: the helper no longer
+    /// decides direction from an optimistic override; it only forwards a
+    /// `toggle` REQUEST, and Python computes the flip from its own `hudHidden`.
+    /// Two presses inside one round trip therefore converge to one flip instead
+    /// of cancelling each other. At most one request per cooldown window
+    /// (contract 1.6): a held key auto-repeats, and repeats must not flicker.
     private func toggleHiddenRequest() {
         guard hotKeyFlipGate.allowsFlip(now: Date().timeIntervalSince1970) else { return }
-        let event = (pendingHiddenRequest ?? lastHiddenRequested) ? "show" : "hide"
-        writeInteraction(event: event)
-        pendingHiddenRequest = (event == "hide")
+        writeInteraction(event: "toggle")
     }
 
     private static let hotKeyEventHandler: EventHandlerUPP = { _, event, userData in
@@ -749,54 +633,6 @@ final class OverlayController: NSObject, WKScriptMessageHandler {
         writeInteraction(event: event)
     }
 
-    // MARK: - Menu-bar global toggle
-
-    private func buildStatusItem() {
-        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        if let button = item.button {
-            let image = NSImage(systemSymbolName: "tortoise.fill", accessibilityDescription: "EvoPet HUD")
-            image?.isTemplate = true
-            button.image = image
-            button.toolTip = "EvoPet HUD"
-        }
-        let menu = NSMenu()
-        menu.autoenablesItems = false
-        for (title, event) in [
-            ("Expand HUD", "expand"),
-            ("Collapse to pill", "collapse"),
-            ("Hide HUD", "hide"),
-            ("Show HUD", "show"),
-        ] {
-            let menuItem = NSMenuItem(title: title, action: #selector(statusMenuAction(_:)), keyEquivalent: "")
-            menuItem.target = self
-            menuItem.representedObject = event
-            menu.addItem(menuItem)
-        }
-        menu.addItem(NSMenuItem.separator())
-        item.menu = menu
-        statusItem = item
-    }
-
-    @objc private func statusMenuAction(_ sender: NSMenuItem) {
-        guard let event = sender.representedObject as? String else { return }
-        // The status item never keys the panel and never activates the app: it
-        // only writes the same interaction file the WebView writes.
-        writeInteraction(event: event)
-    }
-
-    private func updateStatusMenu() {
-        guard let menu = statusItem?.menu else { return }
-        let hidden = lastHiddenRequested
-        for item in menu.items {
-            switch item.representedObject as? String {
-            case "expand": item.isEnabled = !hidden && lastMode == "collapsed"
-            case "collapse": item.isEnabled = !hidden && lastMode == "expanded"
-            case "hide": item.isEnabled = !hidden
-            case "show": item.isEnabled = hidden
-            default: break
-            }
-        }
-    }
 
     // MARK: - Rendering and reload (hash-guarded, preserved)
 
@@ -897,10 +733,6 @@ final class OverlayController: NSObject, WKScriptMessageHandler {
                 endDrag()
             }
         }
-        let mode = config.mode ?? "expanded"
-        if refreshChrome(mode: mode) {
-            chromeView?.frame = content.bounds
-        }
         if dragMonitor == nil {
             // clampedFrame is a pure function of the config, so re-applying an
             // unchanged frame every tick only churns the window server — that
@@ -924,15 +756,7 @@ final class OverlayController: NSObject, WKScriptMessageHandler {
         } else {
             panel.orderOut(nil)
         }
-        lastMode = mode
-        lastHiddenRequested = config.visible != true
-        if pendingHiddenRequest == lastHiddenRequested {
-            // The loop has published the flip the hotkey asked for: drop the
-            // optimistic override so the next press reads the real state again.
-            pendingHiddenRequest = nil
-        }
         registerConfiguredHotKey(config)
-        updateStatusMenu()
         writeStatus(config: config, point: point, ready: ready)
         lastTickPanelVisible = panel.isVisible
     }

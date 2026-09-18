@@ -1,4 +1,9 @@
-"""D3 build provenance: recipe selection, atomic replace, additive record.
+"""D3 build provenance: recipe lock, atomic replace, additive record.
+
+Adapted for the restored (pre-liquid-glass) contract: the recipe is exactly the
+baseline legacy command — no SDK probe, no ``-D EVOPET_GLASS``, no glass fields
+in the provenance record. The cache/drift/atomic-swap machinery stays, since
+contract C2.3 (helper source drift) builds on it.
 
 Every test uses a temp home and a stub toolchain. Nothing here compiles with the
 real toolchain, touches the live native-overlay directory, or runs a process.
@@ -15,19 +20,17 @@ from pathlib import Path
 from unittest import mock
 
 from tamahermes.overlay import (
-    GLASS_SDK_HEADER,
-    NATIVE_OVERLAY_DEPLOYMENT_TARGET_MIN,
     NATIVE_OVERLAY_PROVENANCE_SCHEMA,
     build_native_overlay_helper,
     native_overlay_build_recipe,
     native_overlay_paths,
     native_overlay_recipe_key,
     native_overlay_source,
-    probe_glass_sdk,
-    sdk_version_key,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
+
+BASELINE_FLAGS = ["-O", "-framework", "AppKit", "-framework", "WebKit"]
 
 
 class StubRunner:
@@ -38,12 +41,10 @@ class StubRunner:
         *,
         version: str = "swift-driver version: 1.0 Apple Swift version 6.4 (swiftlang)",
         compile_rc: int = 0,
-        fail_first_compile: bool = False,
         git: bool = True,
     ) -> None:
         self.version = version
         self.compile_rc = compile_rc
-        self.fail_first_compile = fail_first_compile
         self.git_available = git
         self.commands: list[list[str]] = []
         self.compiles = 0
@@ -57,13 +58,11 @@ class StubRunner:
             if not self.git_available:
                 return subprocess.CompletedProcess(command, 128, stdout="", stderr="not a git repository\n")
             if "--abbrev-ref" in command:
-                return subprocess.CompletedProcess(command, 0, stdout="feat/hud-liquid-glass-collapsible\n", stderr="")
+                return subprocess.CompletedProcess(command, 0, stdout="fix/evopet-hud-layout-restore\n", stderr="")
             if "rev-parse" in command and "HEAD" in command:
                 return subprocess.CompletedProcess(command, 0, stdout="cafe1234\n", stderr="")
             return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
         self.compiles += 1
-        if self.fail_first_compile and self.compiles == 1:
-            return subprocess.CompletedProcess(command, 1, stdout="", stderr="glass unavailable\n")
         if self.compile_rc != 0:
             return subprocess.CompletedProcess(command, self.compile_rc, stdout="", stderr="compile failed\n")
         output = Path(command[command.index("-o") + 1])
@@ -71,86 +70,40 @@ class StubRunner:
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
 
-def make_fake_toolchain(root: Path, *, sdk_names: list[str], glass_sdks: list[str]) -> Path:
+def make_fake_toolchain(root: Path) -> Path:
     clt = root / "clt"
     (clt / "usr" / "bin").mkdir(parents=True, exist_ok=True)
     (clt / "usr" / "bin" / "swiftc").write_text("#!/bin/sh\n", encoding="utf-8")
-    for name in sdk_names:
-        sdk = clt / "SDKs" / name
-        sdk.mkdir(parents=True, exist_ok=True)
-        if name in glass_sdks:
-            header = sdk / GLASS_SDK_HEADER
-            header.parent.mkdir(parents=True, exist_ok=True)
-            header.write_text("// NSGlassEffectView\n", encoding="utf-8")
     return clt
 
 
 class BuildRecipeTests(unittest.TestCase):
-    def test_sdk_version_key_compares_numerically(self) -> None:
-        self.assertGreater(sdk_version_key("MacOSX27.sdk"), sdk_version_key("MacOSX9.10.sdk"))
-        self.assertGreater(sdk_version_key("MacOSX26.5.sdk"), sdk_version_key("MacOSX26.sdk"))
-        self.assertEqual(sdk_version_key("MacOSX.sdk"), (0, 0))
-        self.assertEqual(sdk_version_key("not-an-sdk"), (-1, -1))
-
-    def test_highest_glass_capable_sdk_wins_over_a_newer_one_without_the_header(self) -> None:
+    def test_recipe_is_the_baseline_legacy_command(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            clt = make_fake_toolchain(
-                Path(tmp),
-                sdk_names=["MacOSX.sdk", "MacOSX9.10.sdk", "MacOSX15.2.sdk", "MacOSX26.sdk", "MacOSX27.sdk"],
-                glass_sdks=["MacOSX26.sdk", "MacOSX27.sdk"],
-            )
+            clt = make_fake_toolchain(Path(tmp))
 
-            sdk = probe_glass_sdk(clt)
+            recipe = native_overlay_build_recipe(native_overlay_source(), toolchain_root=clt, runner=StubRunner())
 
-            self.assertIsNotNone(sdk)
-            assert sdk is not None
-            self.assertEqual(sdk.name, "MacOSX27.sdk")
-
-    def test_no_glass_sdk_anywhere_returns_none(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            clt = make_fake_toolchain(Path(tmp), sdk_names=["MacOSX.sdk", "MacOSX15.2.sdk"], glass_sdks=[])
-
-            self.assertIsNone(probe_glass_sdk(clt))
-
-    def test_recipe_uses_the_glass_toolchain_when_the_sdk_is_present(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            clt = make_fake_toolchain(Path(tmp), sdk_names=["MacOSX27.sdk"], glass_sdks=["MacOSX27.sdk"])
-
-            recipe = native_overlay_build_recipe(native_overlay_source(), toolchain_root=clt, machine="arm64", runner=StubRunner())
-
-            self.assertTrue(recipe["glassEnabled"])
-            self.assertEqual(recipe["target"], f"arm64-apple-{NATIVE_OVERLAY_DEPLOYMENT_TARGET_MIN}")
             self.assertEqual(recipe["swiftc"], clt / "usr" / "bin" / "swiftc")
-            self.assertIn("-D", recipe["flags"])
-            self.assertIn("EVOPET_GLASS", recipe["flags"])
-            self.assertIn("-sdk", recipe["flags"])
-            self.assertIn(str(clt / "SDKs" / "MacOSX27.sdk"), recipe["flags"])
+            self.assertEqual(recipe["flags"], BASELINE_FLAGS)
+            self.assertEqual(recipe["toolchainVersion"], "swift-driver version: 1.0 Apple Swift version 6.4 (swiftlang)")
 
-    def test_recipe_degrades_to_legacy_without_a_glass_sdk(self) -> None:
+    def test_recipe_carries_no_glass_inputs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            clt = make_fake_toolchain(Path(tmp), sdk_names=["MacOSX15.2.sdk"], glass_sdks=[])
+            clt = make_fake_toolchain(Path(tmp))
 
-            recipe = native_overlay_build_recipe(native_overlay_source(), toolchain_root=clt, machine="arm64", runner=StubRunner())
+            recipe = native_overlay_build_recipe(native_overlay_source(), toolchain_root=clt, runner=StubRunner())
 
-            self.assertFalse(recipe["glassEnabled"])
-            self.assertIsNone(recipe["target"])
-            self.assertEqual(recipe["flags"], ["-O", "-framework", "AppKit", "-framework", "WebKit"])
-
-    def test_recipe_target_follows_the_host_architecture(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            clt = make_fake_toolchain(Path(tmp), sdk_names=["MacOSX27.sdk"], glass_sdks=["MacOSX27.sdk"])
-
-            recipe = native_overlay_build_recipe(native_overlay_source(), toolchain_root=clt, machine="x86_64", runner=StubRunner())
-
-            self.assertEqual(recipe["target"], f"x86_64-apple-{NATIVE_OVERLAY_DEPLOYMENT_TARGET_MIN}")
+            for key in ("glassEnabled", "sdk", "target"):
+                self.assertNotIn(key, recipe)
+            for flag in ("-D", "EVOPET_GLASS", "-sdk", "-target"):
+                self.assertNotIn(flag, recipe["flags"])
 
     def test_recipe_key_changes_with_every_locked_input(self) -> None:
         base_source = "aaaa"
         recipe = {
             "swiftc": Path("/usr/bin/swiftc"),
-            "sdk": Path("/sdk/MacOSX27.sdk"),
-            "target": "arm64-apple-macos15.0",
-            "flags": ["-O", "-sdk", "/sdk/MacOSX27.sdk", "-D", "EVOPET_GLASS"],
+            "flags": list(BASELINE_FLAGS),
             "toolchainVersion": "Swift 6.4",
         }
         baseline = native_overlay_recipe_key(recipe, base_source)
@@ -158,17 +111,16 @@ class BuildRecipeTests(unittest.TestCase):
         self.assertEqual(native_overlay_recipe_key(dict(recipe), base_source), baseline)
         self.assertNotEqual(native_overlay_recipe_key(recipe, "bbbb"), baseline)
 
-        other_sdk = dict(recipe, sdk=Path("/sdk/MacOSX26.sdk"))
-        self.assertNotEqual(native_overlay_recipe_key(other_sdk, base_source), baseline)
-
         other_flags = dict(recipe, flags=[*recipe["flags"], "-g"])
         self.assertNotEqual(native_overlay_recipe_key(other_flags, base_source), baseline)
 
         other_version = dict(recipe, toolchainVersion="Swift 6.5")
         self.assertNotEqual(native_overlay_recipe_key(other_version, base_source), baseline)
 
-        no_glass = dict(recipe, sdk=None, target=None, flags=["-O", "-framework", "AppKit", "-framework", "WebKit"])
-        self.assertNotEqual(native_overlay_recipe_key(no_glass, base_source), baseline)
+        # A glass-era recipe (whatever a stale cache recorded) keys differently
+        # from the restored one, so the first post-revert build re-compiles.
+        glassish = dict(recipe, flags=[*recipe["flags"], "-D", "EVOPET_GLASS"])
+        self.assertNotEqual(native_overlay_recipe_key(glassish, base_source), baseline)
 
 
 class BuildProvenanceTests(unittest.TestCase):
@@ -178,7 +130,7 @@ class BuildProvenanceTests(unittest.TestCase):
     def test_build_replaces_atomically_and_records_every_provenance_field(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp) / "home"
-            clt = make_fake_toolchain(Path(tmp), sdk_names=["MacOSX27.sdk", "MacOSX.sdk"], glass_sdks=["MacOSX27.sdk"])
+            clt = make_fake_toolchain(Path(tmp))
             runner = StubRunner()
             replaces: list[tuple[str, str]] = []
             real_replace = __import__("os").replace
@@ -188,7 +140,7 @@ class BuildProvenanceTests(unittest.TestCase):
                 real_replace(source, target)
 
             with mock.patch("tamahermes.overlay.os.replace", spy_replace):
-                binary = build_native_overlay_helper(home, runner=runner, toolchain_root=clt, machine="arm64")
+                binary = build_native_overlay_helper(home, runner=runner, toolchain_root=clt)
 
             paths = native_overlay_paths(home)
             self.assertEqual(binary, paths["binary"])
@@ -212,24 +164,22 @@ class BuildProvenanceTests(unittest.TestCase):
                 "binarySha256",
                 "toolchainPath",
                 "toolchainVersion",
-                "sdkPath",
-                "target",
                 "flags",
-                "glassEnabled",
                 "gitHead",
                 "gitBranch",
                 "gitDirty",
                 "builtAt",
             ):
                 self.assertIn(field, provenance)
+            # The no-glass lock on the record as well.
+            for gone in ("sdkPath", "sdkName", "target", "glassEnabled", "recipeFallback"):
+                self.assertNotIn(gone, provenance)
+            self.assertEqual(provenance["flags"], BASELINE_FLAGS)
             self.assertEqual(provenance["sourceSha256"], self.source_hash())
             self.assertEqual(provenance["binarySha256"], hashlib.sha256(b"fake-binary").hexdigest())
-            self.assertTrue(provenance["glassEnabled"])
-            self.assertEqual(provenance["sdkName"], "MacOSX27.sdk")
             self.assertEqual(provenance["gitHead"], "cafe1234")
-            self.assertEqual(provenance["gitBranch"], "feat/hud-liquid-glass-collapsible")
+            self.assertEqual(provenance["gitBranch"], "fix/evopet-hud-layout-restore")
             self.assertFalse(provenance["gitDirty"])
-            self.assertNotIn("recipeFallback", provenance)
 
             # Legacy stamp keeps the old wire format: the source hash only.
             self.assertEqual(paths["stamp"].read_text(encoding="utf-8").strip(), self.source_hash())
@@ -237,17 +187,15 @@ class BuildProvenanceTests(unittest.TestCase):
     def test_recipe_key_matches_the_recorded_recipe(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp) / "home"
-            clt = make_fake_toolchain(Path(tmp), sdk_names=["MacOSX27.sdk"], glass_sdks=["MacOSX27.sdk"])
+            clt = make_fake_toolchain(Path(tmp))
             runner = StubRunner()
 
-            build_native_overlay_helper(home, runner=runner, toolchain_root=clt, machine="arm64")
+            build_native_overlay_helper(home, runner=runner, toolchain_root=clt)
 
             provenance = json.loads(native_overlay_paths(home)["provenance"].read_text(encoding="utf-8"))
             recipe = native_overlay_build_recipe(
                 native_overlay_source(),
                 toolchain_root=clt,
-                machine="arm64",
-                sdk_dirs=[clt / "SDKs" / "MacOSX27.sdk"],
                 runner=runner,
             )
             self.assertEqual(provenance["recipeKey"], native_overlay_recipe_key(recipe, self.source_hash()))
@@ -255,13 +203,13 @@ class BuildProvenanceTests(unittest.TestCase):
     def test_cached_build_is_not_recompiled(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp) / "home"
-            clt = make_fake_toolchain(Path(tmp), sdk_names=["MacOSX27.sdk"], glass_sdks=["MacOSX27.sdk"])
+            clt = make_fake_toolchain(Path(tmp))
             runner = StubRunner()
 
-            build_native_overlay_helper(home, runner=runner, toolchain_root=clt, machine="arm64")
+            build_native_overlay_helper(home, runner=runner, toolchain_root=clt)
             self.assertEqual(runner.compiles, 1)
 
-            build_native_overlay_helper(home, runner=runner, toolchain_root=clt, machine="arm64")
+            build_native_overlay_helper(home, runner=runner, toolchain_root=clt)
 
             self.assertEqual(runner.compiles, 1)
             self.assertEqual(
@@ -272,13 +220,13 @@ class BuildProvenanceTests(unittest.TestCase):
     def test_a_foreign_binary_invalidates_the_cache(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp) / "home"
-            clt = make_fake_toolchain(Path(tmp), sdk_names=["MacOSX27.sdk"], glass_sdks=["MacOSX27.sdk"])
+            clt = make_fake_toolchain(Path(tmp))
             runner = StubRunner()
-            build_native_overlay_helper(home, runner=runner, toolchain_root=clt, machine="arm64")
+            build_native_overlay_helper(home, runner=runner, toolchain_root=clt)
 
             paths = native_overlay_paths(home)
             paths["binary"].write_bytes(b"tampered")
-            build_native_overlay_helper(home, runner=runner, toolchain_root=clt, machine="arm64")
+            build_native_overlay_helper(home, runner=runner, toolchain_root=clt)
 
             self.assertEqual(runner.compiles, 2)
             self.assertEqual(paths["binary"].read_bytes(), b"fake-binary")
@@ -286,40 +234,27 @@ class BuildProvenanceTests(unittest.TestCase):
             self.assertEqual(paths["backup"].read_bytes(), b"tampered")
             self.assertTrue(paths["backupProvenance"].exists())
 
-    def test_glass_compile_failure_degrades_to_the_legacy_recipe(self) -> None:
+    def test_compile_failure_raises_and_leaves_no_binary(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp) / "home"
-            clt = make_fake_toolchain(Path(tmp), sdk_names=["MacOSX27.sdk"], glass_sdks=["MacOSX27.sdk"])
-            runner = StubRunner(fail_first_compile=True)
-
-            binary = build_native_overlay_helper(home, runner=runner, toolchain_root=clt, machine="arm64")
-
-            provenance = json.loads(native_overlay_paths(home)["provenance"].read_text(encoding="utf-8"))
-            self.assertTrue(binary.exists())
-            self.assertFalse(provenance["glassEnabled"])
-            self.assertIn("glass-compile-failed", provenance["recipeFallback"])
-            self.assertEqual(provenance["flags"], ["-O", "-framework", "AppKit", "-framework", "WebKit"])
-            self.assertEqual(runner.compiles, 2)
-
-    def test_legacy_compile_failure_still_raises(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            home = Path(tmp) / "home"
-            clt = make_fake_toolchain(Path(tmp), sdk_names=["MacOSX15.2.sdk"], glass_sdks=[])
+            clt = make_fake_toolchain(Path(tmp))
             runner = StubRunner(compile_rc=1)
 
             from tamahermes.overlay import NativeOverlayUnavailable
 
             with self.assertRaises(NativeOverlayUnavailable):
-                build_native_overlay_helper(home, runner=runner, toolchain_root=clt, machine="arm64")
+                build_native_overlay_helper(home, runner=runner, toolchain_root=clt)
 
             self.assertFalse(native_overlay_paths(home)["binary"].exists())
+            # One attempt only: there is no glass path to degrade onto.
+            self.assertEqual(runner.compiles, 1)
 
     def test_git_provenance_degrades_when_git_is_unavailable(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp) / "home"
-            clt = make_fake_toolchain(Path(tmp), sdk_names=["MacOSX27.sdk"], glass_sdks=["MacOSX27.sdk"])
+            clt = make_fake_toolchain(Path(tmp))
 
-            build_native_overlay_helper(home, runner=StubRunner(git=False), toolchain_root=clt, machine="arm64")
+            build_native_overlay_helper(home, runner=StubRunner(git=False), toolchain_root=clt)
 
             provenance = json.loads(native_overlay_paths(home)["provenance"].read_text(encoding="utf-8"))
             self.assertIsNone(provenance["gitHead"])
@@ -329,10 +264,10 @@ class BuildProvenanceTests(unittest.TestCase):
     def test_build_touches_nothing_outside_the_given_home(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp) / "home"
-            clt = make_fake_toolchain(Path(tmp), sdk_names=["MacOSX27.sdk"], glass_sdks=["MacOSX27.sdk"])
+            clt = make_fake_toolchain(Path(tmp))
             runner = StubRunner()
 
-            build_native_overlay_helper(home, runner=runner, toolchain_root=clt, machine="arm64")
+            build_native_overlay_helper(home, runner=runner, toolchain_root=clt)
 
             written = sorted(path.relative_to(home).as_posix() for path in home.rglob("*") if path.is_file())
             self.assertEqual(

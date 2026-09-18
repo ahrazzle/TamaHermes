@@ -17,6 +17,7 @@ from .overlay_state import (
     load_overlay_state,
     overlay_pid_path,
     overlay_should_run,
+    overlay_state_fingerprint,
     overlay_state_path,
     read_json_object,
     save_overlay_state,
@@ -396,8 +397,13 @@ def supervise_once(
     global_state = read_json_object(global_state_path(home))
     selected = is_tamahermes_selected(global_state)
     overlay_state = load_overlay_state(overlay_state_path(home))
+    before = overlay_state_fingerprint(overlay_state)
     surface_active, _bounds = update_surface_activity(global_state, overlay_state, time.time())
-    save_overlay_state(overlay_state_path(home), overlay_state)
+    # Contract C1.1: the supervisor only rewrites overlay-state.json when
+    # something it owns changed; the per-second unconditional save was one of
+    # the two writers racing the sidecar's flip writes.
+    if overlay_state_fingerprint(overlay_state) != before:
+        save_overlay_state(overlay_state_path(home), overlay_state)
     # The pill and the hidden HUD are live surfaces: idle-stop may not reap them.
     should_run = overlay_should_run(global_state, overlay_state, time.time(), surface_active=surface_active)
     is_running = is_running or pid_running
@@ -527,8 +533,13 @@ def supervisor_loop(
         while True:
             global_state = read_json_object(global_state_path(home))
             overlay_state = load_overlay_state(overlay_state_path(home))
+            before = overlay_state_fingerprint(overlay_state)
             surface_active, _bounds = update_surface_activity(global_state, overlay_state, time.time())
-            save_overlay_state(overlay_state_path(home), overlay_state)
+            # Contract C1.1: only persist when an owned key changed (see
+            # supervise_once); observation timestamps are ignored by the
+            # fingerprint, so an idle tick costs no write.
+            if overlay_state_fingerprint(overlay_state) != before:
+                save_overlay_state(overlay_state_path(home), overlay_state)
             app_running = native_pet_process_running()
             # D9.1: the collapsed pill / hidden toggle count as live surfaces; the
             # by-design idle child stop (EvoPet closed) is preserved as-is.

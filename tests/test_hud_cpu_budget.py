@@ -9,11 +9,11 @@ is not a pass or a fail.
 
 Gates (locked in leo-spec D8):
   G1 expanded, idle      total <= 3.0 %
-  G2 collapsed pill idle total <= 1.5 % (target <= 1.0 %)
+  G2 legacy-collapsed (hidden-shape) idle total <= 1.5 % (target <= 1.0 %)
   G3 hidden, idle        total <= 1.0 %
   G4 continuous drag 5 s helper <= 12 %; <= 1.5 % within 2 s after mouse-up
   G5 any single process  never > 20 % sustained over 60 s
-  G6 collapsed idle 60 s zero overlay.html writes, <= 1 overlay-config.json write
+  G6 legacy-collapsed idle 60 s zero overlay.html writes after first paint, <= 1 overlay-config.json write
 
 The automated deterministic half of G6 (write suppression) lives in
 tests/test_m10_overlay.py::M10OverlayWriteSuppressionTests and runs in the
@@ -175,7 +175,7 @@ class CpuBudgetGateTests(unittest.TestCase):
     def test_g1_expanded_idle(self) -> None:
         self._gate("expanded")
 
-    def test_g2_collapsed_pill_idle(self) -> None:
+    def test_g2_legacy_collapsed_idle(self) -> None:
         self._gate("collapsed")
 
     def test_g3_hidden_idle(self) -> None:
@@ -183,7 +183,7 @@ class CpuBudgetGateTests(unittest.TestCase):
 
     def test_g4_drag_burst_and_recovery(self) -> None:
         # Requires scripted pointer movement (CGWarpMouseCursorPosition) over
-        # the pill/panel; Shaka runs it manually so no test ever moves the
+        # panel; Shaka runs it manually so no test ever moves the
         # user's cursor unattended.
         self.skipTest("G4 needs an operator-driven drag; run it from the measured checklist")
 

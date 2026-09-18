@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import math
+import os
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -41,6 +43,11 @@ DEFAULT_PETDEX_HOME = ".petdex"
 # native helper registers the configured combo (Carbon RegisterEventHotKey); the
 # Tk fallback has no global hotkey and stays a CLI/UI toggle only.
 DEFAULT_HIDE_HOTKEY = "Cmd+Shift+H"
+
+# The flip-cooldown ledger key inside overlay-state.json (contract C2.4). The
+# native loop owns the stamp; the constant lives here, beside the default that
+# documents it, so every writer spells it identically.
+HUD_FLIP_TIMESTAMP_KEY = "lastHudHiddenFlipAtEpoch"
 
 # Panel modes are *derived* from two durable booleans (never stored a third
 # time): hidden > collapsed > expanded.
@@ -142,6 +149,11 @@ def default_overlay_state() -> dict[str, Any]:
         "hudCollapsed": False,
         "hudExpandedXY": None,
         "supervisorClaim": None,
+        # Additive (schema id unchanged, contract C2.4): the flip-cooldown
+        # ledger. A documented key with a None default means a state file that
+        # was never flipped has "no recent flip", and a real stamp survives a
+        # restart because it rides the same atomic write as everything else.
+        HUD_FLIP_TIMESTAMP_KEY: None,
         # Additive hover read-back (schema id unchanged): the pointer the native
         # backend last tested, the rect it tested against, the verdict, and the
         # consecutive-tick counters the verdict is decided from.
@@ -179,9 +191,64 @@ def load_global_state(home: Path) -> dict[str, Any]:
     return read_json_object(global_state_path(home))
 
 
+def write_json_atomic(path: Path, payload: dict[str, Any], *, sort_keys: bool = False, ensure_ascii: bool = True) -> None:
+    """Write JSON via tmp + ``os.replace`` so a reader never sees a half-written file.
+
+    This is the single crash-safe primitive (contract C1.1); the overlay loop's
+    ``write_json_file`` and every ``overlay-state.json`` save ride it. The temp
+    name carries the pid so two same-directory writers cannot collide on it.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f"{path.name}.tmp-{os.getpid()}")
+    temporary.write_text(
+        json.dumps(payload, indent=2, sort_keys=sort_keys, ensure_ascii=ensure_ascii) + "\n",
+        encoding="utf-8",
+    )
+    os.replace(temporary, path)
+
+
+def _quarantine_state_file(path: Path, reason: str) -> None:
+    """Move a rejected overlay-state.json aside instead of silently regenerating.
+
+    Contract C1.1: a schema-mismatched or torn read must preserve the rejected
+    bytes (the only forensic evidence a state wipe ever produced — see the live
+    incident this fix closes), so the file is renamed to a ``.rejected-`` sibling
+    before defaults take over in memory. Nothing here deletes the content.
+    """
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    target = path.with_name(f"{path.stem}.rejected-{stamp}-{os.getpid()}{path.suffix}")
+    counter = 0
+    while target.exists():
+        counter += 1
+        target = path.with_name(f"{path.stem}.rejected-{stamp}-{os.getpid()}-{counter}{path.suffix}")
+    try:
+        os.replace(path, target)
+        print(
+            f"overlay-state: {reason}; rejected file preserved as {target.name}",
+            file=sys.stderr,
+            flush=True,
+        )
+    except OSError as exc:  # noqa: BLE001
+        print(f"overlay-state: {reason}; quarantine failed ({exc}); using defaults", file=sys.stderr, flush=True)
+
+
 def load_overlay_state(path: Path) -> dict[str, Any]:
+    """Read persisted state, or a *documented* fallback the caller may not flatten.
+
+    A missing file is a fresh install: defaults, quietly. A file that exists but
+    cannot be read as JSON, or whose schema disagrees, is evidence of damage —
+    it is quarantined to a ``.rejected-`` sibling (never deleted, never silently
+    replaced) and this call returns defaults *in memory only*. The caller's next
+    save therefore regenerates the file without destroying the rejected copy.
+    """
+    if not path.exists():
+        return default_overlay_state()
     state = read_json_object(path)
+    if not state:
+        _quarantine_state_file(path, "unreadable or torn JSON")
+        return default_overlay_state()
     if state.get("schema") != OVERLAY_SCHEMA:
+        _quarantine_state_file(path, f"schema mismatch (got {state.get('schema')!r})")
         return default_overlay_state()
     defaults = default_overlay_state()
     defaults.update(state)
@@ -192,10 +259,32 @@ def load_overlay_state(path: Path) -> dict[str, Any]:
 
 
 def save_overlay_state(path: Path, state: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
+    """Persist state atomically (contract C1.1): no reader can observe a partial write."""
     state["schema"] = OVERLAY_SCHEMA
     state["updatedAt"] = now_iso()
-    path.write_text(json.dumps(state, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    write_json_atomic(path, state, ensure_ascii=False)
+
+
+# Observation timestamps never count as "something changed": `updatedAt` is set
+# by the save itself, `lastSurfaceCheckedAtEpoch` is a pure tick heartbeat, and
+# `lastBoundsChangedAtEpoch` is refreshed on every tick while the overlay is
+# open. Persisting them per tick is exactly the write churn this replaces; a
+# real bounds change still lands because `lastBoundsSignature` is tracked.
+STATE_WRITE_IGNORED_KEYS = frozenset(
+    {"updatedAt", "lastSurfaceCheckedAtEpoch", "lastBoundsChangedAtEpoch"}
+)
+
+
+def overlay_state_fingerprint(overlay_state: dict[str, Any]) -> str:
+    """A stable digest of the parts of the overlay state worth persisting.
+
+    Sidecar and supervisor share this one function (contract C1.1): a writer
+    diffs the fingerprint before and after its own update and skips the save
+    when nothing it owns changed, so the per-second unconditional rewrite that
+    raced the flip writes is gone.
+    """
+    tracked = {key: value for key, value in overlay_state.items() if key not in STATE_WRITE_IGNORED_KEYS}
+    return json.dumps(tracked, sort_keys=True, default=str)
 
 
 def selected_avatar_id(global_state: dict[str, Any]) -> str | None:
@@ -393,10 +482,12 @@ def overlay_should_run(
 ) -> bool:
     """Whether the overlay sidecar should be alive at all.
 
-    The selected pet plus an active surface is the classic condition; a
-    collapsed pill or a hidden (status-item restorable) HUD also counts as a
-    live surface, otherwise the feature would reap its own restore surface as
-    soon as the pointer leaves the mascot.
+    The selected pet plus an active surface is the classic condition; a hidden
+    HUD (restorable via the global hotkey or `tamahermes overlay show`) also
+    counts as a live surface, otherwise the feature would reap its own restore
+    surface as soon as the pointer leaves the mascot. The `hudCollapsed` leg is
+    inert after the liquid-glass revert (the panel draws one shape) and is kept
+    only so the predicate's truth table stays stable across the schema.
 
     ``surface_active`` may be passed in by callers that already ran
     :func:`update_surface_activity` this tick; when omitted it is computed here.
