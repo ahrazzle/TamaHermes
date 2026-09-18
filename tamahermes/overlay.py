@@ -36,7 +36,6 @@ from .overlay_state import (
     overlay_state_path,
     read_json_object,
     save_overlay_state,
-    should_expand_overlay,
     status_snapshot,
     update_surface_activity,
 )
@@ -305,7 +304,7 @@ class TamaHermesOverlayApp:
         apply_audio_decision(state, overlay_state, selected=surface_active)
         save_overlay_state(self.overlay_state_file, overlay_state)
 
-        expanded = should_expand_overlay(global_state, bounds, self.pointer())
+        expanded = not bool(overlay_state.get("hudCollapsed"))
         snapshot = status_snapshot(state)
         self.render(snapshot, expanded)
         self.place_window(bounds, expanded)
@@ -1121,7 +1120,7 @@ body[data-a11y="opaque"] {
   --chrome-wash: rgba(0, 0, 0, 0);
   --chrome-border: var(--contrast-border);
 }
-body[data-a11y="opaque"] button.pill {
+body[data-a11y="opaque"] div.pill {
   background: var(--opaque-bg);
   border-width: 2px;
 }
@@ -1134,7 +1133,7 @@ body[data-contrast="high"] {
   --ink-secondary: var(--contrast-ink);
   --chrome-border: var(--contrast-border);
 }
-body[data-contrast="high"] button.pill {
+body[data-contrast="high"] div.pill {
   border-width: 2px;
 }
 body[data-contrast="high"] .lcd {
@@ -1180,10 +1179,11 @@ def render_native_overlay_html(
 
 
 def render_collapsed_overlay_html(snapshot: dict[str, Any], a11y: dict[str, Any] | None = None) -> str:
-    """The collapsed pill: level/name, three stat bars, one expand affordance.
+    """The collapsed pill: level/name, three stat bars, one expand button.
 
-    The whole panel is the control: a click anywhere expands, and a pointer that
-    travels further than 3 px is a drag instead of a click.
+    The pill body is a drag surface only: a pointer that travels further than
+    3 px drags the window, and a press without travel does nothing. Expanding
+    is the dedicated child button's job — keyboard accessible, 28 pt minimum.
     """
     stats = snapshot.get("stats") or {}
     level = int(snapshot.get("level") or 0)
@@ -1218,7 +1218,7 @@ body {{
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
 }}
-button.pill {{
+.pill {{
   position: absolute;
   inset: 0;
   box-sizing: border-box;
@@ -1237,20 +1237,12 @@ button.pill {{
   font: 600 11px/16px -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
   font-variant-numeric: tabular-nums;
   text-align: left;
-  cursor: pointer;
+  cursor: grab;
 }}
-button.pill:hover {{
-  border-color: var(--accent);
-  box-shadow: var(--chrome-shadow), inset 0 1px 0 var(--chrome-specular), 0 0 0 1px var(--accent);
-}}
-button.pill:active {{
+.pill:active {{
   box-shadow: 0 4px 14px var(--chrome-shadow);
 }}
-button.pill:focus-visible {{
-  outline: 2px solid var(--focus-ring);
-  outline-offset: -2px;
-}}
-button.pill .label {{
+.pill .label {{
   flex: 1 1 auto;
   min-width: 0;
   max-width: 58px;
@@ -1258,23 +1250,42 @@ button.pill .label {{
   text-overflow: ellipsis;
   white-space: nowrap;
 }}
-button.pill .mini {{
+.pill .mini {{
   flex: 0 0 auto;
   display: flex;
   align-items: flex-end;
   gap: 4px;
   height: 14px;
 }}
-button.pill .mini i {{
+.pill .mini i {{
   display: block;
   width: 4px;
   border-radius: 2px;
   background: var(--accent);
 }}
-button.pill .chev {{
+.pill .expand {{
   flex: 0 0 auto;
   margin-left: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  min-height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
   color: var(--accent);
+  cursor: pointer;
+}}
+.pill .expand:hover {{
+  box-shadow: 0 0 0 1px var(--accent);
+}}
+.pill .expand:focus-visible {{
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}}
+.pill .expand .chev {{
   font-size: 18px;
   font-weight: 700;
   line-height: 1;
@@ -1283,14 +1294,14 @@ button.pill .chev {{
 </head>
 <body{body_attributes(a11y)}>
   <main class="wrap" aria-label="TamaHermes status">
-    <button class="pill" type="button" data-event="expand" aria-label="Expand HUD">
+    <div class="pill">
       <span class="label">{label}</span>
       <span class="mini" aria-hidden="true">{mini}</span>
-      <span class="chev" aria-hidden="true">›</span>
-    </button>
+      <button class="expand" type="button" data-event="expand" aria-label="Expand HUD"><span class="chev" aria-hidden="true">›</span></button>
+    </div>
   </main>
   <script>
-    const pill = document.querySelector('button.pill');
+    const pill = document.querySelector('.pill');
     if (pill) {{
       const handler = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.tamahermes;
       const threshold = 3;
@@ -1299,6 +1310,9 @@ button.pill .chev {{
       let startX = 0;
       let startY = 0;
       pill.addEventListener('pointerdown', (event) => {{
+        // A press that starts on the expand button belongs to the button:
+        // never arm the drag surface (and never pointer-capture over it).
+        if (event.target.closest && event.target.closest('button')) return;
         pressed = true;
         dragged = false;
         startX = event.screenX;
@@ -1316,16 +1330,29 @@ button.pill .chev {{
       pill.addEventListener('pointerup', () => {{
         if (!pressed) return;
         pressed = false;
+        // A press without travel is a completed press on the drag surface:
+        // it does nothing. The pill body never posts 'expand'.
         if (dragged) {{
           if (handler) handler.postMessage({{event: 'drag-end'}});
-          return;
         }}
-        if (handler) handler.postMessage({{event: 'expand'}});
       }});
       pill.addEventListener('pointercancel', () => {{
         if (pressed && dragged && handler) handler.postMessage({{event: 'drag-end'}});
         pressed = false;
         dragged = false;
+      }});
+    }}
+    const expandButton = document.querySelector('button.expand');
+    if (expandButton) {{
+      const handler = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.tamahermes;
+      // Keep the button's own press away from the pill drag surface so the
+      // surface can never swallow the click.
+      expandButton.addEventListener('pointerdown', (event) => {{
+        event.stopPropagation();
+      }});
+      // Native button: Enter/Space fire click, so the keyboard path is covered.
+      expandButton.addEventListener('click', () => {{
+        if (handler) handler.postMessage({{event: 'expand'}});
       }});
     }}
   </script>
@@ -1435,6 +1462,10 @@ body {{
 }}
 .scale-controls button:hover {{ border-color: var(--accent); color: var(--accent); }}
 .scale-controls button.wide {{ width: auto; padding: 0 7px; }}
+.scale-controls button.collapse {{
+  min-width: 28px;
+  min-height: 28px;
+}}
 
 .lcd {{
   position: absolute;
@@ -1628,6 +1659,7 @@ body {{
     <div class="scale-controls" aria-label="HUD scale">
       <button data-event="scale-down" aria-label="Scale HUD down">−</button>
       <button data-event="scale-up" aria-label="Scale HUD up">+</button>
+      <button data-event="collapse" class="wide collapse" aria-label="Collapse HUD">PILL</button>
       <button data-event="hide" class="wide" aria-label="Hide HUD">HIDE</button>
     </div>
     <section class="lcd">

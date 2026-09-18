@@ -609,15 +609,32 @@ class M10OverlayCollapseTests(unittest.TestCase):
             self.assertEqual((kept["x"], kept["y"]), (900, 700))
             self.assertEqual((forced["x"], forced["y"]), (300, 180))
 
-    def test_collapsed_html_is_a_transparent_full_panel_button(self) -> None:
+    def test_collapsed_html_is_a_drag_pill_with_a_dedicated_expand_button(self) -> None:
         collapsed = render_native_overlay_html(hud_snapshot(), mode="collapsed")
         expanded = render_native_overlay_html(hud_snapshot(), expanded=True)
 
         for html_text in (collapsed, expanded):
             self.assertIn("background: transparent", html_text)
             self.assertNotIn("backdrop-filter: blur", html_text)
-        self.assertIn('data-event="expand"', collapsed)
-        self.assertIn('aria-label="Expand HUD"', collapsed)
+        # The pill root is a drag surface: a div that carries no event.
+        self.assertIn('<div class="pill">', collapsed)
+        self.assertNotIn('<button class="pill"', collapsed)
+        # One dedicated native child button does the expanding (focusable,
+        # Enter/Space fire click), with a >= 28 pt hit target.
+        self.assertIn(
+            '<button class="expand" type="button" data-event="expand" aria-label="Expand HUD">',
+            collapsed,
+        )
+        self.assertEqual(collapsed.count("data-event="), 1)
+        self.assertIn("min-width: 28px", collapsed)
+        self.assertIn("min-height: 28px", collapsed)
+        # The pill's pointer-up only finishes/aborts a drag; the expand post
+        # lives in the child button's click handler, never on the bar body.
+        pill_up = collapsed.split("pill.addEventListener('pointerup'")[1].split("pill.addEventListener('pointercancel'")[0]
+        self.assertNotIn("event: 'expand'", pill_up)
+        self.assertIn("event: 'drag-end'", pill_up)
+        button_block = collapsed.split("expandButton.addEventListener('pointerdown'")[1]
+        self.assertIn("event.stopPropagation()", button_block)
         self.assertNotIn('class="lcd"', collapsed)
         self.assertIn("border-radius: 19px", collapsed)
         self.assertIn("const threshold = 3;", collapsed)
@@ -625,6 +642,38 @@ class M10OverlayCollapseTests(unittest.TestCase):
         self.assertIn("event: 'drag-end'", collapsed)
         self.assertIn("L3 · TamaHermes", collapsed)
         self.assertIn('class="mini"', collapsed)
+
+    def test_expanded_html_carries_a_dedicated_collapse_button(self) -> None:
+        expanded = render_native_overlay_html(hud_snapshot(), expanded=True)
+        self.assertIn(
+            '<button data-event="collapse" class="wide collapse" aria-label="Collapse HUD">PILL</button>',
+            expanded,
+        )
+        self.assertEqual(expanded.count('aria-label="Collapse HUD"'), 1)
+        # Hide and the scale buttons stay exactly where they were.
+        self.assertIn('data-event="hide"', expanded)
+        self.assertIn('aria-label="Scale HUD down"', expanded)
+        self.assertIn('aria-label="Scale HUD up"', expanded)
+        # The collapse control meets the same 28 pt hit-target floor.
+        self.assertIn("min-width: 28px", expanded)
+        self.assertIn("min-height: 28px", expanded)
+        # The .top handle remains a drag surface only.
+        self.assertIn("event: 'drag'", expanded)
+        self.assertIn("clientX - dragPoint.x", expanded)
+
+    def test_tk_fallback_shape_reads_persisted_collapse_state(self) -> None:
+        # The --tk backend derives its shape from hudCollapsed, never from the
+        # pointer: the last live hover-expand call site is gone.
+        source = (ROOT / "tamahermes" / "overlay.py").read_text(encoding="utf-8")
+        tick = source.split("class TamaHermesOverlayApp:")[1].split("def run(self)")[0]
+        self.assertIn('expanded = not bool(overlay_state.get("hudCollapsed"))', tick)
+        self.assertNotIn("should_expand_overlay(", tick)
+        self.assertNotIn("self.pointer()", tick)
+        # overlay.py keeps zero production call sites for the hover decision;
+        # the pure helpers survive in overlay_state.py as tested utilities.
+        self.assertEqual(source.count("should_expand_overlay("), 0)
+        self.assertEqual(source.count("decide_hover_expand("), 0)
+        self.assertTrue(not bool(default_overlay_state().get("hudCollapsed")))
 
     def test_expanded_default_render_is_unchanged_by_the_mode_argument(self) -> None:
         self.assertEqual(render_native_overlay_html(hud_snapshot(), expanded=True), render_native_overlay_html(hud_snapshot(), mode="expanded"))
@@ -876,6 +925,33 @@ class M10OverlayLoopModeTests(unittest.TestCase):
 
             self.assertFalse(load_overlay_state(overlay_state_path(home))["hudCollapsed"])
             self.assertEqual(self.visible_config(home)["mode"], "expanded")
+
+    def test_toggle_button_events_expand_and_collapse_across_loop_runs(self) -> None:
+        # End-to-end mirror of the dedicated button clicks: each WebView click
+        # posts an interaction event; the loop flips hudCollapsed, restores the
+        # saved position and re-renders the other shape's control.
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            self.write_global_state(home)
+            write_native_overlay_config(home, visible=True, frame={"x": 512, "y": 256, "width": 376, "height": 226})
+            request_dir = home / "tamahermes" / "native-overlay"
+            request_dir.mkdir(parents=True, exist_ok=True)
+
+            (request_dir / "overlay-interaction-request.json").write_text(json.dumps({"event": "collapse", "id": "one"}), encoding="utf-8")
+            self.run_loop(home, iterations=2)
+            self.assertTrue(load_overlay_state(overlay_state_path(home))["hudCollapsed"])
+            self.assertEqual(self.visible_config(home)["mode"], "collapsed")
+            self.assertIn('aria-label="Expand HUD"', self.native_html(home))
+
+            (request_dir / "overlay-interaction-request.json").write_text(json.dumps({"event": "expand", "id": "two"}), encoding="utf-8")
+            self.run_loop(home, iterations=2)
+            state = load_overlay_state(overlay_state_path(home))
+            self.assertFalse(state["hudCollapsed"])
+            self.assertIsNone(state["hudExpandedXY"])
+            config = self.visible_config(home)
+            self.assertEqual(config["mode"], "expanded")
+            self.assertEqual((config["x"], config["y"]), (512, 256))
+            self.assertIn('aria-label="Collapse HUD"', self.native_html(home))
 
 
 class M10OverlayWriteSuppressionTests(M10OverlayLoopModeTests):
