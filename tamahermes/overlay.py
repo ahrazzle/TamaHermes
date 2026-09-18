@@ -23,9 +23,11 @@ from .feedback import active_evolution_announcement
 from .overlay_audio import apply_audio_decision, apply_interaction_audio, sfx_resource_path
 from .overlay_state import (
     Rect,
+    HUD_FLIP_TIMESTAMP_KEY,
     OVERLAY_MODE_COLLAPSED,
     OVERLAY_MODE_EXPANDED,
     OVERLAY_MODE_HIDDEN,
+    STATE_WRITE_IGNORED_KEYS,
     hide_hotkey_setting,
     is_tamahermes_selected,
     load_global_state,
@@ -33,11 +35,13 @@ from .overlay_state import (
     overlay_mode,
     overlay_pid_path,
     overlay_should_run,
+    overlay_state_fingerprint,
     overlay_state_path,
     read_json_object,
     save_overlay_state,
     status_snapshot,
     update_surface_activity,
+    write_json_atomic,
 )
 from .paths import codex_home as resolve_codex_home
 from .paths import default_state_path, repo_root as resolve_repo_root
@@ -78,11 +82,12 @@ def file_sha256(path: Path) -> str | None:
 
 
 def write_json_file(path: Path, payload: dict[str, Any]) -> None:
-    """Write JSON atomically so a reader never sees a half-written file."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(path.name + ".tmp")
-    temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    temporary.replace(path)
+    """Write JSON atomically so a reader never sees a half-written file.
+
+    Delegates to the shared crash-safe primitive (contract C1.1) with the
+    original sort_keys wire format, so every existing caller keeps its bytes.
+    """
+    write_json_atomic(path, payload, sort_keys=True)
 
 
 TAMAGO_PALETTE = {
@@ -466,8 +471,11 @@ def consume_native_interaction(home: Path) -> dict[str, Any] | None:
 # Events the native helper may forward through the interaction file. Visibility
 # events move the panel state; the rest are pet-care actions. Widened additively
 # (schema id unchanged) so `hide`/`show`/`collapse`/`expand` no longer land on
-# the pet-action spool.
-NATIVE_VISIBILITY_EVENTS = frozenset({"hide", "show", "collapse", "expand"})
+# the pet-action spool. `toggle` (contract C2.2) is the hotkey's *request*: the
+# helper no longer decides direction — it only asks Python to flip, and Python
+# computes the flip from its own `hudHidden` (the single writer), so a double
+# press inside the round trip converges to one flip instead of cancelling.
+NATIVE_VISIBILITY_EVENTS = frozenset({"hide", "show", "collapse", "expand", "toggle"})
 NATIVE_PET_ACTION_EVENTS = frozenset({"care", "feed", "clean", "play", "rest"})
 NATIVE_INTERACTION_EVENTS = NATIVE_VISIBILITY_EVENTS | NATIVE_PET_ACTION_EVENTS
 
@@ -478,7 +486,8 @@ NATIVE_INTERACTION_EVENTS = NATIVE_VISIBILITY_EVENTS | NATIVE_PET_ACTION_EVENTS
 # native helper's hotkey path and the loop are separate processes, and an
 # in-process timer would reset on every invocation and guard nothing.
 HUD_TOGGLE_COOLDOWN_SECONDS = 0.2
-HUD_FLIP_TIMESTAMP_KEY = "lastHudHiddenFlipAtEpoch"
+# `HUD_FLIP_TIMESTAMP_KEY` is defined in overlay_state (beside the default that
+# documents it) and re-exported here for callers that import it from overlay.
 
 # The configurable show/hide combo (contract 1.4/1.5). `hideHotkey` is documented
 # with the default `Cmd+Shift+H` and lives beside `hudHidden` in
@@ -533,10 +542,17 @@ def apply_visibility_interaction(
     flip immediately followed by a hotkey flip is still coalesced into one.
     ``now`` exists so tests can drive the clock deterministically.
     """
-    if event in {"hide", "show"}:
+    if event in {"hide", "show", "toggle"}:
         if enforce_cooldown and hud_flip_cooldown_remaining(overlay_state, now=now) > 0.0:
             return False
-        target_hidden = event == "hide"
+        # `hide`/`show` are absolute (the HUD button and the status menu); the
+        # hotkey's `toggle` (contract C2.2) is a *request* whose direction is
+        # computed here from the single writer of `hudHidden`, so two presses
+        # inside one round trip converge to one flip instead of oscillating.
+        if event == "toggle":
+            target_hidden = not bool(overlay_state.get("hudHidden"))
+        else:
+            target_hidden = event == "hide"
         changed = bool(overlay_state.get("hudHidden")) != target_hidden
         overlay_state["hudHidden"] = target_hidden
         if changed:
@@ -992,6 +1008,30 @@ def native_overlay_min_bounds(mode: str | None) -> tuple[int, int]:
     return DEFAULT_MIN_WIDTH, DEFAULT_MIN_HEIGHT
 
 
+def clamp_overlay_scale(value: Any) -> float:
+    """The one clamped scale both the config payload and the page zoom share.
+
+    Contract C1.4: the helper draws the panel at ``width*scale x height*scale``
+    (clamped 0.75..1.75), so the page must zoom by the *same* clamped value or
+    the care buttons drift from the content they belong to at every scale step.
+    """
+    try:
+        raw = float(value)
+    except (TypeError, ValueError):
+        raw = 1.0
+    return max(0.75, min(1.75, raw))
+
+
+def native_overlay_page_scale(home: Path) -> float:
+    """The clamped scale the page should zoom to, from the live config.
+
+    The helper's own ``adjustScale`` writes the scale back into the config file,
+    so reading it here keeps the page zoom in lock-step with the drawn panel.
+    """
+    existing = read_json_object(native_overlay_paths(home)["config"])
+    return clamp_overlay_scale(existing.get("scale") or 1.0)
+
+
 def expanded_overlay_xy(home: Path) -> dict[str, Any] | None:
     """The expanded panel position currently recorded in the native config."""
     payload = read_json_object(native_overlay_paths(home)["config"])
@@ -1161,21 +1201,38 @@ def body_attributes(a11y: dict[str, Any] | None) -> str:
     return (" " + " ".join(attrs)) if attrs else ""
 
 
+def html_zoom_css(scale: float) -> str:
+    """The CSS that makes the page share the panel's coordinate system.
+
+    Contract C1.4: the helper draws the panel at ``width*scale x height*scale``
+    while the WebView maps CSS px 1:1 to pt, so without a zoom the page just
+    gets a bigger viewport and the fluid LCD chrome redistributes while the
+    absolutely-positioned care buttons keep their 226-canvas offsets. Zooming
+    the root by the same clamped scale lays the page out at design size and
+    renders it at panel size, so the buttons land at the same relative place at
+    every scale step.
+    """
+    return f"html {{ zoom: {clamp_overlay_scale(scale):.3f}; }}\n"
+
+
 def render_native_overlay_html(
     snapshot: dict[str, Any],
     expanded: bool = True,
     mode: str | None = None,
     a11y: dict[str, Any] | None = None,
+    scale: float = 1.0,
 ) -> str:
     """Render the panel for the effective mode.
 
     ``expanded`` stays the positional default (existing callers); ``mode`` wins
-    when given, so the loop can pass the derived mode directly.
+    when given, so the loop can pass the derived mode directly. ``scale`` is the
+    clamped page zoom (contract C1.4); the pill ignores it because the helper
+    never scales the pill.
     """
     effective_mode = mode or (OVERLAY_MODE_EXPANDED if expanded else OVERLAY_MODE_COLLAPSED)
     if effective_mode == OVERLAY_MODE_COLLAPSED:
         return render_collapsed_overlay_html(snapshot, a11y=a11y)
-    return render_expanded_overlay_html(snapshot, a11y=a11y)
+    return render_expanded_overlay_html(snapshot, a11y=a11y, scale=scale)
 
 
 def render_collapsed_overlay_html(snapshot: dict[str, Any], a11y: dict[str, Any] | None = None) -> str:
@@ -1361,7 +1418,7 @@ body {{
 """
 
 
-def render_expanded_overlay_html(snapshot: dict[str, Any], a11y: dict[str, Any] | None = None) -> str:
+def render_expanded_overlay_html(snapshot: dict[str, Any], a11y: dict[str, Any] | None = None, scale: float = 1.0) -> str:
     stats = snapshot["stats"]
     traits = snapshot.get("traits", {})
     counters = snapshot["counters"]
@@ -1399,7 +1456,7 @@ def render_expanded_overlay_html(snapshot: dict[str, Any], a11y: dict[str, Any] 
 <head>
 <meta charset="utf-8">
 <style>
-{THEME_STYLE_CSS}{A11Y_STYLE_CSS}
+{THEME_STYLE_CSS}{A11Y_STYLE_CSS}{html_zoom_css(scale)}
 :root {{
   --glass-a: rgba(239, 255, 248, 0.82);
   --glass-b: rgba(174, 238, 255, 0.72);
@@ -1797,8 +1854,19 @@ def native_overlay_config_payload(
     the helper's decoder ignores unknown keys, so old/new sides interoperate.
     """
     paths = native_overlay_paths(home)
-    frame = frame or {"x": None, "y": None, "width": DEFAULT_PANEL_WIDTH, "height": DEFAULT_PANEL_HEIGHT}
     existing = read_json_object(paths["config"])
+    # Contract C1.3: a frame-less write (the boot/shutdown ``visible=False``
+    # writes and the hidden-tick writes) must NOT flatten a pill session to the
+    # expanded defaults. When the caller supplies no width/height, carry the
+    # previous config's geometry through; only a config that never existed falls
+    # back to the expanded defaults.
+    frame = frame or {}
+    width = frame.get("width")
+    height = frame.get("height")
+    if not isinstance(width, (int, float)) or isinstance(width, bool):
+        width = existing.get("width") if isinstance(existing.get("width"), (int, float)) and not isinstance(existing.get("width"), bool) else DEFAULT_PANEL_WIDTH
+    if not isinstance(height, (int, float)) or isinstance(height, bool):
+        height = existing.get("height") if isinstance(existing.get("height"), (int, float)) and not isinstance(existing.get("height"), bool) else DEFAULT_PANEL_HEIGHT
     x = frame.get("x")
     y = frame.get("y")
     if force_xy:
@@ -1822,11 +1890,11 @@ def native_overlay_config_payload(
         # hidden one — a config that dropped the key while the panel is hidden
         # would unregister the one hotkey that can bring the panel back.
         "hideHotkey": hide_hotkey_setting(load_overlay_state(overlay_state_path(home))),
-        "scale": max(0.75, min(1.75, float(existing.get("scale") or 1.0))),
+        "scale": clamp_overlay_scale(existing.get("scale") or 1.0),
         "x": x,
         "y": y,
-        "width": frame.get("width"),
-        "height": frame.get("height"),
+        "width": width,
+        "height": height,
         "minWidth": min_width if min_width is not None else floor_width,
         "minHeight": min_height if min_height is not None else floor_height,
         "htmlPath": str(html_path or paths["html"]),
@@ -1872,15 +1940,9 @@ def write_native_overlay_config(
 # `lastBoundsChangedAtEpoch` is refreshed on every tick while the overlay is
 # open. Persisting them per tick is exactly the write churn this replaces; a
 # real bounds change still lands because `lastBoundsSignature` is tracked.
-STATE_WRITE_IGNORED_KEYS = frozenset(
-    {"updatedAt", "lastSurfaceCheckedAtEpoch", "lastBoundsChangedAtEpoch"}
-)
-
-
-def overlay_state_fingerprint(overlay_state: dict[str, Any]) -> str:
-    """A stable digest of the parts of the overlay state worth persisting."""
-    tracked = {key: value for key, value in overlay_state.items() if key not in STATE_WRITE_IGNORED_KEYS}
-    return json.dumps(tracked, sort_keys=True, default=str)
+# `STATE_WRITE_IGNORED_KEYS` and `overlay_state_fingerprint` live in
+# overlay_state (the single home the sidecar and supervisor both import) and
+# are re-exported here for callers that import them from overlay.
 
 
 class NativeOverlayWriter:
@@ -1933,6 +1995,62 @@ class NativeOverlayWriter:
         return True
 
 
+def reconcile_boot_state(overlay_state: dict[str, Any], config: dict[str, Any]) -> bool:
+    """One named arbiter for panel shape at boot (contract C1.2).
+
+    The diagnosis's rule, implemented literally: *config is the position+shape
+    authority, state is the user-intent authority, and boot reconciles rather
+    than flattens.* The loop derives the config's ``mode`` from state every tick,
+    so on a normal boot the two agree. They can only disagree when one side lost
+    its history — the state wipe this fix closes. In that case the surviving
+    config's shape is the last thing the user actually saw, so it wins: a pill
+    session left collapsed restarts as a pill, not as a flattened expanded panel.
+
+    ``hudHidden`` is deliberately left to state (user intent): a hidden HUD must
+    not be un-hidden by a stale config's ``visible`` draw command. Returns True
+    when the state's shape intent was changed.
+    """
+    mode = config.get("mode")
+    if mode not in (OVERLAY_MODE_COLLAPSED, OVERLAY_MODE_EXPANDED):
+        return False
+    target_collapsed = mode == OVERLAY_MODE_COLLAPSED
+    if bool(overlay_state.get("hudCollapsed")) == target_collapsed:
+        return False
+    overlay_state["hudCollapsed"] = target_collapsed
+    overlay_state["lastBootReconcile"] = {
+        "mode": mode,
+        "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    return True
+
+
+# How often the loop re-checks that the compiled helper matches the Swift source
+# on disk (contract C2.3). The check itself is a cheap sha256 of the source; the
+# rebuild+swap it can trigger is expensive, so it is throttled to this window.
+HELPER_DRIFT_CHECK_SECONDS = 5.0
+
+
+def native_helper_source_drifted(home: Path) -> bool:
+    """True when the compiled helper's recorded source no longer matches disk.
+
+    Contract C2.3 ("merged != running must be mechanically false"): the helper
+    is only rebuilt at sidecar boot, so a git checkout that moves the Swift
+    source under a running loop leaves a stale binary armed with the old hotkey.
+    This compares the provenance record against the current source hash; a
+    missing provenance/binary means the boot build owns creation and is not
+    treated as drift.
+    """
+    paths = native_overlay_paths(home)
+    cached = read_json_object(paths["provenance"])
+    if not cached or not paths["binary"].exists():
+        return False
+    try:
+        source_hash = hashlib.sha256(native_overlay_source().read_bytes()).hexdigest()
+    except OSError:
+        return False
+    return cached.get("sourceSha256") != source_hash
+
+
 def run_native_overlay_loop(
     home: Path,
     root: Path,
@@ -1957,15 +2075,48 @@ def run_native_overlay_loop(
 
     old_term = signal.signal(signal.SIGTERM, stop)
     old_int = signal.signal(signal.SIGINT, stop)
-    write_native_overlay_config(home, visible=False)
+    # Contract C1.2/C1.3: reconcile the persisted shape intent against the
+    # surviving config (config is the position+shape authority; state is the
+    # user-intent authority), then write the boot config with that mode and the
+    # carried-forward geometry so a pill session is never flattened to expanded
+    # defaults before the helper even spawns.
+    boot_state = load_overlay_state(overlay_file)
+    if reconcile_boot_state(boot_state, read_json_object(paths["config"])):
+        save_overlay_state(overlay_file, boot_state)
+    boot_mode = overlay_config_mode(boot_state)
+    write_native_overlay_config(home, visible=False, mode=boot_mode)
     helper = popen([str(binary), str(paths["config"])], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     last_codex_event_sync = 0.0
+    last_helper_drift_check = 0.0
+    last_hotkey_fault = False
+    shutdown_mode = boot_mode
     try:
         while not stopped:
             global_state = load_global_state(home)
             selected = is_tamahermes_selected(global_state)
             overlay_state = load_overlay_state(overlay_file)
             surface_active, bounds = update_surface_activity(global_state, overlay_state, time.time())
+            # Contract C2.3: a git checkout that moved the Swift source under a
+            # running loop must not leave a stale helper armed with the old
+            # hotkey. On drift, rebuild+swap the binary and respawn the helper.
+            now_mono = time.monotonic()
+            if now_mono - last_helper_drift_check >= HELPER_DRIFT_CHECK_SECONDS:
+                last_helper_drift_check = now_mono
+                if native_helper_source_drifted(home):
+                    print("native overlay: helper build predates current Swift source; rebuilding and swapping", file=sys.stderr, flush=True)
+                    try:
+                        binary = build_native_overlay_helper(home)
+                        if helper.poll() is None:
+                            helper.terminate()
+                            try:
+                                helper.wait(timeout=1.0)
+                            except subprocess.TimeoutExpired:
+                                helper.kill()
+                        helper = popen([str(binary), str(paths["config"])], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        overlay_state["lastHelperSwapAtEpoch"] = time.time()
+                    except NativeOverlayUnavailable as exc:
+                        overlay_state["lastHelperSwapError"] = str(exc)
+                        print(f"native overlay: helper rebuild failed: {exc}", file=sys.stderr, flush=True)
             if selected:
                 interaction = consume_native_interaction(home)
                 if interaction:
@@ -2000,6 +2151,7 @@ def run_native_overlay_loop(
                     elif changed:
                         writer.write_state(overlay_state)
             mode = overlay_mode(overlay_state)
+            shutdown_mode = mode
             # A collapsed pill or a hidden HUD is still a live surface: the loop
             # keeps running so the restore affordance cannot delete itself.
             should_run = overlay_should_run(global_state, overlay_state, time.time(), surface_active=surface_active)
@@ -2046,6 +2198,31 @@ def run_native_overlay_loop(
                     overlay_state["lastRenderedLevel"] = current_level
                     snapshot = status_snapshot(state)
                     helper_status = read_json_object(paths["status"])
+                    # Contract C2.3 (mirror): a hotkey is configured (documented
+                    # default) but the helper reports `hotkey: null` — registered
+                    # != running. Fault visibly and respawn the current binary.
+                    hotkey_fault = (
+                        "hotkey" in helper_status
+                        and not helper_status.get("hotkey")
+                        and bool(hide_hotkey_setting(overlay_state))
+                    )
+                    if hotkey_fault and not last_hotkey_fault:
+                        print("native overlay: helper reports no armed hotkey while one is configured; respawning helper", file=sys.stderr, flush=True)
+                        overlay_state["lastHotkeyArmFaultAtEpoch"] = time.time()
+                        try:
+                            if helper.poll() is None:
+                                helper.terminate()
+                                try:
+                                    helper.wait(timeout=1.0)
+                                except subprocess.TimeoutExpired:
+                                    helper.kill()
+                            helper = popen([str(binary), str(paths["config"])], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        except Exception as exc:  # noqa: BLE001
+                            overlay_state["lastHelperSwapError"] = str(exc)
+                    last_hotkey_fault = hotkey_fault
+                    # Contract C1.4: the page zooms by the same clamped scale the
+                    # helper draws the panel at, so care buttons land identically.
+                    page_scale = native_overlay_page_scale(home)
                     a11y = native_overlay_a11y(helper_status)
                     hover = native_overlay_hover_rect(bounds) if surface_active else None
                     announcement = active_evolution_announcement(overlay_state, time.time())
@@ -2075,7 +2252,7 @@ def run_native_overlay_loop(
                         )
                     elif show_panel:
                         frame, restoring = expanded_frame_with_restore(overlay_state, bounds)
-                        writer.write_html(render_native_overlay_html(snapshot, mode=OVERLAY_MODE_EXPANDED, a11y=a11y))
+                        writer.write_html(render_native_overlay_html(snapshot, mode=OVERLAY_MODE_EXPANDED, a11y=a11y, scale=page_scale))
                         writer.write_config(
                             visible=True,
                             frame=frame,
@@ -2109,7 +2286,7 @@ def run_native_overlay_loop(
                 break
             time.sleep(overlay_loop_interval(mode, interval))
     finally:
-        write_native_overlay_config(home, visible=False)
+        write_native_overlay_config(home, visible=False, mode=shutdown_mode)
         if helper.poll() is None:
             helper.terminate()
             try:

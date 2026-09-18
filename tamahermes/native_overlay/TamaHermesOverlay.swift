@@ -199,7 +199,6 @@ final class OverlayController: NSObject, WKScriptMessageHandler {
     private var hotKeyHandlerRef: EventHandlerRef?
     private var attemptedHotKey: String = ""
     private var hotKeyFlipGate = HotKeyFlipGate()
-    private var pendingHiddenRequest: Bool?
 
     /// The combo currently armed by Carbon, or "" when none is registered.
     private var registeredHotKey: String {
@@ -614,7 +613,6 @@ final class OverlayController: NSObject, WKScriptMessageHandler {
             hotKeyHandlerRef = nil
         }
         attemptedHotKey = ""
-        pendingHiddenRequest = nil
     }
 
     /// Carbon delivers a registered hotkey as an ordinary application event: the
@@ -637,15 +635,17 @@ final class OverlayController: NSObject, WKScriptMessageHandler {
         toggleHiddenRequest()
     }
 
-    /// Flip the panel through the existing interaction file — the same channel
-    /// the HUD buttons and the status menu use, so the Python loop stays the one
-    /// writer of `hudHidden`. At most one flip per cooldown window (contract
-    /// 1.6): a held key auto-repeats, and repeats must not flicker the panel.
+    /// Ask Python to flip the panel through the existing interaction file — the
+    /// same channel the HUD buttons and the status menu use, so the Python loop
+    /// stays the one writer of `hudHidden`. Contract C2.2: the helper no longer
+    /// decides direction from an optimistic override; it only forwards a
+    /// `toggle` REQUEST, and Python computes the flip from its own `hudHidden`.
+    /// Two presses inside one round trip therefore converge to one flip instead
+    /// of cancelling each other. At most one request per cooldown window
+    /// (contract 1.6): a held key auto-repeats, and repeats must not flicker.
     private func toggleHiddenRequest() {
         guard hotKeyFlipGate.allowsFlip(now: Date().timeIntervalSince1970) else { return }
-        let event = (pendingHiddenRequest ?? lastHiddenRequested) ? "show" : "hide"
-        writeInteraction(event: event)
-        pendingHiddenRequest = (event == "hide")
+        writeInteraction(event: "toggle")
     }
 
     private static let hotKeyEventHandler: EventHandlerUPP = { _, event, userData in
@@ -926,11 +926,6 @@ final class OverlayController: NSObject, WKScriptMessageHandler {
         }
         lastMode = mode
         lastHiddenRequested = config.visible != true
-        if pendingHiddenRequest == lastHiddenRequested {
-            // The loop has published the flip the hotkey asked for: drop the
-            // optimistic override so the next press reads the real state again.
-            pendingHiddenRequest = nil
-        }
         registerConfiguredHotKey(config)
         updateStatusMenu()
         writeStatus(config: config, point: point, ready: ready)
