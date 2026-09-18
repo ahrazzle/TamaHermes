@@ -495,6 +495,47 @@ class M10OverlayVisibilityTests(unittest.TestCase):
             self.assertTrue(state["hudHidden"])
             spool.assert_not_called()
 
+    def test_status_menu_show_round_trip_restores_a_hidden_hud(self) -> None:
+        """The status item's 'Show HUD' click is written as a `show`
+        interaction and must restore a HUD the HIDE button hid — the
+        no-affordance strand the turtle exists to prevent."""
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            request_dir = home / "tamahermes" / "native-overlay"
+            request_dir.mkdir(parents=True)
+            request = request_dir / "overlay-interaction-request.json"
+            state = default_overlay_state()
+
+            # The HIDE button hides...
+            apply_native_interaction(home, {"event": "hide"}, state)
+            self.assertTrue(state["hudHidden"])
+            self.assertFalse(hud_visible_now(True, True, state))
+
+            # Real clicks never land inside the 0.2s hudHidden flip cooldown
+            # (contract 1.6) that the hide just stamped; backdate the stamp so
+            # the round trip models a human-paced click.
+            from tamahermes.overlay import HUD_FLIP_TIMESTAMP_KEY
+
+            state[HUD_FLIP_TIMESTAMP_KEY] = time.time() - 10.0
+
+            # ...and the status-menu click writes the same `show` event the
+            # helper's writeInteraction emits, which flips hudHidden back.
+            request.write_text(
+                json.dumps({"event": "show", "schema": "tamahermes.native_overlay.interaction.v1"}),
+                encoding="utf-8",
+            )
+            consumed = consume_native_interaction(home)
+            if consumed is None:  # narrows Optional for the type checker
+                self.fail("show interaction was not consumable")
+            disposition, changed = apply_native_interaction(home, consumed, state)
+
+            self.assertEqual(disposition, "visibility")
+            self.assertTrue(changed)
+            self.assertFalse(state["hudHidden"])
+            self.assertTrue(hud_visible_now(True, True, state))
+            # The request file is consumed, not spooled for the pet.
+            self.assertIsNone(consume_native_interaction(home))
+
     def test_care_interactions_still_route_to_the_pet_action_spool(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp)
@@ -1154,14 +1195,33 @@ class M10NativeSourceGateTests(unittest.TestCase):
         # The hide/show hotkey still rides every config payload.
         self.assertIn("let hideHotkey: String?", swift)
 
-    def test_the_status_item_surface_is_gone_but_hide_restore_stays(self) -> None:
+    def test_status_item_turtle_surface_is_present(self) -> None:
+        """The menu-bar restore affordance is back (owner request): a turtle
+        status item whose Show HUD action writes the standard interaction
+        file. Supersedes the #21 gate that demanded the surface be gone."""
         swift = self.swift_source()
 
-        for forbidden in ("NSStatusBar", "statusItem", "NSMenu", "NSMenuItem",
-                          '"Expand HUD"', '"Collapse to pill"', '"Show HUD"'):
-            self.assertNotIn(forbidden, swift)
-        # Restore path without any native menu: the hotkey forwards a toggle
-        # request through the interaction file.
+        # The status item exists, is a turtle, and carries the restore menu.
+        self.assertIn("NSStatusBar.system.statusItem(withLength:", swift)
+        self.assertIn('NSImage(systemSymbolName: "tortoise.fill"', swift)
+        self.assertIn('image?.isTemplate = true', swift)
+        self.assertIn('button.toolTip = "EvoPet HUD', swift)
+        self.assertIn('"Show HUD"', swift)
+        self.assertIn("statusMenuAction", swift)
+        # The item is built once at construction, so a helper that starts with
+        # a hidden panel still gets the affordance.
+        self.assertIn("buildStatusItem()", swift)
+        # Restore goes through the shared interaction channel — Python stays
+        # the single writer of hudHidden (contract C2.2).
+        self.assertIn("writeInteraction(event: event)", swift)
+        # Non-activating discipline: the status item never raises the app.
+        self.assertNotIn("NSApp.activate", swift)
+
+    def test_the_hide_restore_paths_stay(self) -> None:
+        swift = self.swift_source()
+
+        # Restore path 2 is untouched: the hotkey forwards a toggle request
+        # through the interaction file.
         self.assertIn('writeInteraction(event: "toggle")', swift)
         self.assertIn("RegisterEventHotKey(", swift)
 

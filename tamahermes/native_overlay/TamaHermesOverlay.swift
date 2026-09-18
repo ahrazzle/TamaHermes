@@ -186,6 +186,9 @@ final class OverlayController: NSObject, WKScriptMessageHandler {
     private var hotKeyHandlerRef: EventHandlerRef?
     private var attemptedHotKey: String = ""
     private var hotKeyFlipGate = HotKeyFlipGate()
+    // Menu-bar restore affordance: the turtle stays visible even when the
+    // panel is hidden, so hide can never strand the HUD without a way back.
+    private var statusItem: NSStatusItem?
 
     /// The combo currently armed by Carbon, or "" when none is registered.
     private var registeredHotKey: String {
@@ -206,11 +209,44 @@ final class OverlayController: NSObject, WKScriptMessageHandler {
         self.interactionPath = root + "/overlay-interaction-request.json"
         super.init()
         buildPanel()
+        buildStatusItem()
         // Contract 1.3: the hotkey is registered at construction rather than on
         // first use, so a panel that starts hidden can still be brought back.
         registerConfiguredHotKey(readConfig())
         scheduleTick(0.25)
         tick()
+    }
+
+    /// Menu-bar turtle (owner request): a status item that survives the panel
+    /// being hidden, so "re-open the HUD" is always one click away. The menu
+    /// routes through the SAME interaction file as the WebView buttons and the
+    /// hotkey — the Python loop stays the single writer of `hudHidden`
+    /// (contract C2.2), so this adds no second writer and no second state.
+    private func buildStatusItem() {
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        if let button = item.button {
+            let image = NSImage(systemSymbolName: "tortoise.fill", accessibilityDescription: "EvoPet HUD")
+            image?.isTemplate = true
+            button.image = image
+            button.imageScaling = .scaleProportionallyDown
+            button.toolTip = "EvoPet HUD (click to show; hide/show hotkey: Cmd+Shift+H)"
+        }
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        let showItem = NSMenuItem(title: "Show HUD", action: #selector(statusMenuAction(_:)), keyEquivalent: "")
+        showItem.target = self
+        showItem.representedObject = "show"
+        menu.addItem(showItem)
+        menu.addItem(NSMenuItem.separator())
+        item.menu = menu
+        statusItem = item
+    }
+
+    @objc private func statusMenuAction(_ sender: NSMenuItem) {
+        guard let event = sender.representedObject as? String else { return }
+        // Never activates the app and never keys the panel: it only writes the
+        // same interaction file every other restore path uses.
+        writeInteraction(event: event)
     }
 
     private func buildPanel() {
