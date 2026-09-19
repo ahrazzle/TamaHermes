@@ -109,6 +109,8 @@ def validate_gates(gates: Iterable[int]) -> List[int]:
     """A creator's gate list, checked: 1..len(STAGE_ORDER)-1 gates, strictly increasing, in range."""
     cleaned: List[int] = []
     for raw in gates:
+        if isinstance(raw, float) and not raw.is_integer():
+            raise ValueError(f"evolution gate {raw!r} is not a whole level")
         value = int(raw)
         if not 1 <= value <= MAX_LEVEL:
             raise ValueError(f"evolution gate {value} is outside 1..{MAX_LEVEL}")
@@ -166,8 +168,13 @@ def ledger_thresholds(gates: Sequence[int]) -> Dict[str, int]:
 
 def stage_for_xp(xp: int, gates: Optional[Sequence[int]] = None) -> str:
     checked = validate_gates(gates or DEFAULT_EVOLUTION_GATES)
-    xp = max(0, int(xp))
     forms = forms_for_gates(checked)
+    try:
+        xp = max(0, int(xp))
+    except (TypeError, ValueError, OverflowError):
+        # Like level_for_xp, garbage input degrades instead of raising: a growth event
+        # must never strand a running pet.
+        return forms[0]
     stage = forms[0]
     for index, gate in enumerate(checked):
         if xp >= xp_for_level(gate):

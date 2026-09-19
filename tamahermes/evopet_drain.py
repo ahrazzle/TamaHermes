@@ -30,9 +30,10 @@ import hashlib
 import json
 import os
 import shutil
+import tempfile
 import time
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Container, Dict, Iterable, List, Optional, Set, Tuple
 
 from . import levels
 
@@ -86,7 +87,9 @@ NEUTRAL_STATES = {"idle", "running", "waiting", "waving"}
 # Clean/feed/play are the care set (TamaCodex: care is worth ``mess -2`` and decays a care
 # mistake by the amount). The desktop pet UI cannot reach the ledger directly, so it spools the
 # request into the same ``evo-queue`` the agents use and this drain applies it to the combined
-# ledger -- the one shared pet. Care is never written to a profile ledger.
+# ledger -- the one shared pet. This drain never writes care into a profile ledger (the CLI's
+# ``event care`` and the preview server apply care to a single profile's ledger; those are
+# outside this drain's route).
 CARE_ACTIONS = ("clean", "feed", "play")
 
 # The ladder and the curve are EvoPet's (see tamahermes/levels.py): levels keep climbing, each
@@ -410,8 +413,14 @@ def load_json(path: Path) -> Optional[Dict[str, Any]]:
         return None
 
 
-def read_spool(spool: Path) -> List[Tuple[Path, Dict[str, Any]]]:
-    """Every well-formed event, oldest first (filename carries pid-timestamp-sequence-kind)."""
+def read_spool(
+    spool: Path, skip_names: Optional[Container[str]] = None
+) -> List[Tuple[Path, Dict[str, Any]]]:
+    """Every well-formed event, oldest first (filename carries pid-timestamp-sequence-kind).
+
+    ``skip_names`` are spool files already consumed by an earlier run that crashed before
+    pruning them: re-reading them would award their XP twice.
+    """
     def order(path: Path) -> Tuple[int, int]:
         parts = path.stem.split("-")
         try:
@@ -422,15 +431,42 @@ def read_spool(spool: Path) -> List[Tuple[Path, Dict[str, Any]]]:
     events: List[Tuple[Path, Dict[str, Any]]] = []
     if not spool.exists():
         return events
+    skip = set(skip_names or ())
     for path in sorted(spool.glob("*.json"), key=order):
+        if path.name in skip:
+            continue
         payload = load_json(path)
         if isinstance(payload, dict):
             events.append((path, payload))
     return events
 
 
-def classify(events: Iterable[Tuple[Path, Dict[str, Any]]]) -> Dict[str, Any]:
-    """Map foreign-agent spool events to pet events at turn boundaries only."""
+def _payload_hash(payload: Dict[str, Any]) -> str:
+    """Content identity of a spool payload: identical events award once, never twice."""
+    return hashlib.sha1(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def _capped(items: List[str], limit: int) -> List[str]:
+    """Order-preserving dedupe, newest kept, bounded so the cursor cannot grow forever."""
+    return list(dict.fromkeys(items))[-limit:]
+
+
+def classify(
+    events: Iterable[Tuple[Path, Dict[str, Any]]],
+    seen_hashes: Optional[Container[str]] = None,
+) -> Dict[str, Any]:
+    """Map foreign-agent spool events to pet events at turn boundaries only.
+
+    Turn-end resolution reads the session's state *before* the stop bubble is recorded:
+    the stop bubble carries its own visual (``waving``), so resolving after recording it
+    would mark every real turn end unresolved instead of success/failure.
+
+    ``seen_hashes`` dedupes identical payloads -- double-installed hooks posting the same
+    event twice award once. Every skipped event is still listed in ``processed`` so the
+    caller prunes it.
+    """
     awarded: Dict[str, int] = {}
     per_source: Dict[str, int] = {}
     per_source_events: Dict[str, int] = {}
@@ -438,14 +474,32 @@ def classify(events: Iterable[Tuple[Path, Dict[str, Any]]]) -> Dict[str, Any]:
     care: Dict[str, int] = {}
     unresolved = 0
     processed: List[str] = []
+    hashes: List[str] = []
     last_state: Dict[str, str] = {}
+    seen: Set[str] = set(seen_hashes or ())
 
     for path, event in events:
+        digest = _payload_hash(event)
+        if digest in seen:
+            skipped["duplicate"] = skipped.get("duplicate", 0) + 1
+            processed.append(path.name)
+            continue
+        seen.add(digest)
+        hashes.append(digest)
+
         source = str(event.get("agent_source") or "")
         session = event.get("session_id")
         kind = path.stem.split("-")[-1]
 
-        # Route C first: a care request carries no session and must not fall into the
+        # Route separation first: a Hermes-sourced event is route A work -- the per-profile
+        # ledgers already counted it, more richly -- whatever the payload claims to be,
+        # including care.
+        if source.strip().lower() in HERMES_SOURCES:
+            skipped["hermes-route"] = skipped.get("hermes-route", 0) + 1
+            processed.append(path.name)
+            continue
+
+        # Route C: a care request carries no session and must not fall into the
         # display-only bucket the agents' session-less posts land in.
         if str(event.get("event") or "") == "care" or kind == "care":
             action = str(event.get("action") or "")
@@ -456,18 +510,19 @@ def classify(events: Iterable[Tuple[Path, Dict[str, Any]]]) -> Dict[str, Any]:
             processed.append(path.name)
             continue
 
-        if source in HERMES_SOURCES:
-            skipped["hermes-route"] = skipped.get("hermes-route", 0) + 1
-            processed.append(path.name)
-            continue
         if not session:
             skipped["no-session"] = skipped.get("no-session", 0) + 1
             processed.append(path.name)
             continue
 
+        # Snapshot the turn's working state BEFORE this event's own visual is recorded:
+        # a stop bubble waves goodbye, and resolving the turn against the wave would mark
+        # every real turn end unresolved instead of success/failure.
+        key = str(session)
+        turn_state = last_state.get(key)
         visual = event.get("state") or event.get("agent_state")
         if visual in SUCCESS_STATES or visual in FAILURE_STATES or visual in NEUTRAL_STATES:
-            last_state[str(session)] = str(visual)
+            last_state[key] = str(visual)
 
         phase = event.get("phase")
         pet_event: Optional[str] = None
@@ -477,10 +532,9 @@ def classify(events: Iterable[Tuple[Path, Dict[str, Any]]]) -> Dict[str, Any]:
         elif phase in PHASE_TO_EVENT:
             pet_event = PHASE_TO_EVENT[str(phase)]
         elif str(phase) in TURN_END_PHASES:
-            state = last_state.get(str(session))
-            if state in SUCCESS_STATES:
+            if turn_state in SUCCESS_STATES:
                 pet_event = "task_success"
-            elif state in FAILURE_STATES:
+            elif turn_state in FAILURE_STATES:
                 pet_event = "task_failure"
             else:
                 unresolved += 1
@@ -502,6 +556,7 @@ def classify(events: Iterable[Tuple[Path, Dict[str, Any]]]) -> Dict[str, Any]:
         "care": care,
         "unresolved_turns": unresolved,
         "processed": processed,
+        "hashes": hashes,
     }
 
 
@@ -516,22 +571,35 @@ def absorb_profiles(
         if not state:
             continue
         cursor = cursor_profiles.get(name, {})
+        if not isinstance(cursor, dict):
+            cursor = {}
+        # High-water cursors: the baseline is the most the drain has ever absorbed, never
+        # the latest reading. A negative round-trip (100 -> -5 -> 100) or a decayed counter
+        # must not re-absorb on the way back up -- the drain's prime directive is to never
+        # double-count.
+        prev_xp = max(0, int(cursor.get("xp") or 0))
         xp = int(state.get("xp") or 0)
-        xp_delta = max(0, xp - int(cursor.get("xp") or 0))
+        xp_delta = max(0, xp - prev_xp)
+        cursor_counters = cursor.get("counters")
+        cursor_traits = cursor.get("traits")
         counters = state.get("counters") or {}
         counter_deltas: Dict[str, int] = {}
+        new_counters: Dict[str, int] = {}
         for key in COUNTERS:
             value = int(counters.get(key) or 0)
-            delta = max(0, value - int((cursor.get("counters") or {}).get(key) or 0))
-            if delta:
-                counter_deltas[key] = delta
+            prev = max(0, int((cursor_counters.get(key) if isinstance(cursor_counters, dict) else 0) or 0))
+            if value > prev:
+                counter_deltas[key] = value - prev
+            new_counters[key] = max(prev, value)
         trait_deltas: Dict[str, int] = {}
+        new_traits: Dict[str, int] = {}
         traits = state.get("traits") or {}
         for key in TRAITS:
             value = int(traits.get(key) or 0)
-            delta = max(0, value - int((cursor.get("traits") or {}).get(key) or 0))
-            if delta:
-                trait_deltas[key] = delta
+            prev = max(0, int((cursor_traits.get(key) if isinstance(cursor_traits, dict) else 0) or 0))
+            if value > prev:
+                trait_deltas[key] = value - prev
+            new_traits[key] = max(prev, value)
 
         combined["xp"] += xp_delta
         combined.setdefault("counters", {})
@@ -544,15 +612,27 @@ def absorb_profiles(
         # merge_stats rides the same per-profile cursor for clamped stats; replacing
         # the cursor wholesale here would wipe its baseline and every stat delta
         # would read as first-sight forever (stat changes silently dropped).
+        #
+        # A deleted-and-recreated profile reusing a name is the exception: its stats belong
+        # to a new pet, so the old baseline is reseeded from the current values instead of
+        # being preserved (otherwise the old pet's stats inject phantom deltas). The xp,
+        # counter and trait cursors are high-water marks -- they only ever move forward.
+        stats = state.get("stats") or {}
         stats_cursor = cursor.get("stats") if isinstance(cursor, dict) else None
-        cursor_profiles[name] = {
-            "xp": xp,
-            "counters": {k: int(counters.get(k) or 0) for k in COUNTERS},
-            "traits": {k: int(traits.get(k) or 0) for k in TRAITS},
+        prev_created = cursor.get("createdAt") if isinstance(cursor, dict) else None
+        recreated = bool(prev_created) and prev_created != state.get("createdAt")
+        new_cursor = {
+            "xp": max(prev_xp, xp),
+            "counters": new_counters,
+            "traits": new_traits,
             "absorbedAt": state.get("updatedAt"),
+            "createdAt": state.get("createdAt"),
         }
-        if isinstance(stats_cursor, dict):
-            cursor_profiles[name]["stats"] = stats_cursor
+        if recreated:
+            new_cursor["stats"] = {key: int(stats.get(key) or 0) for key in CLAMPED_STATS}
+        elif isinstance(stats_cursor, dict):
+            new_cursor["stats"] = stats_cursor
+        cursor_profiles[name] = new_cursor
         attribution = combined["attribution"]["profiles"].setdefault(
             name, {"xp": xp, "absorbed": 0, "stage": None, "updatedAt": None}
         )
@@ -731,37 +811,51 @@ def run(
 
     stamp = now or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     ledgers = ledger_paths(hermes_root)
-    combined = load_json(state_file) or empty_combined()
+    if state_file.exists():
+        combined = load_json(state_file)
+        if combined is None:
+            raise RuntimeError(
+                f"combined ledger at {state_file} is unreadable; refusing to re-seed "
+                "(a torn file treated as missing would silently double-count every profile)"
+            )
+        combined = _repair_combined(combined)
+    else:
+        combined = empty_combined()
     combined["levels"] = curve_block()
     active_pet_id = _active_pet_id(combined, pet_id)
     active_pet = _select_pet_progress(combined, active_pet_id)
     previous_total_xp = int(combined.get("xp") or 0)
     combined.setdefault("attribution", {"profiles": {}, "foreign": {}})
     combined.setdefault("cursor", {"profiles": {}, "consumed": [], "lastRunAt": None})
+    before = _canonical(combined)
 
     profile_report = absorb_profiles(combined, ledgers)
     merge_stats(combined, ledgers, combined["cursor"]["profiles"])
 
-    events = read_spool(spool)
-    foreign = classify(events)
+    events = read_spool(spool, skip_names=set(combined["cursor"].get("consumed") or []))
+    foreign = classify(events, seen_hashes=set(combined["cursor"].get("consumed_hashes") or []))
 
     # While a clean cooldown is active the pet can neither earn XP nor perform any other
     # action. Fresh foreign-turn XP is refused in that window (it is a new action); the
     # per-profile XP absorbed just above is historical attributed catch-up from the ledgers'
     # own cursors and is untouched -- see the module docstring for the ownership split.
+    # Refused events are still consumed so they cannot re-award once the cooldown lifts.
     in_cooldown = clean_cooldown_remaining_seconds(combined, stamp) > 0
-    foreign_xp = 0 if in_cooldown else foreign["xp"]
-    combined["xp"] += foreign_xp
-    for source, xp in foreign["xp_by_source"].items():
-        if in_cooldown:
-            continue
-        entry = combined["attribution"]["foreign"].setdefault(source, {"xp": 0, "events": 0})
-        entry["xp"] += xp
-        entry["events"] += foreign["events_by_source"].get(source, 0)
-    # event counts per source, from the classified map
-    for event_name, count in foreign["awarded"].items():
-        combined.setdefault("events", {})
-        combined["events"][event_name] = combined["events"].get(event_name, 0) + count
+    refused_xp = 0
+    refused_events: Dict[str, int] = {}
+    if in_cooldown:
+        refused_xp = foreign["xp"]
+        refused_events = dict(foreign["awarded"])
+    else:
+        combined["xp"] += foreign["xp"]
+        for source, xp in foreign["xp_by_source"].items():
+            entry = combined["attribution"]["foreign"].setdefault(source, {"xp": 0, "events": 0})
+            entry["xp"] += xp
+            entry["events"] += foreign["events_by_source"].get(source, 0)
+        # event counts per source, from the classified map
+        for event_name, count in foreign["awarded"].items():
+            combined.setdefault("events", {})
+            combined["events"][event_name] = combined["events"].get(event_name, 0) + count
 
     # Route C: the native pet menu's care controls, applied to the one shared ledger.
     care_report = apply_care_events(combined, foreign["care"], now=stamp)
@@ -776,13 +870,22 @@ def run(
     active_pet["level"] = level_for_xp(active_pet["xp"])
     active_pet["lifeStage"] = stage_for_xp(active_pet["xp"])
     combined["activePetId"] = active_pet_id
-    combined["updatedAt"] = stamp
-    combined["cursor"]["lastRunAt"] = stamp
-    render_state = dict(combined)
-    render_state["petId"] = active_pet_id
-    render_state["xp"] = active_pet["xp"]
-    render_state["level"] = active_pet["level"]
-    render_state["lifeStage"] = active_pet["lifeStage"]
+
+    # Consumption is recorded BEFORE any state write: the mirror's ownership write below
+    # persists this same dict, so a crash between that write and the prune cannot re-award
+    # these spool files on the next run (read_spool skips names already consumed).
+    combined["cursor"]["consumed"] = _capped(
+        list(combined["cursor"].get("consumed") or []) + foreign["processed"], 1000
+    )
+    combined["cursor"]["consumed_hashes"] = _capped(
+        list(combined["cursor"].get("consumed_hashes") or []) + foreign["hashes"], 2000
+    )
+
+    # The design doc's acceptance check 3: a no-op run changes no bytes.
+    changed = _canonical(combined) != before
+    if changed:
+        combined["updatedAt"] = stamp
+        combined["cursor"]["lastRunAt"] = stamp
 
     mirror_report = _mirror_step(
         combined,
@@ -803,16 +906,16 @@ def run(
 
     pruned = 0
     if apply:
+        # State first, prune second: a crash here must leave the ledger ahead of the
+        # spool, never behind it (the consumed cursor above makes the prune idempotent).
+        if changed:
+            _write_state(state_file, combined)
         consumed_dir.mkdir(parents=True, exist_ok=True)
         for name in foreign["processed"]:
             src = spool / name
             if src.exists():
                 shutil.move(str(src), str(consumed_dir / name))
                 pruned += 1
-        combined["cursor"]["consumed"] = (
-            combined["cursor"].get("consumed", []) + foreign["processed"]
-        )[-500:]
-        _write_state(state_file, combined)
 
     return {
         "apply": apply,
@@ -822,17 +925,81 @@ def run(
         "profiles": profile_report["profiles"],
         "profile_xp_absorbed": profile_report["xp"],
         "spool_files": len(events),
-        "foreign": {k: v for k, v in foreign.items() if k != "processed"},
+        "foreign": {k: v for k, v in foreign.items() if k not in ("processed", "hashes")},
         "care": care_report,
+        "refused_xp": refused_xp,
+        "refused_events": refused_events,
         "pruned": pruned,
         "mirror": mirror_report,
         "state_file": str(state_file),
     }
 
 
+def _canonical(combined: Dict[str, Any]) -> str:
+    """Deterministic serialization for the no-op-run byte-stability check."""
+    return json.dumps(combined, sort_keys=True, separators=(",", ":"))
+
+
+def _repair_combined(combined: Any) -> Dict[str, Any]:
+    """Repair a combined ledger that is structurally off (null keys, missing blocks).
+
+    A present-but-null ``stats``/``cursor``/``attribution`` must neither crash the drain
+    nor -- worse -- silently re-seed the cursors and double-count every profile's history.
+    """
+    if not isinstance(combined, dict):
+        raise RuntimeError("combined ledger is not a JSON object; refusing to re-seed")
+    for key in ("stats", "traits", "counters", "pets", "cursor", "attribution", "levels"):
+        if not isinstance(combined.get(key), dict):
+            combined[key] = {}
+    cursor = combined["cursor"]
+    profiles = cursor.get("profiles")
+    if not isinstance(profiles, dict):
+        # The cursor block was lost but attribution still records each profile's last-seen
+        # absolute xp -- rebuild the high-water marks from it so the profiles are not
+        # force-combined a second time. Counter/trait baselines cannot be rebuilt and
+        # will re-absorb once; that is the price of the lost cursor, and it is bounded.
+        profiles = {}
+        attribution_profiles = combined["attribution"].get("profiles")
+        if isinstance(attribution_profiles, dict):
+            for name, block in attribution_profiles.items():
+                if isinstance(block, dict):
+                    try:
+                        profiles[name] = {"xp": max(0, int(block.get("xp") or 0))}
+                    except (TypeError, ValueError):
+                        pass
+        cursor["profiles"] = profiles
+    for sub in ("consumed", "consumed_hashes"):
+        if not isinstance(cursor.get(sub), list):
+            cursor[sub] = []
+    attribution = combined["attribution"]
+    for sub in ("profiles", "foreign"):
+        if not isinstance(attribution.get(sub), dict):
+            attribution[sub] = {}
+    try:
+        combined["xp"] = max(0, int(combined.get("xp") or 0))
+    except (TypeError, ValueError):
+        combined["xp"] = 0
+    return combined
+
+
 def _write_state(state_file: Path, combined: Dict[str, Any]) -> None:
+    """Atomic write: a torn file must never read as a missing ledger (mass re-seed).
+
+    The temp name is unique per call so two writers in one process cannot interleave
+    into the same file."""
     state_file.parent.mkdir(parents=True, exist_ok=True)
-    state_file.write_text(json.dumps(combined, indent=1, sort_keys=True) + "\n")
+    fd, tmp_name = tempfile.mkstemp(dir=str(state_file.parent),
+                                    prefix=f"{state_file.name}.tmp-")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(combined, indent=1, sort_keys=True) + "\n")
+        os.replace(tmp_name, state_file)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
 
 
 # The claim fields that make the mirror this drain's: a change to any of them is a change of
