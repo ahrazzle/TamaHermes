@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -409,7 +411,10 @@ def default_state(catalog: Catalog, line_id: str = "toast", machine_id: str = "a
 def load_state(path: Path, catalog: Catalog, line_id: str = "toast", machine_id: str = "aurora", display_name: str = "TamaHermes") -> dict[str, Any]:
     if not path.exists():
         return default_state(catalog, line_id=line_id, machine_id=machine_id, display_name=display_name)
-    state = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        state = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"ledger at {path} is not valid JSON: {exc}") from exc
     migrate_state(state, catalog)
     # A ledger is the pet's whole truth, and it may have been written under an older curve. Load
     # is where stage/level get re-derived from XP, so the drawn form matches the number.
@@ -421,12 +426,32 @@ def save_state(path: Path, state: dict[str, Any], touch: bool = True) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     if touch:
         state["updatedAt"] = now_iso()
-    path.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
+    # Atomic: concurrent writers (threaded preview server, hook processes) must never leave
+    # a torn ledger behind -- a torn file must not read as a missing one. The temp name is
+    # unique per call so two writers in one process cannot interleave into the same file.
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=f"{path.name}.tmp-")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(state, indent=2) + "\n")
+        os.replace(tmp_name, path)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
 
 
 def migrate_state(state: dict[str, Any], catalog: Catalog) -> None:
     if state.get("schemaVersion") != SCHEMA_VERSION:
         state["schemaVersion"] = SCHEMA_VERSION
+    # Repair present-but-null containers first: setdefault does not fix a key that exists
+    # with None, and the .setdefault calls below would crash on it.
+    for key in ("stats", "traits", "counters"):
+        if not isinstance(state.get(key), dict):
+            state[key] = {}
+    if not isinstance(state.get("recentEvents"), list):
+        state["recentEvents"] = []
     state.setdefault("petId", "tamahermes")
     state.setdefault("displayName", "TamaHermes")
     state.setdefault("lineId", catalog.line_ids()[0])
@@ -654,6 +679,10 @@ def maybe_evolve(state: dict[str, Any], catalog: Catalog) -> dict[str, Any]:
             elif stage == "teen":
                 state["lifeStage"] = "adult"
                 state["branch"] = choose_adult_branch(state)
+            else:
+                # No defined successor (e.g. a hand-edited gate list the validator never
+                # saw): stop instead of spinning on the same threshold forever.
+                break
 
     try:
         state["formId"] = resolve_form_id(state, catalog)
