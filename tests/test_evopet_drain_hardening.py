@@ -22,6 +22,9 @@ Each test pins a bug that used to silently corrupt the combined ledger:
 from __future__ import annotations
 
 import json
+import signal
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -293,6 +296,94 @@ class CareRepeats(unittest.TestCase):
         self.assertEqual(report["foreign"]["awarded"], {"prompt_sent": 1})
         self.assertEqual(report["foreign"]["skipped"]["duplicate"], 1)
         self.assertEqual(report["pruned"], 2)
+
+
+class CrashOverflow(unittest.TestCase):
+    """The consumed-cursor bounds are a floor for the batch just consumed.
+
+    A batch larger than the 1000-name / 2000-hash bounds plus a crash between the
+    state write and the prune must neither re-award the overflow nor strand it in
+    the spool. The crash is a real SIGKILL in a subprocess, on the first prune
+    move -- i.e. after the state write, before any file is pruned.
+    """
+
+    def _make_dirs(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        spool = root / "spool"
+        spool.mkdir()
+        hermes = root / "hermes"
+        hermes.mkdir()
+        return spool, root / "consumed", root / "combined.json", hermes
+
+    def _drain(self, spool, consumed, state_file, hermes):
+        return run(spool, state_file, consumed, apply=True,
+                   hermes_root=hermes, mirror=False)
+
+    def _crash_between_write_and_prune(self, spool, consumed, state_file, hermes) -> None:
+        driver = (
+            "import os, signal, sys\n"
+            "sys.path.insert(0, %r)\n"
+            "from pathlib import Path\n"
+            "import shutil\n"
+            "from tamahermes import evopet_drain\n"
+            "def killer(src, dst):\n"
+            "    os.kill(os.getpid(), signal.SIGKILL)\n"
+            "shutil.move = killer\n"
+            "evopet_drain.run(\n"
+            "    Path(%r), Path(%r),\n"
+            "    Path(%r), apply=True,\n"
+            "    hermes_root=Path(%r), mirror=False)\n"
+        ) % (str(ROOT), str(spool), str(state_file), str(consumed), str(hermes))
+        proc = subprocess.run([sys.executable, "-c", driver])
+        self.assertEqual(proc.returncode, -signal.SIGKILL)
+
+    def _assert_clean_recovery(self, spool, consumed, state_file, hermes,
+                               expected_xp: int, file_count: int) -> None:
+        replay = self._drain(spool, consumed, state_file, hermes)
+        # Nothing re-awarded...
+        self.assertEqual(replay["foreign"]["xp"], 0)
+        self.assertEqual(replay["combined_xp"], expected_xp)
+        # ...and nothing stranded: the spool holds no absorbed foreign event,
+        # and the consumed directory holds every file.
+        self.assertEqual(list(spool.glob("*.json")), [])
+        self.assertEqual(len(list(consumed.glob("*.json"))), file_count)
+
+    def test_care_overflow_survives_crash(self) -> None:
+        """1200 identical care presses exceed the 1000-name bound."""
+        feed = {"event": "care", "action": "feed", "agent_source": "evopet"}
+        spool, consumed, state_file, hermes = self._make_dirs()
+        for i in range(1200):
+            spool_event(spool, f"1-{i:04d}-1-care.json", dict(feed))
+        control = self._drain(spool, consumed, state_file, hermes)
+        self.assertEqual(control["care"], {"feed": 1200})
+
+        spool, consumed, state_file, hermes = self._make_dirs()
+        for i in range(1200):
+            spool_event(spool, f"1-{i:04d}-1-care.json", dict(feed))
+        self._crash_between_write_and_prune(spool, consumed, state_file, hermes)
+        self._assert_clean_recovery(spool, consumed, state_file, hermes,
+                                    control["combined_xp"], 1200)
+
+    def test_route_b_overflow_survives_crash(self) -> None:
+        """2500 distinct route-B turn payloads exceed the 2000-hash bound."""
+        spool, consumed, state_file, hermes = self._make_dirs()
+        for i in range(2500):
+            spool_event(spool, f"1-{i:04d}-1-bubble.json",
+                        {"agent_source": "codex", "session_id": "s1",
+                         "phase": "user-prompt", "n": i})
+        control = self._drain(spool, consumed, state_file, hermes)
+        self.assertEqual(control["foreign"]["awarded"], {"prompt_sent": 2500})
+
+        spool, consumed, state_file, hermes = self._make_dirs()
+        for i in range(2500):
+            spool_event(spool, f"1-{i:04d}-1-bubble.json",
+                        {"agent_source": "codex", "session_id": "s1",
+                         "phase": "user-prompt", "n": i})
+        self._crash_between_write_and_prune(spool, consumed, state_file, hermes)
+        self._assert_clean_recovery(spool, consumed, state_file, hermes,
+                                    control["combined_xp"], 2500)
 
 
 class CursorMath(unittest.TestCase):
