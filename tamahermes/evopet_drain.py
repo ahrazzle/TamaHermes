@@ -880,11 +880,19 @@ def run(
     # Consumption is recorded BEFORE any state write: the mirror's ownership write below
     # persists this same dict, so a crash between that write and the prune cannot re-award
     # these spool files on the next run (read_spool skips names already consumed).
+    #
+    # The bounds are a floor for the batch this run just consumed, not a hard cap: a run
+    # that absorbs more files than the bound must keep every name it consumed, or a crash
+    # before the prune would let the replay re-read (and re-award) the overflow -- and the
+    # prune's recovery pass below could never move it out of the spool.
+    prior_consumed = list(combined["cursor"].get("consumed") or [])
+    prior_hashes = list(combined["cursor"].get("consumed_hashes") or [])
     combined["cursor"]["consumed"] = _capped(
-        list(combined["cursor"].get("consumed") or []) + foreign["processed"], 1000
+        prior_consumed + foreign["processed"], max(1000, len(foreign["processed"]))
     )
     combined["cursor"]["consumed_hashes"] = _capped(
-        list(combined["cursor"].get("consumed_hashes") or []) + foreign["hashes"], 2000
+        prior_hashes + foreign["hashes"],
+        max(2000, len(prior_hashes) + len(foreign["hashes"])),
     )
 
     # The design doc's acceptance check 3: a no-op run changes no bytes.
@@ -927,8 +935,9 @@ def run(
         # Crash recovery: a run that died between the state write and the prune leaves
         # consumed spool files behind. read_spool skips those names, so they never appear
         # in `processed` again -- but the spool must hold no absorbed foreign event
-        # (acceptance check 4), so move them now.
-        for name in combined["cursor"].get("consumed") or []:
+        # (acceptance check 4), so move them now. The union of the pre-run and post-run
+        # cursor covers names the bound dropped from either list.
+        for name in set(prior_consumed) | set(combined["cursor"].get("consumed") or []):
             if name in moved:
                 continue
             src = spool / name
