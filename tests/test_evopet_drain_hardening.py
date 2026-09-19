@@ -7,7 +7,9 @@ Each test pins a bug that used to silently corrupt the combined ledger:
 * spool files were pruned before the state was written (crash = XP lost) and the
   mirror's early write persisted XP before the consumed cursor advanced (crash =
   XP re-awarded);
-* duplicate spool payloads (double-installed hooks) awarded twice;
+* duplicate spool payloads (double-installed hooks) awarded twice -- the content-hash
+  dedupe now covers route B only, since route-C care payloads are byte-identical by
+  construction and every press must apply;
 * a torn combined file read as a missing one, re-seeding cursors and double-counting
   every profile's history;
 * a no-op ``--apply`` run rewrote the state file (the design doc demands byte
@@ -211,6 +213,86 @@ class CrashSafety(unittest.TestCase):
         # Consumed, not lingering: it cannot re-award once the cooldown lifts.
         self.assertEqual(report["pruned"], 1)
         self.assertEqual(list(self.spool.glob("*.json")), [])
+
+    def test_crash_before_prune_still_prunes_on_next_run(self) -> None:
+        """SIGKILL between the state write and the prune leaves consumed files in
+        the spool. The next run must award nothing new AND move the stuck files
+        out: the spool must hold no absorbed foreign event (acceptance check 4),
+        not just award zero."""
+        spool_event(self.spool, "1-1-1-bubble.json",
+                    {"agent_source": "codex", "session_id": "s1", "phase": "user-prompt"})
+        spool_event(self.spool, "1-1-2-bubble.json",
+                    {"agent_source": "codex", "session_id": "s1", "phase": "stop",
+                     "agent_state": "waving"})
+        first = self._run(apply=True)
+        self.assertEqual(first["pruned"], 2)
+
+        # The crash: everything the prune moved is back in the spool, as if the
+        # prune never ran (the state file, and its consumed cursor, survived).
+        for name in ("1-1-1-bubble.json", "1-1-2-bubble.json"):
+            (self.consumed / name).rename(self.spool / name)
+
+        second = self._run(apply=True)
+        self.assertEqual(second["foreign"]["xp"], 0)
+        self.assertEqual(second["combined_xp"], first["combined_xp"])
+        # The stuck files are pruned even though they award nothing.
+        self.assertEqual(second["pruned"], 2)
+        self.assertEqual(list(self.spool.glob("*.json")), [])
+        self.assertEqual(
+            sorted(p.name for p in self.consumed.glob("*.json")),
+            ["1-1-1-bubble.json", "1-1-2-bubble.json"],
+        )
+
+
+class CareRepeats(unittest.TestCase):
+    """Route-C care payloads are byte-identical by construction: two presses of the
+    same control spool the same payload. Content-hash dedupe must not swallow the
+    repeats -- every press applies, in this run and in later ones."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        self.spool = self.root / "spool"
+        self.spool.mkdir()
+        self.consumed = self.root / "consumed"
+        self.state_file = self.root / "combined.json"
+        self.hermes = self.root / "hermes"
+        self.hermes.mkdir()
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def _run(self, apply: bool = False, **kwargs):
+        return run(self.spool, self.state_file, self.consumed, apply=apply,
+                   hermes_root=self.hermes, **kwargs)
+
+    def test_identical_care_payloads_apply_every_time(self) -> None:
+        feed = {"event": "care", "action": "feed", "agent_source": "evopet"}
+        spool_event(self.spool, "1-1-1-care.json", dict(feed))
+        spool_event(self.spool, "1-1-2-care.json", dict(feed))
+        first = self._run(apply=True)
+        # Two presses, two awards: 3 XP each from EVENT_DELTAS['care'].
+        self.assertEqual(first["care"], {"feed": 2})
+        self.assertEqual(first["combined_xp"], 6)
+        self.assertEqual(first["foreign"]["skipped"].get("duplicate", 0), 0)
+
+        # A third identical press in a later run applies again.
+        spool_event(self.spool, "1-1-3-care.json", dict(feed))
+        second = self._run(apply=True)
+        self.assertEqual(second["care"], {"feed": 1})
+        self.assertEqual(second["combined_xp"], 9)
+        self.assertEqual(second["foreign"]["skipped"].get("duplicate", 0), 0)
+
+    def test_duplicate_route_b_payloads_still_award_once(self) -> None:
+        """The care exemption must not leak into route B: double-installed hooks
+        posting byte-identical payloads still award once."""
+        prompt = {"agent_source": "codex", "session_id": "s1", "phase": "user-prompt"}
+        spool_event(self.spool, "1-1-1-bubble.json", dict(prompt))
+        spool_event(self.spool, "1-1-2-bubble.json", dict(prompt))
+        report = self._run(apply=True)
+        self.assertEqual(report["foreign"]["awarded"], {"prompt_sent": 1})
+        self.assertEqual(report["foreign"]["skipped"]["duplicate"], 1)
+        self.assertEqual(report["pruned"], 2)
 
 
 class CursorMath(unittest.TestCase):

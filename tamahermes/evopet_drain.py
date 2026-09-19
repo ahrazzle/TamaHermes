@@ -464,8 +464,12 @@ def classify(
     would mark every real turn end unresolved instead of success/failure.
 
     ``seen_hashes`` dedupes identical payloads -- double-installed hooks posting the same
-    event twice award once. Every skipped event is still listed in ``processed`` so the
-    caller prunes it.
+    event twice award once. Route-C care is exempt: care payloads are byte-identical by
+    construction (two presses of the same control spool the same payload), so content
+    dedupe would swallow legitimate repeats. Double-installed hooks are a route-B problem;
+    care comes from a single in-process writer, and the consumed-name cursor guarantees
+    each spool file awards once. Every skipped event is still listed in ``processed`` so
+    the caller prunes it.
     """
     awarded: Dict[str, int] = {}
     per_source: Dict[str, int] = {}
@@ -479,17 +483,21 @@ def classify(
     seen: Set[str] = set(seen_hashes or ())
 
     for path, event in events:
-        digest = _payload_hash(event)
-        if digest in seen:
-            skipped["duplicate"] = skipped.get("duplicate", 0) + 1
-            processed.append(path.name)
-            continue
-        seen.add(digest)
-        hashes.append(digest)
+        kind = path.stem.split("-")[-1]
+        # Route-C care is exempt from content dedupe (see docstring): care payloads
+        # are byte-identical by construction, so every spool file must award.
+        is_care = str(event.get("event") or "") == "care" or kind == "care"
+        if not is_care:
+            digest = _payload_hash(event)
+            if digest in seen:
+                skipped["duplicate"] = skipped.get("duplicate", 0) + 1
+                processed.append(path.name)
+                continue
+            seen.add(digest)
+            hashes.append(digest)
 
         source = str(event.get("agent_source") or "")
         session = event.get("session_id")
-        kind = path.stem.split("-")[-1]
 
         # Route separation first: a Hermes-sourced event is route A work -- the per-profile
         # ledgers already counted it, more richly -- whatever the payload claims to be,
@@ -499,9 +507,7 @@ def classify(
             processed.append(path.name)
             continue
 
-        # Route C: a care request carries no session and must not fall into the
-        # display-only bucket the agents' session-less posts land in.
-        if str(event.get("event") or "") == "care" or kind == "care":
+        if is_care:
             action = str(event.get("action") or "")
             if action in CARE_ACTIONS:
                 care[action] = care.get(action, 0) + 1
@@ -911,7 +917,20 @@ def run(
         if changed:
             _write_state(state_file, combined)
         consumed_dir.mkdir(parents=True, exist_ok=True)
+        moved: Set[str] = set()
         for name in foreign["processed"]:
+            src = spool / name
+            if src.exists():
+                shutil.move(str(src), str(consumed_dir / name))
+                moved.add(name)
+                pruned += 1
+        # Crash recovery: a run that died between the state write and the prune leaves
+        # consumed spool files behind. read_spool skips those names, so they never appear
+        # in `processed` again -- but the spool must hold no absorbed foreign event
+        # (acceptance check 4), so move them now.
+        for name in combined["cursor"].get("consumed") or []:
+            if name in moved:
+                continue
             src = spool / name
             if src.exists():
                 shutil.move(str(src), str(consumed_dir / name))
