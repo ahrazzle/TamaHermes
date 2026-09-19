@@ -881,18 +881,29 @@ def run(
     # persists this same dict, so a crash between that write and the prune cannot re-award
     # these spool files on the next run (read_spool skips names already consumed).
     #
-    # The bounds are a floor for the batch this run just consumed, not a hard cap: a run
+    # The name bound is a floor for the batch this run just consumed, not a hard cap: a run
     # that absorbs more files than the bound must keep every name it consumed, or a crash
     # before the prune would let the replay re-read (and re-award) the overflow -- and the
     # prune's recovery pass below could never move it out of the spool.
     prior_consumed = list(combined["cursor"].get("consumed") or [])
-    prior_hashes = list(combined["cursor"].get("consumed_hashes") or [])
     combined["cursor"]["consumed"] = _capped(
         prior_consumed + foreign["processed"], max(1000, len(foreign["processed"]))
     )
+    # A cursor entry may only be dropped once its spool file is gone: the replay of a
+    # crash classifies nothing, so a second crash in the same window would trim the
+    # cursor while the files are still in the spool, and the next clean run would
+    # re-read (and re-award) them. Route-C care has no hash backstop, so the name
+    # cursor is its only crash guard.
+    kept_names = set(combined["cursor"]["consumed"])
+    stranded = [n for n in prior_consumed
+                if n not in kept_names and (spool / n).exists()]
+    combined["cursor"]["consumed"] = combined["cursor"]["consumed"] + stranded
+    # The hash cursor is a bounded dedupe window (2000 entries) for route-B payloads,
+    # with the same batch floor: a run absorbing more distinct hashes keeps them all.
+    # It is a backstop only -- the name cursor above is the crash guard.
+    prior_hashes = list(combined["cursor"].get("consumed_hashes") or [])
     combined["cursor"]["consumed_hashes"] = _capped(
-        prior_hashes + foreign["hashes"],
-        max(2000, len(prior_hashes) + len(foreign["hashes"])),
+        prior_hashes + foreign["hashes"], max(2000, len(foreign["hashes"]))
     )
 
     # The design doc's acceptance check 3: a no-op run changes no bytes.

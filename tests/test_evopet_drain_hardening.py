@@ -363,8 +363,24 @@ class CrashOverflow(unittest.TestCase):
         for i in range(1200):
             spool_event(spool, f"1-{i:04d}-1-care.json", dict(feed))
         self._crash_between_write_and_prune(spool, consumed, state_file, hermes)
+        # A second crash in the same window: the replay classifies nothing, so the
+        # cursor must not shrink while the files are still in the spool.
+        self._crash_between_write_and_prune(spool, consumed, state_file, hermes)
         self._assert_clean_recovery(spool, consumed, state_file, hermes,
                                     control["combined_xp"], 1200)
+
+    def test_hash_cursor_is_a_bounded_window(self) -> None:
+        """25 runs of 100 distinct route-B payloads: the hash cursor caps at 2000."""
+        spool, consumed, state_file, hermes = self._make_dirs()
+        for run_i in range(25):
+            for i in range(100):
+                spool_event(spool, f"{run_i}-{i:04d}-1-bubble.json",
+                            {"agent_source": "codex", "session_id": f"s{run_i}",
+                             "phase": "user-prompt", "n": i})
+            report = self._drain(spool, consumed, state_file, hermes)
+            self.assertEqual(report["foreign"]["awarded"], {"prompt_sent": 100})
+        cursor = json.loads(state_file.read_text())["cursor"]
+        self.assertEqual(len(cursor["consumed_hashes"]), 2000)
 
     def test_route_b_overflow_survives_crash(self) -> None:
         """2500 distinct route-B turn payloads exceed the 2000-hash bound."""
@@ -381,6 +397,8 @@ class CrashOverflow(unittest.TestCase):
             spool_event(spool, f"1-{i:04d}-1-bubble.json",
                         {"agent_source": "codex", "session_id": "s1",
                          "phase": "user-prompt", "n": i})
+        self._crash_between_write_and_prune(spool, consumed, state_file, hermes)
+        # A second crash in the same window: the name cursor is route B's guard here.
         self._crash_between_write_and_prune(spool, consumed, state_file, hermes)
         self._assert_clean_recovery(spool, consumed, state_file, hermes,
                                     control["combined_xp"], 2500)
