@@ -4,10 +4,10 @@ Opt-in only: set EVOPET_HUD_CPU_GATE=1 to measure the live three-process stack
 over 60 s windows. This NEVER signals anything — it reads `ps -o time=`
 deltas. When the expected processes (supervisor, sidecar, helper) are not all
 alive — e.g. the HUD idle-stopped because EvoPet is closed, exactly the state
-Leo §1.2 observed — the run aborts (skip), because measuring a half-dead stack
+observed during the §1.2 review — the run aborts (skip), because measuring a half-dead stack
 is not a pass or a fail.
 
-Gates (locked in leo-spec D8):
+Gates (locked in design spec D8):
   G1 expanded, idle      total <= 3.0 %
   G2 legacy-collapsed (hidden-shape) idle total <= 1.5 % (target <= 1.0 %)
   G3 hidden, idle        total <= 1.0 %

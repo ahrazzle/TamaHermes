@@ -3,7 +3,7 @@
 #
 # Idempotent: safe to run repeatedly, never enables TAMAHERMES_SYNC or duplicates
 # route-A hooks. The agent runs the canonical checkout's venv every 60s:
-#   /Users/kethuda/evopet-pet/.venv/bin/python -m tamahermes.evopet_drain --apply
+#   <checkout>/.venv/bin/python -m tamahermes.evopet_drain --apply
 #
 # Usage:
 #   ./launchd/install.sh
@@ -11,15 +11,11 @@
 #
 set -eu
 
-REPO_ROOT="/Users/kethuda/evopet-pet"
-PLIST_SRC="$REPO_ROOT/launchd/com.team6.evopet-drain.plist"
-# When running from a worktree, the source may be in the worktree itself.
-if [ ! -f "$PLIST_SRC" ]; then
-  SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-  PLIST_SRC="$SCRIPT_DIR/com.team6.evopet-drain.plist"
-fi
-PLIST_DST="$HOME/Library/LaunchAgents/com.team6.evopet-drain.plist"
-LABEL="com.team6.evopet-drain"
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+REPO_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
+PLIST_SRC="$SCRIPT_DIR/com.tamahermes.evopet-drain.plist"
+PLIST_DST="$HOME/Library/LaunchAgents/com.tamahermes.evopet-drain.plist"
+LABEL="com.tamahermes.evopet-drain"
 LOG_DIR="$HOME/Library/Logs"
 
 if [ "${1:-}" = "--uninstall" ]; then
@@ -44,8 +40,12 @@ if [ ! -x "$REPO_ROOT/.venv/bin/python" ]; then
   echo "warn: $REPO_ROOT/.venv/bin/python not found — agent will fail until venv is created" >&2
 fi
 
-# Install/replace the plist.
-cp -f "$PLIST_SRC" "$PLIST_DST"
+# Install/replace the plist after resolving the checkout and home placeholders.
+REPO_ROOT_ESCAPED=$(printf '%s' "$REPO_ROOT" | sed 's/[\\&|]/\\&/g')
+HOME_ESCAPED=$(printf '%s' "$HOME" | sed 's/[\\&|]/\\&/g')
+sed -e "s|__REPO_ROOT__|$REPO_ROOT_ESCAPED|g" \
+    -e "s|__HOME__|$HOME_ESCAPED|g" \
+    "$PLIST_SRC" > "$PLIST_DST"
 echo "Installed $PLIST_DST"
 
 # (Re)load the agent. bootout first so reload is idempotent even if already loaded.
