@@ -53,8 +53,17 @@ def run_hermes_hook(home: Path, payload: dict) -> subprocess.CompletedProcess[st
 
 
 def load_plugin_module():
-    spec = importlib.util.spec_from_file_location("tamahermes_hermes_plugin", PLUGIN_INIT)
+    package = type(sys)("hermes_plugins")
+    package.__path__ = []
+    sys.modules.setdefault("hermes_plugins", package)
+    spec = importlib.util.spec_from_file_location(
+        "hermes_plugins.tamahermes",
+        PLUGIN_INIT,
+        submodule_search_locations=[str(PLUGIN_INIT.parent)],
+    )
+    assert spec is not None
     module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
     assert spec.loader is not None
     spec.loader.exec_module(module)
     return module
@@ -276,51 +285,15 @@ class SheetPruningTests(unittest.TestCase):
             self.assertFalse(stale.exists())
 
 
-class PluginRepoResolutionTests(unittest.TestCase):
-    """The plugin must not silently import an unrelated nearby checkout."""
-
-    def test_a_nearby_checkout_in_cwd_is_never_picked_up(self) -> None:
-        """Launching `hermes` from a dir containing a tamahermes/ must not import it."""
+class BundledPluginImportTests(unittest.TestCase):
+    def test_plugin_imports_without_checkout_environment(self) -> None:
         module = load_plugin_module()
-        with tempfile.TemporaryDirectory() as tmp:
-            decoy = Path(tmp)
-            (decoy / "tamahermes").mkdir()
-            (decoy / "tamahermes" / "bridge.py").write_text("")
-            (decoy / "tamahermes" / "hermes_events.py").write_text("")
-
-            original = Path.cwd()
-            os.chdir(decoy)
-            try:
-                self.assertNotIn(decoy.resolve(), [c.resolve() for c in module._repo_candidates()])
-            finally:
-                os.chdir(original)
-
-    def test_stale_codex_only_checkout_is_rejected(self) -> None:
-        module = load_plugin_module()
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            (root / "tamahermes").mkdir()
-            (root / "tamahermes" / "bridge.py").write_text("")
-            self.assertFalse(module._looks_like_tamahermes_checkout(root))
-            (root / "tamahermes" / "hermes_events.py").write_text("")
-            self.assertTrue(module._looks_like_tamahermes_checkout(root))
-
-    def test_recorded_repo_root_wins(self) -> None:
-        module = load_plugin_module()
-        with tempfile.TemporaryDirectory() as tmp:
-            home = Path(tmp) / "home"
-            (home / "tamahermes").mkdir(parents=True)
-            (home / "tamahermes" / "repo-root").write_text("/some/checkout\n", encoding="utf-8")
-
-            saved = os.environ.pop("TAMAHERMES_REPO_ROOT", None)
-            os.environ["HERMES_HOME"] = str(home)
-            try:
-                candidates = module._repo_candidates()
-            finally:
-                os.environ.pop("HERMES_HOME", None)
-                if saved is not None:
-                    os.environ["TAMAHERMES_REPO_ROOT"] = saved
-            self.assertEqual(candidates[0], Path("/some/checkout"))
+        saved = os.environ.pop("TAMAHERMES_REPO_ROOT", None)
+        try:
+            self.assertTrue(module._ensure_tamahermes_importable())
+        finally:
+            if saved is not None:
+                os.environ["TAMAHERMES_REPO_ROOT"] = saved
 
 
 if __name__ == "__main__":

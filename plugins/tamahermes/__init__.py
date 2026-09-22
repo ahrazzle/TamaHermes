@@ -30,7 +30,6 @@ from __future__ import annotations
 
 import logging
 import os
-import sys
 import threading
 from pathlib import Path
 from typing import Any, Dict, List
@@ -44,78 +43,18 @@ _worker: threading.Thread | None = None
 _dropped_warning_emitted = False
 
 
-def _hermes_home_for_bootstrap() -> Path:
-    """Resolve HERMES_HOME without importing tamahermes (we may not have it yet)."""
-    raw = os.environ.get("HERMES_HOME") or "~/.hermes"
-    return Path(raw).expanduser()
-
-
-def _repo_candidates() -> List[Path]:
-    """Places a node of ``tamahermes/`` might live, best first.
-
-    The installer writes ``<HERMES_HOME>/tamahermes/repo-root`` so normal Hermes
-    runs (no env vars set) still find the checkout.
-
-    Deliberately excludes the process CWD: ``hermes`` can be launched from
-    anywhere, and silently importing whatever ``tamahermes/`` happens to be
-    nearby is worse than not loading at all. Set ``TAMAHERMES_REPO_ROOT`` if you
-    run the plugin against an uninstalled checkout.
-    """
-    candidates: List[Path] = []
-    env_root = os.environ.get("TAMAHERMES_REPO_ROOT")
-    if env_root:
-        candidates.append(Path(env_root))
-    marker = _hermes_home_for_bootstrap() / "tamahermes" / "repo-root"
-    try:
-        if marker.is_file():
-            recorded = marker.read_text(encoding="utf-8").strip()
-            if recorded:
-                candidates.append(Path(recorded))
-    except OSError:
-        pass
-    # Conventional checkout locations, current name first.
-    candidates.append(Path.home() / "TamaHermes")
-    candidates.append(Path.home() / "TamaHermes")
-    return candidates
-
-
-def _looks_like_tamahermes_checkout(root: Path) -> bool:
-    """Only accept a real Hermes-capable checkout, not a stale Codex-only copy."""
-    try:
-        return (root / "tamahermes" / "bridge.py").is_file() and (root / "tamahermes" / "hermes_events.py").is_file()
-    except OSError:
-        return False
-
-
 def _ensure_tamahermes_importable() -> bool:
-    """Import ``tamahermes`` from site-packages, else from a known checkout."""
+    """Confirm the package vendored beside this plugin is importable."""
     global _import_locked
     if _import_locked:
         return True
     try:
-        import tamahermes  # noqa: F401
-
-        _import_locked = True
-        return True
-    except ImportError:
-        pass
-    for root in _repo_candidates():
-        if not _looks_like_tamahermes_checkout(root):
-            continue
-        sys.path.insert(0, str(root))
-        try:
-            import tamahermes  # noqa: F401
-
-            _import_locked = True
-            logger.debug("tamahermes: imported tamahermes from %s", root)
-            return True
-        except ImportError:
-            sys.path.remove(str(root))
-    logger.warning(
-        "tamahermes: could not import tamahermes; no growth will be recorded. "
-        "Re-run hermes/install-hermes.sh (it records the checkout path) or set TAMAHERMES_REPO_ROOT."
-    )
-    return False
+        from . import tamahermes as _bundled_tamahermes  # noqa: F401
+    except ImportError as exc:
+        logger.warning("tamahermes: bundled package is not importable: %s", exc)
+        return False
+    _import_locked = True
+    return True
 
 
 def _sync_mode() -> bool:
@@ -124,11 +63,11 @@ def _sync_mode() -> bool:
 
 def _apply(payloads: List[Dict[str, Any]]) -> None:
     """Apply queued payloads to the ledger and refresh the installed pet once."""
-    from tamahermes.catalog import load_catalog
-    from tamahermes.hermes_events import apply_hermes_hook
-    from tamahermes.paths import default_state_path, hermes_home, repo_root
+    from .tamahermes.catalog import load_catalog
+    from .tamahermes.hermes_events import apply_hermes_hook
+    from .tamahermes.paths import default_state_path, hermes_home, repo_root
 
-    root = Path(os.environ.get("TAMAHERMES_REPO_ROOT") or repo_root()).expanduser().resolve()
+    root = repo_root().expanduser().resolve()
     home = hermes_home(os.environ.get("TAMAHERMES_HOME") or os.environ.get("HERMES_HOME"))
     catalog = load_catalog(root, os.environ.get("TAMAHERMES_CATALOG_DIR") or None)
     state_path = default_state_path(home)
@@ -166,7 +105,7 @@ def record(hook_event_name: str, **payload: Any) -> None:
             _dropped_warning_emitted = True
             logger.warning(
                 "tamahermes: the 'tamahermes' package is not importable — "
-                "run `pip install -e /path/to/TamaHermes` (or set TAMAHERMES_REPO_ROOT). Plugin inert."
+                "the bundled package is missing or incomplete. Plugin inert."
             )
         return
     entry = {"hook_event_name": hook_event_name, **payload}

@@ -205,7 +205,6 @@ what the shell-hook script calls). `--reset` clears the turn bookkeeping.
 | `HERMES_HOME` | target Hermes home (profile-aware) |
 | `TAMAHERMES_HOME` | overrides `HERMES_HOME` for the hook script/plugin |
 | `TAMAHERMES_PETDEX_HOME` | Petdex desktop home to mirror into; unset = no desktop mirror |
-| `TAMAHERMES_REPO_ROOT` | lets the plugin/script import `tamahermes` without an install |
 | `TAMAHERMES_PY` | interpreter for the shell-hook wrapper |
 | `TAMAHERMES_SYNC=1` | run the plugin inline instead of on the worker thread (tests) |
 | `TAMAHERMES_LINE` / `TAMAHERMES_MACHINE` | pin the companion line / tamago shell |
@@ -276,11 +275,10 @@ plugins:
     - petdex-desktop
 ```
 
-The installer records the checkout in `<HERMES_HOME>/tamahermes/repo-root`, which
-is how the plugin imports `tamahermes` during an ordinary `hermes` run — no
-environment variable and no site-packages install required (Pillow, the only
-dependency, already ships with Hermes). If you move the checkout, re-run the
-installer or set `TAMAHERMES_REPO_ROOT`.
+The Hermes plugin bundles the `tamahermes` package and catalog assets under
+`<HERMES_HOME>/plugins/tamahermes/`, so an ordinary `hermes` run does not depend
+on the source checkout, a repo marker, or a site-packages install. The installer
+still installs the CLI from the checkout for explicit command-line use.
 
 ## Tests
 
