@@ -27,15 +27,9 @@ from pathlib import Path
 HOOK_SCHEMA = "tamahermes.hermes_hook.v1"
 
 
-def repo_root() -> Path:
-    value = os.environ.get("TAMAHERMES_REPO_ROOT")
-    if value:
-        return Path(value).expanduser().resolve()
-    return Path(__file__).resolve().parents[3]
-
-
-ROOT = repo_root()
-sys.path.insert(0, str(ROOT))
+PLUGIN_ROOT = Path(__file__).resolve().parents[1]
+ROOT = PLUGIN_ROOT / "tamahermes"
+sys.path.insert(0, str(PLUGIN_ROOT))
 
 from tamahermes.catalog import load_catalog  # noqa: E402
 from tamahermes.hermes_events import apply_hermes_hook, read_stdin_payload  # noqa: E402

@@ -18,19 +18,19 @@ post_api_request     ``token_usage``
 on_session_end       turn-level ``task_success`` / ``task_failure`` fallback
 ===================  ==========================================================
 
-Hot-path discipline: hook callbacks are observers and must be cheap. Ledger
-writes happen on a single background worker thread, and the expensive part
-(recompiling the annotated atlas and reinstalling the pet package) is coalesced
-so a burst of tool calls triggers one rebuild, not forty. A failed rebuild is
-logged and dropped — a mascot must never break an agent turn. Set
-``TAMAHERMES_SYNC=1`` to run inline instead (used by the test suite).
+Hot-path discipline: ordinary hook callbacks enqueue work on a single
+background worker, and atlas rebuilds are coalesced. The terminal
+``on_session_end`` callback is the exception: it waits briefly for queued work
+and applies its final event inline because Hermes may hard-exit immediately
+after the callback. A failed rebuild is logged and dropped — a mascot must
+never break an agent turn. Set ``TAMAHERMES_SYNC=1`` to run all hooks inline
+(used by the test suite).
 """
 
 from __future__ import annotations
 
 import logging
 import os
-import sys
 import threading
 from pathlib import Path
 from typing import Any, Dict, List
@@ -44,78 +44,18 @@ _worker: threading.Thread | None = None
 _dropped_warning_emitted = False
 
 
-def _hermes_home_for_bootstrap() -> Path:
-    """Resolve HERMES_HOME without importing tamahermes (we may not have it yet)."""
-    raw = os.environ.get("HERMES_HOME") or "~/.hermes"
-    return Path(raw).expanduser()
-
-
-def _repo_candidates() -> List[Path]:
-    """Places a node of ``tamahermes/`` might live, best first.
-
-    The installer writes ``<HERMES_HOME>/tamahermes/repo-root`` so normal Hermes
-    runs (no env vars set) still find the checkout.
-
-    Deliberately excludes the process CWD: ``hermes`` can be launched from
-    anywhere, and silently importing whatever ``tamahermes/`` happens to be
-    nearby is worse than not loading at all. Set ``TAMAHERMES_REPO_ROOT`` if you
-    run the plugin against an uninstalled checkout.
-    """
-    candidates: List[Path] = []
-    env_root = os.environ.get("TAMAHERMES_REPO_ROOT")
-    if env_root:
-        candidates.append(Path(env_root))
-    marker = _hermes_home_for_bootstrap() / "tamahermes" / "repo-root"
-    try:
-        if marker.is_file():
-            recorded = marker.read_text(encoding="utf-8").strip()
-            if recorded:
-                candidates.append(Path(recorded))
-    except OSError:
-        pass
-    # Conventional checkout locations, current name first.
-    candidates.append(Path.home() / "TamaHermes")
-    candidates.append(Path.home() / "TamaHermes")
-    return candidates
-
-
-def _looks_like_tamahermes_checkout(root: Path) -> bool:
-    """Only accept a real Hermes-capable checkout, not a stale Codex-only copy."""
-    try:
-        return (root / "tamahermes" / "bridge.py").is_file() and (root / "tamahermes" / "hermes_events.py").is_file()
-    except OSError:
-        return False
-
-
 def _ensure_tamahermes_importable() -> bool:
-    """Import ``tamahermes`` from site-packages, else from a known checkout."""
+    """Confirm the package vendored beside this plugin is importable."""
     global _import_locked
     if _import_locked:
         return True
     try:
-        import tamahermes  # noqa: F401
-
-        _import_locked = True
-        return True
-    except ImportError:
-        pass
-    for root in _repo_candidates():
-        if not _looks_like_tamahermes_checkout(root):
-            continue
-        sys.path.insert(0, str(root))
-        try:
-            import tamahermes  # noqa: F401
-
-            _import_locked = True
-            logger.debug("tamahermes: imported tamahermes from %s", root)
-            return True
-        except ImportError:
-            sys.path.remove(str(root))
-    logger.warning(
-        "tamahermes: could not import tamahermes; no growth will be recorded. "
-        "Re-run hermes/install-hermes.sh (it records the checkout path) or set TAMAHERMES_REPO_ROOT."
-    )
-    return False
+        from . import tamahermes as _bundled_tamahermes  # noqa: F401
+    except ImportError as exc:
+        logger.warning("tamahermes: bundled package is not importable: %s", exc)
+        return False
+    _import_locked = True
+    return True
 
 
 def _sync_mode() -> bool:
@@ -124,11 +64,11 @@ def _sync_mode() -> bool:
 
 def _apply(payloads: List[Dict[str, Any]]) -> None:
     """Apply queued payloads to the ledger and refresh the installed pet once."""
-    from tamahermes.catalog import load_catalog
-    from tamahermes.hermes_events import apply_hermes_hook
-    from tamahermes.paths import default_state_path, hermes_home, repo_root
+    from .tamahermes.catalog import load_catalog
+    from .tamahermes.hermes_events import apply_hermes_hook
+    from .tamahermes.paths import default_state_path, hermes_home, repo_root
 
-    root = Path(os.environ.get("TAMAHERMES_REPO_ROOT") or repo_root()).expanduser().resolve()
+    root = repo_root().expanduser().resolve()
     home = hermes_home(os.environ.get("TAMAHERMES_HOME") or os.environ.get("HERMES_HOME"))
     catalog = load_catalog(root, os.environ.get("TAMAHERMES_CATALOG_DIR") or None)
     state_path = default_state_path(home)
@@ -158,18 +98,39 @@ def _drain() -> None:
             logger.debug("tamahermes: apply failed: %s", exc)
 
 
-def record(hook_event_name: str, **payload: Any) -> None:
-    """Queue one hook payload for ledger application (or apply inline in sync mode)."""
+def _flush_pending(timeout: float = 25.0) -> bool:
+    """Wait briefly for queued hook work before a caller's hard process exit."""
+    with _queue_lock:
+        worker = _worker
+    if worker is None or worker is threading.current_thread():
+        return True
+    worker.join(timeout=max(0.0, timeout))
+    if worker.is_alive():
+        logger.warning("tamahermes: queued hook work did not finish before session end")
+        return False
+    return True
+
+
+def record(hook_event_name: str, *, sync: bool = False, **payload: Any) -> None:
+    """Queue one hook payload, or apply it inline at a durability boundary."""
     if not _ensure_tamahermes_importable():
         global _dropped_warning_emitted
         if not _dropped_warning_emitted:
             _dropped_warning_emitted = True
             logger.warning(
                 "tamahermes: the 'tamahermes' package is not importable — "
-                "run `pip install -e /path/to/TamaHermes` (or set TAMAHERMES_REPO_ROOT). Plugin inert."
+                "the bundled package is missing or incomplete. Plugin inert."
             )
         return
     entry = {"hook_event_name": hook_event_name, **payload}
+    if sync:
+        if not _flush_pending():
+            return
+        try:
+            _apply([entry])
+        except Exception as exc:  # noqa: BLE001 - observers never raise into the agent
+            logger.debug("tamahermes: terminal sync apply failed: %s", exc)
+        return
     if _sync_mode():
         try:
             _apply([entry])
@@ -281,6 +242,7 @@ def _on_session_end(
 ) -> None:
     record(
         "on_session_end",
+        sync=True,
         session_id=session_id,
         turn_id=turn_id,
         completed=completed,

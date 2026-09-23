@@ -1,0 +1,723 @@
+{
+  "id": "pawn-evolution-v1",
+  "version": "2026.05",
+  "contract": "tamahermes-pawn-evolution-v1",
+  "generator": {
+    "name": "tamahermes-assets",
+    "assetVersion": "2026.05",
+    "source": "bundled-release-catalog"
+  },
+  "coordinateSystem": {
+    "pawnSource": [
+      24,
+      26
+    ],
+    "requiredPoseSet": [
+      "idle_0",
+      "idle_1",
+      "blink",
+      "squash",
+      "wave_0",
+      "wave_1",
+      "wave_2",
+      "jump_0",
+      "jump_1",
+      "jump_2",
+      "failed_0",
+      "failed_1",
+      "failed_2",
+      "wait_0",
+      "wait_1",
+      "wait_2",
+      "work_0",
+      "work_1",
+      "work_2",
+      "review_0",
+      "review_1",
+      "review_2",
+      "step_right_0",
+      "step_right_1",
+      "step_right_2",
+      "step_left_0",
+      "step_left_1",
+      "step_left_2"
+    ],
+    "palettePolicy": "transparent plus M2 identity main/shade inks, dark LCD face ink, and one readable lifecycle accessory accent ink",
+    "lcdRuleset": "m6-lcd-screen-integration-v1",
+    "artDirection": "m6.1-clean-limbed-pawn-v1"
+  },
+  "assetContract": {
+    "renderableFormRoot": "assets/pawn/pets/<form-id>/",
+    "requiredFiles": [
+      "poses.txt",
+      "pose_manifest.json",
+      "runtime_motion.json",
+      "poses_atlas.png",
+      "poses_atlas_x4.png",
+      "poses/*.png"
+    ],
+    "formIdPolicy": "Form ids are immutable once shipped; later balance changes branch rules, not old art roots.",
+    "slotPolicy": "Every declared stage and branch slot is shipped for every line."
+  },
+  "lifeStages": [
+    {
+      "id": "egg",
+      "displayName": "Egg",
+      "assetOwner": "pawn",
+      "status": "shipped",
+      "forms": [
+        "mais_egg",
+        "toast_egg"
+      ],
+      "notes": "Pre-hatch pawn art now exists; machine shells still provide the outer device."
+    },
+    {
+      "id": "hatchling",
+      "displayName": "Hatchling",
+      "assetOwner": "pawn",
+      "status": "shipped",
+      "forms": [
+        "mais_hatchling",
+        "toast_hatchling"
+      ],
+      "branchRole": "line-specific root before personality branches are visible"
+    },
+    {
+      "id": "child",
+      "displayName": "Child",
+      "assetOwner": "pawn",
+      "status": "shipped",
+      "forms": [
+        "mais",
+        "toast"
+      ],
+      "branchRole": "first user-facing named form"
+    },
+    {
+      "id": "teen",
+      "displayName": "Teen",
+      "assetOwner": "pawn",
+      "status": "shipped",
+      "branchSlots": [
+        "focused",
+        "resilient",
+        "restless"
+      ],
+      "forms": [
+        "mais_teen_focused",
+        "mais_teen_resilient",
+        "mais_teen_restless",
+        "toast_teen_focused",
+        "toast_teen_resilient",
+        "toast_teen_restless"
+      ]
+    },
+    {
+      "id": "adult",
+      "displayName": "Adult",
+      "assetOwner": "pawn",
+      "status": "shipped",
+      "branchSlots": [
+        "calm",
+        "resilient",
+        "worker",
+        "quiet",
+        "sleepy"
+      ],
+      "forms": [
+        "mais_adult_calm",
+        "mais_adult_quiet",
+        "mais_adult_resilient",
+        "mais_adult_sleepy",
+        "mais_adult_worker",
+        "toast_adult_calm",
+        "toast_adult_quiet",
+        "toast_adult_resilient",
+        "toast_adult_sleepy",
+        "toast_adult_worker"
+      ]
+    },
+    {
+      "id": "hibernation",
+      "displayName": "Hibernation",
+      "assetOwner": "pawn",
+      "status": "shipped",
+      "forms": [
+        "mais_hibernation",
+        "toast_hibernation"
+      ],
+      "branchRole": "gentle long-idle fallback instead of death art"
+    }
+  ],
+  "branchAxes": [
+    {
+      "id": "care_quality",
+      "signals": [
+        "careMistakes",
+        "ignoredUrgentCalls",
+        "healthTrend"
+      ],
+      "artImpact": "stable care nudges calm/focused outcomes; mistakes do not punish the user."
+    },
+    {
+      "id": "work_rhythm",
+      "signals": [
+        "completedRuns",
+        "tokenFeed",
+        "longTaskCompletions"
+      ],
+      "artImpact": "visible work props and energetic work poses in worker/focused branches."
+    },
+    {
+      "id": "recovery_style",
+      "signals": [
+        "failedThenResolved",
+        "testPassAfterFail",
+        "cleanupEvents"
+      ],
+      "artImpact": "resilient branches get sturdier silhouettes and clearer recovery poses."
+    },
+    {
+      "id": "boundary_style",
+      "signals": [
+        "dismissedLowPriorityCalls",
+        "quietness"
+      ],
+      "artImpact": "quiet/sleepy branches use smaller waves and more contained rest poses."
+    }
+  ],
+  "formIndex": {
+    "toast_egg": {
+      "lineId": "toast",
+      "stage": "egg",
+      "branch": null,
+      "assetRoot": "../pets/toast_egg",
+      "poseManifest": "../pets/toast_egg/pose_manifest.json",
+      "runtimeMotion": "../pets/toast_egg/runtime_motion.json",
+      "palette": {
+        "main": "#ffe9a8",
+        "secondary": "#c9823a",
+        "shade": "#c9823a",
+        "mainShade": "#26372c",
+        "accent": "#e9a1c8",
+        "identityMain": "#ffe9a8",
+        "identitySecondary": "#c9823a",
+        "identityAccent": "#e9a1c8"
+      },
+      "status": "shipped"
+    },
+    "toast_hatchling": {
+      "lineId": "toast",
+      "stage": "hatchling",
+      "branch": null,
+      "assetRoot": "../pets/toast_hatchling",
+      "poseManifest": "../pets/toast_hatchling/pose_manifest.json",
+      "runtimeMotion": "../pets/toast_hatchling/runtime_motion.json",
+      "palette": {
+        "main": "#ffe9a8",
+        "secondary": "#c9823a",
+        "shade": "#c9823a",
+        "mainShade": "#26372c",
+        "accent": "#77c9ef",
+        "identityMain": "#ffe9a8",
+        "identitySecondary": "#c9823a",
+        "identityAccent": "#77c9ef"
+      },
+      "status": "shipped"
+    },
+    "toast": {
+      "lineId": "toast",
+      "stage": "child",
+      "branch": null,
+      "assetRoot": "../pets/toast",
+      "poseManifest": "../pets/toast/pose_manifest.json",
+      "runtimeMotion": "../pets/toast/runtime_motion.json",
+      "palette": {
+        "main": "#ffe9a8",
+        "secondary": "#c9823a",
+        "shade": "#c9823a",
+        "mainShade": "#26372c",
+        "accent": "#ffb15e",
+        "identityMain": "#ffe9a8",
+        "identitySecondary": "#c9823a",
+        "identityAccent": "#ffb15e"
+      },
+      "status": "shipped"
+    },
+    "toast_teen_focused": {
+      "lineId": "toast",
+      "stage": "teen",
+      "branch": "focused",
+      "assetRoot": "../pets/toast_teen_focused",
+      "poseManifest": "../pets/toast_teen_focused/pose_manifest.json",
+      "runtimeMotion": "../pets/toast_teen_focused/runtime_motion.json",
+      "palette": {
+        "main": "#ffe9a8",
+        "secondary": "#c9823a",
+        "shade": "#c9823a",
+        "mainShade": "#26372c",
+        "accent": "#4d7ed8",
+        "identityMain": "#ffe9a8",
+        "identitySecondary": "#c9823a",
+        "identityAccent": "#4d7ed8"
+      },
+      "status": "shipped"
+    },
+    "toast_teen_resilient": {
+      "lineId": "toast",
+      "stage": "teen",
+      "branch": "resilient",
+      "assetRoot": "../pets/toast_teen_resilient",
+      "poseManifest": "../pets/toast_teen_resilient/pose_manifest.json",
+      "runtimeMotion": "../pets/toast_teen_resilient/runtime_motion.json",
+      "palette": {
+        "main": "#ffe9a8",
+        "secondary": "#c9823a",
+        "shade": "#c9823a",
+        "mainShade": "#26372c",
+        "accent": "#6cbf79",
+        "identityMain": "#ffe9a8",
+        "identitySecondary": "#c9823a",
+        "identityAccent": "#6cbf79"
+      },
+      "status": "shipped"
+    },
+    "toast_teen_restless": {
+      "lineId": "toast",
+      "stage": "teen",
+      "branch": "restless",
+      "assetRoot": "../pets/toast_teen_restless",
+      "poseManifest": "../pets/toast_teen_restless/pose_manifest.json",
+      "runtimeMotion": "../pets/toast_teen_restless/runtime_motion.json",
+      "palette": {
+        "main": "#ffe9a8",
+        "secondary": "#c9823a",
+        "shade": "#c9823a",
+        "mainShade": "#26372c",
+        "accent": "#e85aa6",
+        "identityMain": "#ffe9a8",
+        "identitySecondary": "#c9823a",
+        "identityAccent": "#e85aa6"
+      },
+      "status": "shipped"
+    },
+    "toast_adult_calm": {
+      "lineId": "toast",
+      "stage": "adult",
+      "branch": "calm",
+      "assetRoot": "../pets/toast_adult_calm",
+      "poseManifest": "../pets/toast_adult_calm/pose_manifest.json",
+      "runtimeMotion": "../pets/toast_adult_calm/runtime_motion.json",
+      "palette": {
+        "main": "#ffe9a8",
+        "secondary": "#c9823a",
+        "shade": "#c9823a",
+        "mainShade": "#26372c",
+        "accent": "#8bbb75",
+        "identityMain": "#ffe9a8",
+        "identitySecondary": "#c9823a",
+        "identityAccent": "#8bbb75"
+      },
+      "status": "shipped"
+    },
+    "toast_adult_resilient": {
+      "lineId": "toast",
+      "stage": "adult",
+      "branch": "resilient",
+      "assetRoot": "../pets/toast_adult_resilient",
+      "poseManifest": "../pets/toast_adult_resilient/pose_manifest.json",
+      "runtimeMotion": "../pets/toast_adult_resilient/runtime_motion.json",
+      "palette": {
+        "main": "#ffe9a8",
+        "secondary": "#c9823a",
+        "shade": "#c9823a",
+        "mainShade": "#26372c",
+        "accent": "#c75f5f",
+        "identityMain": "#ffe9a8",
+        "identitySecondary": "#c9823a",
+        "identityAccent": "#c75f5f"
+      },
+      "status": "shipped"
+    },
+    "toast_adult_worker": {
+      "lineId": "toast",
+      "stage": "adult",
+      "branch": "worker",
+      "assetRoot": "../pets/toast_adult_worker",
+      "poseManifest": "../pets/toast_adult_worker/pose_manifest.json",
+      "runtimeMotion": "../pets/toast_adult_worker/runtime_motion.json",
+      "palette": {
+        "main": "#ffe9a8",
+        "secondary": "#c9823a",
+        "shade": "#c9823a",
+        "mainShade": "#26372c",
+        "accent": "#6b4a2f",
+        "identityMain": "#ffe9a8",
+        "identitySecondary": "#c9823a",
+        "identityAccent": "#6b4a2f"
+      },
+      "status": "shipped"
+    },
+    "toast_adult_quiet": {
+      "lineId": "toast",
+      "stage": "adult",
+      "branch": "quiet",
+      "assetRoot": "../pets/toast_adult_quiet",
+      "poseManifest": "../pets/toast_adult_quiet/pose_manifest.json",
+      "runtimeMotion": "../pets/toast_adult_quiet/runtime_motion.json",
+      "palette": {
+        "main": "#ffe9a8",
+        "secondary": "#c9823a",
+        "shade": "#c9823a",
+        "mainShade": "#26372c",
+        "accent": "#9987ca",
+        "identityMain": "#ffe9a8",
+        "identitySecondary": "#c9823a",
+        "identityAccent": "#9987ca"
+      },
+      "status": "shipped"
+    },
+    "toast_adult_sleepy": {
+      "lineId": "toast",
+      "stage": "adult",
+      "branch": "sleepy",
+      "assetRoot": "../pets/toast_adult_sleepy",
+      "poseManifest": "../pets/toast_adult_sleepy/pose_manifest.json",
+      "runtimeMotion": "../pets/toast_adult_sleepy/runtime_motion.json",
+      "palette": {
+        "main": "#ffe9a8",
+        "secondary": "#c9823a",
+        "shade": "#c9823a",
+        "mainShade": "#26372c",
+        "accent": "#5f6faf",
+        "identityMain": "#ffe9a8",
+        "identitySecondary": "#c9823a",
+        "identityAccent": "#5f6faf"
+      },
+      "status": "shipped"
+    },
+    "toast_hibernation": {
+      "lineId": "toast",
+      "stage": "hibernation",
+      "branch": null,
+      "assetRoot": "../pets/toast_hibernation",
+      "poseManifest": "../pets/toast_hibernation/pose_manifest.json",
+      "runtimeMotion": "../pets/toast_hibernation/runtime_motion.json",
+      "palette": {
+        "main": "#ffe9a8",
+        "secondary": "#c9823a",
+        "shade": "#c9823a",
+        "mainShade": "#26372c",
+        "accent": "#8aa6d9",
+        "identityMain": "#ffe9a8",
+        "identitySecondary": "#c9823a",
+        "identityAccent": "#8aa6d9"
+      },
+      "status": "shipped"
+    },
+    "mais_egg": {
+      "lineId": "mais",
+      "stage": "egg",
+      "branch": null,
+      "assetRoot": "../pets/mais_egg",
+      "poseManifest": "../pets/mais_egg/pose_manifest.json",
+      "runtimeMotion": "../pets/mais_egg/runtime_motion.json",
+      "palette": {
+        "main": "#ffe86b",
+        "secondary": "#72a846",
+        "shade": "#72a846",
+        "mainShade": "#26372c",
+        "accent": "#f0a6ce",
+        "identityMain": "#ffe86b",
+        "identitySecondary": "#72a846",
+        "identityAccent": "#f0a6ce"
+      },
+      "status": "shipped"
+    },
+    "mais_hatchling": {
+      "lineId": "mais",
+      "stage": "hatchling",
+      "branch": null,
+      "assetRoot": "../pets/mais_hatchling",
+      "poseManifest": "../pets/mais_hatchling/pose_manifest.json",
+      "runtimeMotion": "../pets/mais_hatchling/runtime_motion.json",
+      "palette": {
+        "main": "#ffe86b",
+        "secondary": "#72a846",
+        "shade": "#72a846",
+        "mainShade": "#26372c",
+        "accent": "#78c9f0",
+        "identityMain": "#ffe86b",
+        "identitySecondary": "#72a846",
+        "identityAccent": "#78c9f0"
+      },
+      "status": "shipped"
+    },
+    "mais": {
+      "lineId": "mais",
+      "stage": "child",
+      "branch": null,
+      "assetRoot": "../pets/mais",
+      "poseManifest": "../pets/mais/pose_manifest.json",
+      "runtimeMotion": "../pets/mais/runtime_motion.json",
+      "palette": {
+        "main": "#ffe86b",
+        "secondary": "#72a846",
+        "shade": "#72a846",
+        "mainShade": "#26372c",
+        "accent": "#f2a14a",
+        "identityMain": "#ffe86b",
+        "identitySecondary": "#72a846",
+        "identityAccent": "#f2a14a"
+      },
+      "status": "shipped"
+    },
+    "mais_teen_focused": {
+      "lineId": "mais",
+      "stage": "teen",
+      "branch": "focused",
+      "assetRoot": "../pets/mais_teen_focused",
+      "poseManifest": "../pets/mais_teen_focused/pose_manifest.json",
+      "runtimeMotion": "../pets/mais_teen_focused/runtime_motion.json",
+      "palette": {
+        "main": "#ffe86b",
+        "secondary": "#72a846",
+        "shade": "#72a846",
+        "mainShade": "#26372c",
+        "accent": "#4d8ad8",
+        "identityMain": "#ffe86b",
+        "identitySecondary": "#72a846",
+        "identityAccent": "#4d8ad8"
+      },
+      "status": "shipped"
+    },
+    "mais_teen_resilient": {
+      "lineId": "mais",
+      "stage": "teen",
+      "branch": "resilient",
+      "assetRoot": "../pets/mais_teen_resilient",
+      "poseManifest": "../pets/mais_teen_resilient/pose_manifest.json",
+      "runtimeMotion": "../pets/mais_teen_resilient/runtime_motion.json",
+      "palette": {
+        "main": "#ffe86b",
+        "secondary": "#72a846",
+        "shade": "#72a846",
+        "mainShade": "#26372c",
+        "accent": "#2caa82",
+        "identityMain": "#ffe86b",
+        "identitySecondary": "#72a846",
+        "identityAccent": "#2caa82"
+      },
+      "status": "shipped"
+    },
+    "mais_teen_restless": {
+      "lineId": "mais",
+      "stage": "teen",
+      "branch": "restless",
+      "assetRoot": "../pets/mais_teen_restless",
+      "poseManifest": "../pets/mais_teen_restless/pose_manifest.json",
+      "runtimeMotion": "../pets/mais_teen_restless/runtime_motion.json",
+      "palette": {
+        "main": "#ffe86b",
+        "secondary": "#72a846",
+        "shade": "#72a846",
+        "mainShade": "#26372c",
+        "accent": "#d95ab8",
+        "identityMain": "#ffe86b",
+        "identitySecondary": "#72a846",
+        "identityAccent": "#d95ab8"
+      },
+      "status": "shipped"
+    },
+    "mais_adult_calm": {
+      "lineId": "mais",
+      "stage": "adult",
+      "branch": "calm",
+      "assetRoot": "../pets/mais_adult_calm",
+      "poseManifest": "../pets/mais_adult_calm/pose_manifest.json",
+      "runtimeMotion": "../pets/mais_adult_calm/runtime_motion.json",
+      "palette": {
+        "main": "#ffe86b",
+        "secondary": "#72a846",
+        "shade": "#72a846",
+        "mainShade": "#26372c",
+        "accent": "#86bd6d",
+        "identityMain": "#ffe86b",
+        "identitySecondary": "#72a846",
+        "identityAccent": "#86bd6d"
+      },
+      "status": "shipped"
+    },
+    "mais_adult_resilient": {
+      "lineId": "mais",
+      "stage": "adult",
+      "branch": "resilient",
+      "assetRoot": "../pets/mais_adult_resilient",
+      "poseManifest": "../pets/mais_adult_resilient/pose_manifest.json",
+      "runtimeMotion": "../pets/mais_adult_resilient/runtime_motion.json",
+      "palette": {
+        "main": "#ffe86b",
+        "secondary": "#72a846",
+        "shade": "#72a846",
+        "mainShade": "#26372c",
+        "accent": "#c75f5f",
+        "identityMain": "#ffe86b",
+        "identitySecondary": "#72a846",
+        "identityAccent": "#c75f5f"
+      },
+      "status": "shipped"
+    },
+    "mais_adult_worker": {
+      "lineId": "mais",
+      "stage": "adult",
+      "branch": "worker",
+      "assetRoot": "../pets/mais_adult_worker",
+      "poseManifest": "../pets/mais_adult_worker/pose_manifest.json",
+      "runtimeMotion": "../pets/mais_adult_worker/runtime_motion.json",
+      "palette": {
+        "main": "#ffe86b",
+        "secondary": "#72a846",
+        "shade": "#72a846",
+        "mainShade": "#26372c",
+        "accent": "#5f6fab",
+        "identityMain": "#ffe86b",
+        "identitySecondary": "#72a846",
+        "identityAccent": "#5f6fab"
+      },
+      "status": "shipped"
+    },
+    "mais_adult_quiet": {
+      "lineId": "mais",
+      "stage": "adult",
+      "branch": "quiet",
+      "assetRoot": "../pets/mais_adult_quiet",
+      "poseManifest": "../pets/mais_adult_quiet/pose_manifest.json",
+      "runtimeMotion": "../pets/mais_adult_quiet/runtime_motion.json",
+      "palette": {
+        "main": "#ffe86b",
+        "secondary": "#72a846",
+        "shade": "#72a846",
+        "mainShade": "#26372c",
+        "accent": "#947fc3",
+        "identityMain": "#ffe86b",
+        "identitySecondary": "#72a846",
+        "identityAccent": "#947fc3"
+      },
+      "status": "shipped"
+    },
+    "mais_adult_sleepy": {
+      "lineId": "mais",
+      "stage": "adult",
+      "branch": "sleepy",
+      "assetRoot": "../pets/mais_adult_sleepy",
+      "poseManifest": "../pets/mais_adult_sleepy/pose_manifest.json",
+      "runtimeMotion": "../pets/mais_adult_sleepy/runtime_motion.json",
+      "palette": {
+        "main": "#ffe86b",
+        "secondary": "#72a846",
+        "shade": "#72a846",
+        "mainShade": "#26372c",
+        "accent": "#6a72b8",
+        "identityMain": "#ffe86b",
+        "identitySecondary": "#72a846",
+        "identityAccent": "#6a72b8"
+      },
+      "status": "shipped"
+    },
+    "mais_hibernation": {
+      "lineId": "mais",
+      "stage": "hibernation",
+      "branch": null,
+      "assetRoot": "../pets/mais_hibernation",
+      "poseManifest": "../pets/mais_hibernation/pose_manifest.json",
+      "runtimeMotion": "../pets/mais_hibernation/runtime_motion.json",
+      "palette": {
+        "main": "#ffe86b",
+        "secondary": "#72a846",
+        "shade": "#72a846",
+        "mainShade": "#26372c",
+        "accent": "#8aa6d9",
+        "identityMain": "#ffe86b",
+        "identitySecondary": "#72a846",
+        "identityAccent": "#8aa6d9"
+      },
+      "status": "shipped"
+    }
+  },
+  "evolutionPaths": {
+    "toast": {
+      "displayName": "Toast",
+      "inspiration": "a compact slice of toast",
+      "egg": "toast_egg",
+      "hatchling": "toast_hatchling",
+      "child": "toast",
+      "teen": {
+        "focused": "toast_teen_focused",
+        "resilient": "toast_teen_resilient",
+        "restless": "toast_teen_restless"
+      },
+      "adult": {
+        "calm": "toast_adult_calm",
+        "resilient": "toast_adult_resilient",
+        "worker": "toast_adult_worker",
+        "quiet": "toast_adult_quiet",
+        "sleepy": "toast_adult_sleepy"
+      },
+      "hibernation": "toast_hibernation",
+      "formCount": 12
+    },
+    "mais": {
+      "displayName": "Mais",
+      "inspiration": "a slim corn cob",
+      "egg": "mais_egg",
+      "hatchling": "mais_hatchling",
+      "child": "mais",
+      "teen": {
+        "focused": "mais_teen_focused",
+        "resilient": "mais_teen_resilient",
+        "restless": "mais_teen_restless"
+      },
+      "adult": {
+        "calm": "mais_adult_calm",
+        "resilient": "mais_adult_resilient",
+        "worker": "mais_adult_worker",
+        "quiet": "mais_adult_quiet",
+        "sleepy": "mais_adult_sleepy"
+      },
+      "hibernation": "mais_hibernation",
+      "formCount": 12
+    }
+  },
+  "branchRules": [
+    {
+      "fromStage": "egg",
+      "toStage": "hatchling",
+      "gate": "first successful Codex session or explicit hatch event",
+      "selection": "keep the pawn's chosen line id"
+    },
+    {
+      "fromStage": "hatchling",
+      "toStage": "child",
+      "gate": "age and minimum interaction history",
+      "selection": "activate the named child form for the same line"
+    },
+    {
+      "fromStage": "child",
+      "toStage": "teen",
+      "gate": "age plus enough care signal confidence",
+      "selection": "focused, resilient, or restless from dominant recent signal"
+    },
+    {
+      "fromStage": "teen",
+      "toStage": "adult",
+      "gate": "age plus stable branch history",
+      "selection": "calm, resilient, worker, quiet, or sleepy by weighted history"
+    },
+    {
+      "fromStage": "any",
+      "toStage": "hibernation",
+      "gate": "long idle gap with no active urgent care",
+      "selection": "line-specific hibernation form"
+    }
+  ]
+}

@@ -7,6 +7,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import tempfile
 import unittest
 from pathlib import Path
@@ -53,8 +54,17 @@ def run_hermes_hook(home: Path, payload: dict) -> subprocess.CompletedProcess[st
 
 
 def load_plugin_module():
-    spec = importlib.util.spec_from_file_location("tamahermes_hermes_plugin", PLUGIN_INIT)
+    package = type(sys)("hermes_plugins")
+    package.__path__ = []
+    sys.modules.setdefault("hermes_plugins", package)
+    spec = importlib.util.spec_from_file_location(
+        "hermes_plugins.tamahermes",
+        PLUGIN_INIT,
+        submodule_search_locations=[str(PLUGIN_INIT.parent)],
+    )
+    assert spec is not None
     module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
     assert spec.loader is not None
     spec.loader.exec_module(module)
     return module
@@ -128,6 +138,119 @@ class HermesHookScriptTests(unittest.TestCase):
             self.assertEqual(after["counters"]["completedRuns"], 1)
             self.assertEqual(after["recentEvents"][0]["source"], "hermes-hook")
             self.assertTrue((home / "tamahermes" / "hermes-hook-state.json").is_file())
+
+    def test_session_end_waits_for_queued_work_and_applies_terminal_event(self) -> None:
+        module = load_plugin_module()
+        started = threading.Event()
+        release = threading.Event()
+        entered_flush = threading.Event()
+        persisted: list[str] = []
+        orig_apply = module._apply
+        orig_flush = module._flush_pending
+
+        def apply(payloads: list[dict]) -> None:
+            if payloads[0]["hook_event_name"] == "post_api_request":
+                started.set()
+                if not release.wait(5):
+                    raise TimeoutError("test worker was not released")
+                persisted.append("queued")
+            else:
+                persisted.append(payloads[0]["hook_event_name"])
+
+        def spy_flush(timeout: float = 25.0) -> bool:
+            entered_flush.set()
+            return orig_flush(timeout=timeout)
+
+        module._apply = apply  # type: ignore[attr-defined]
+        module._flush_pending = spy_flush  # type: ignore[attr-defined]
+        try:
+            module._on_post_api_request(session_id="s", usage={"total_tokens": 1})
+            self.assertTrue(started.wait(2), "background worker did not start")
+
+            finished = threading.Event()
+            terminal = threading.Thread(target=lambda: (module._on_session_end(session_id="s", completed=True), finished.set()))
+            terminal.start()
+            # Deterministic barrier proof: the terminal callback has entered
+            # _flush_pending (i.e. it is blocked behind queued work), yet has
+            # not returned.
+            self.assertTrue(entered_flush.wait(2), "session-end callback did not reach the flush barrier")
+            self.assertFalse(finished.is_set(), "session-end callback returned before queued work completed")
+
+            release.set()
+            terminal.join(3)
+            self.assertFalse(terminal.is_alive(), "session-end callback did not finish")
+            self.assertEqual(persisted, ["queued", "on_session_end"])
+        finally:
+            release.set()
+            module._apply = orig_apply
+            module._flush_pending = orig_flush
+
+    def test_session_end_skips_terminal_apply_when_flush_times_out(self) -> None:
+        # When queued work outlives the flush timeout, the terminal event is
+        # skipped (dropped), not applied: record(sync=True) returns early on a
+        # False flush instead of running the terminal _apply.
+        module = load_plugin_module()
+        orig_apply = module._apply
+        orig_flush = module._flush_pending
+        applied: list[list[dict]] = []
+
+        # Part 1: a stuck worker makes the real _flush_pending report False.
+        blocker = threading.Event()
+        stuck = threading.Thread(target=lambda: blocker.wait(10), daemon=True)
+        stuck.start()
+        try:
+            with module._queue_lock:
+                saved_worker = module._worker
+                module._worker = stuck
+            try:
+                self.assertFalse(module._flush_pending(timeout=0.05), "stuck worker must time out the flush")
+            finally:
+                with module._queue_lock:
+                    module._worker = saved_worker
+        finally:
+            blocker.set()
+            stuck.join(2)
+
+        # Part 2: on timeout, the terminal _apply is never run.
+        module._apply = lambda payloads: applied.append(payloads)  # type: ignore[attr-defined]
+        module._flush_pending = lambda timeout=25.0: False  # type: ignore[attr-defined]
+        try:
+            module._on_session_end(session_id="s", completed=True)
+        finally:
+            module._apply = orig_apply
+            module._flush_pending = orig_flush
+        self.assertEqual(applied, [], "timed-out flush must skip the terminal apply")
+
+    def test_terminal_payload_is_persisted_before_hard_process_exit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            marker = Path(tmp) / "persisted.txt"
+            code = "\n".join(
+                [
+                    "import os, sys",
+                    "from pathlib import Path",
+                    "import plugins.tamahermes as plugin",
+                    "marker = Path(sys.argv[1])",
+                    "def apply(batch):",
+                    "    with marker.open('a', encoding='utf-8') as stream:",
+                    "        stream.write(batch[0]['hook_event_name'] + '\\n')",
+                    "plugin._apply = apply",
+                    "plugin.record('post_api_request', session_id='s', usage={'total_tokens': 1})",
+                    "plugin._on_session_end(session_id='s', completed=True)",
+                    "os._exit(0)",
+                ]
+            )
+            env = os.environ.copy()
+            env.pop("TAMAHERMES_SYNC", None)
+            env["PYTHONPATH"] = str(ROOT)
+            result = subprocess.run(
+                [sys.executable, "-c", code, str(marker)],
+                cwd=ROOT,
+                env=env,
+                capture_output=True,
+                timeout=5,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr.decode(errors="replace"))
+            self.assertEqual(marker.read_text(encoding="utf-8").splitlines(), ["post_api_request", "on_session_end"])
 
     def test_repeated_same_turn_hook_is_idempotent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -276,51 +399,15 @@ class SheetPruningTests(unittest.TestCase):
             self.assertFalse(stale.exists())
 
 
-class PluginRepoResolutionTests(unittest.TestCase):
-    """The plugin must not silently import an unrelated nearby checkout."""
-
-    def test_a_nearby_checkout_in_cwd_is_never_picked_up(self) -> None:
-        """Launching `hermes` from a dir containing a tamahermes/ must not import it."""
+class BundledPluginImportTests(unittest.TestCase):
+    def test_plugin_imports_without_checkout_environment(self) -> None:
         module = load_plugin_module()
-        with tempfile.TemporaryDirectory() as tmp:
-            decoy = Path(tmp)
-            (decoy / "tamahermes").mkdir()
-            (decoy / "tamahermes" / "bridge.py").write_text("")
-            (decoy / "tamahermes" / "hermes_events.py").write_text("")
-
-            original = Path.cwd()
-            os.chdir(decoy)
-            try:
-                self.assertNotIn(decoy.resolve(), [c.resolve() for c in module._repo_candidates()])
-            finally:
-                os.chdir(original)
-
-    def test_stale_codex_only_checkout_is_rejected(self) -> None:
-        module = load_plugin_module()
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            (root / "tamahermes").mkdir()
-            (root / "tamahermes" / "bridge.py").write_text("")
-            self.assertFalse(module._looks_like_tamahermes_checkout(root))
-            (root / "tamahermes" / "hermes_events.py").write_text("")
-            self.assertTrue(module._looks_like_tamahermes_checkout(root))
-
-    def test_recorded_repo_root_wins(self) -> None:
-        module = load_plugin_module()
-        with tempfile.TemporaryDirectory() as tmp:
-            home = Path(tmp) / "home"
-            (home / "tamahermes").mkdir(parents=True)
-            (home / "tamahermes" / "repo-root").write_text("/some/checkout\n", encoding="utf-8")
-
-            saved = os.environ.pop("TAMAHERMES_REPO_ROOT", None)
-            os.environ["HERMES_HOME"] = str(home)
-            try:
-                candidates = module._repo_candidates()
-            finally:
-                os.environ.pop("HERMES_HOME", None)
-                if saved is not None:
-                    os.environ["TAMAHERMES_REPO_ROOT"] = saved
-            self.assertEqual(candidates[0], Path("/some/checkout"))
+        saved = os.environ.pop("TAMAHERMES_REPO_ROOT", None)
+        try:
+            self.assertTrue(module._ensure_tamahermes_importable())
+        finally:
+            if saved is not None:
+                os.environ["TAMAHERMES_REPO_ROOT"] = saved
 
 
 if __name__ == "__main__":

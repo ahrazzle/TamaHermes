@@ -5,7 +5,7 @@
 #   ./hermes/install-hermes.sh --line toast --machine aurora
 #
 # What it does:
-#   1. pip-installs the tamahermes package (so the plugin can import it)
+#   1. pip-installs the tamahermes package for the CLI
 #   2. builds and installs the pet package into <HERMES_HOME>/pets/tamahermes
 #   3. copies the native Hermes plugin into <HERMES_HOME>/plugins/tamahermes
 #   4. selects the pet (when the target home is the live Hermes home)
@@ -95,8 +95,7 @@ if [ "$INSTALL_PYTHON" = "1" ]; then
     # uv-created venvs ship without pip; `uv pip` is the correct tool there.
     uv pip install -q --python "$PY" -e "$REPO_ROOT" >&2
   else
-    # Not fatal: the CLI runs from the checkout, and the plugin resolves
-    # tamahermes via <HERMES_HOME>/tamahermes/repo-root.
+    # Not fatal: the CLI runs from the checkout; the catalog plugin carries its own package.
     echo "!! $PY has no pip and uv is not installed; skipping the editable install." >&2
     echo "   Continuing — both the CLI and the plugin can run from $REPO_ROOT." >&2
   fi
@@ -116,11 +115,6 @@ if [ -n "$RESET" ]; then
 fi
 "$PY" -m tamahermes "$@"
 
-# Record the checkout next to the ledger so the plugin can import `tamahermes`
-# during an ordinary `hermes` run, where TAMAHERMES_REPO_ROOT is not set.
-mkdir -p "$HERMES_HOME_RESOLVED/tamahermes"
-printf '%s\n' "$REPO_ROOT" > "$HERMES_HOME_RESOLVED/tamahermes/repo-root"
-
 if [ -n "$PETDEX" ]; then
   echo "==> mirroring the pet into the Petdex desktop home ($PETDEX_HOME_DIR)" >&2
   set -- --target hermes --hermes-home "$HERMES_HOME_RESOLVED" --petdex-home "$PETDEX_HOME_DIR" \
@@ -136,10 +130,14 @@ fi
 if [ "$MODE" = "plugin" ]; then
   PLUGIN_SRC="$REPO_ROOT/plugins/tamahermes"
   PLUGIN_DST="$HERMES_HOME_RESOLVED/plugins/tamahermes"
-  echo "==> installing the Hermes plugin into $PLUGIN_DST" >&2
   mkdir -p "$HERMES_HOME_RESOLVED/plugins"
-  rm -rf "$PLUGIN_DST"
-  cp -R "$PLUGIN_SRC" "$PLUGIN_DST"
+  if [ -e "$PLUGIN_DST" ]; then
+    echo "==> preserving existing Hermes plugin at $PLUGIN_DST" >&2
+    echo "    A catalog-managed install owns this path; no overwrite performed." >&2
+  else
+    echo "==> installing the Hermes plugin into $PLUGIN_DST" >&2
+    cp -R "$PLUGIN_SRC" "$PLUGIN_DST"
+  fi
   cat >&2 <<EOF
 
 Next steps:

@@ -1,0 +1,173 @@
+from __future__ import annotations
+
+import hashlib
+import json
+from typing import Any
+
+from .state import stage_progress
+
+VISUAL_STATE_SCHEMA = "tamahermes.visual_state.v2"
+
+# Growth is quantised before it reaches the atlas: the sprite only needs to be
+# recomposited when the drawn bar actually moves, not on every XP tick.
+STAGE_PROGRESS_STEPS = 20
+
+# A bar below the top of the ladder is never drawn full: the first bucket that would
+# read as "complete" is 100, so the drawn value stops one bucket short of it. Only the
+# top rung has no next level, and only there may the bar be complete.
+MAX_DISPLAY_PERCENT = 95
+
+# This table drives the HUD's escalation row, which stays silent unless something actually
+# needs the owner, so only such events belong here: task_failure (red "!") and review_opened
+# (blue diamond). The "recovery" *event* is untouched -- it still earns its XP, its sound and
+# its recentEvents record -- it simply has no HUD signal, because good news is not an
+# escalation and must not paint a glyph in the top row.
+ALERT_EVENTS = {
+    "task_failure": "failure",
+    "review_opened": "review",
+}
+
+
+def clamp(value: int, low: int = 0, high: int = 100) -> int:
+    return max(low, min(high, value))
+
+
+def percent_bucket(percent: int, steps: int = STAGE_PROGRESS_STEPS) -> int:
+    """Snap a percentage to one of *steps* even buckets (default 5% steps)."""
+    step = 100 // max(1, steps)
+    return clamp(int(round(percent / step)) * step)
+
+
+def xp_display_percent(progress: dict[str, Any]) -> int:
+    """The bar's drawn value: complete only at the top of the ladder.
+
+    ``level_progress`` reports the real position inside the current level. Quantising that
+    straight to a bucket can land on 100 while the level still has room left (the last percent
+    of a wide band rounds up), which paints a full bar inside a level that is not finished. The
+    clamp belongs here, at the one site the sprite reads: 95 is one bucket short of "complete".
+    """
+    percent = int(progress.get("percent") or 0)
+    if progress.get("maxed") or progress.get("levelMaxed"):
+        return clamp(percent)
+    return clamp(min(percent, MAX_DISPLAY_PERCENT))
+
+
+def positive_int(value: Any) -> int:
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return max(0, value)
+    if isinstance(value, float):
+        return max(0, int(value))
+    if isinstance(value, str) and value.strip().isdigit():
+        return max(0, int(value))
+    return 0
+
+
+def stat_value(state: dict[str, Any], key: str, default: int = 0) -> int:
+    stats = state.get("stats", {})
+    return clamp(positive_int(stats.get(key, default)))
+
+
+def counter_value(state: dict[str, Any], key: str) -> int:
+    counters = state.get("counters", {})
+    return positive_int(counters.get(key, 0))
+
+
+def energy_bin(value: int) -> str:
+    if value <= 20:
+        return "critical"
+    if value <= 45:
+        return "low"
+    if value >= 80:
+        return "full"
+    return "ok"
+
+
+def mess_score(state: dict[str, Any]) -> int:
+    """How grubby the pet is right now, 0-100 (high is bad).
+
+    Only *current* signals may raise the gauge. ``failedRuns`` and the unresolved backlog
+    derived from ``workRuns`` are lifetime counters -- they never go down -- so weighting them
+    here pinned any used pet at 100 and no amount of care could clean it (the D1 defect; on the
+    combined ledger those counters are summed across every profile). ``careMistakes`` is already
+    charged once through the ``mess`` stat when a turn fails, so charging it again here
+    double-counted one failure as +10 (the D2 defect). Idle neglect still counts, but it is
+    bounded and cleared by care, so the gauge always falls back toward clean.
+    """
+    return clamp(stat_value(state, "mess") + min(24, counter_value(state, "idleMinutes") // 10))
+
+
+def mess_bin(value: int) -> str:
+    if value < 25:
+        return "clean"
+    if value < 60:
+        return "dusty"
+    return "messy"
+
+
+def satiety_score(state: dict[str, Any]) -> int:
+    total_tokens = counter_value(state, "totalTokens")
+    if total_tokens:
+        return clamp(total_tokens // 100)
+
+    prompt_chars = counter_value(state, "promptChars")
+    tool_output_chars = counter_value(state, "toolOutputChars")
+    score = (
+        prompt_chars // 80
+        + tool_output_chars // 500
+        + counter_value(state, "workRuns") * 6
+        + counter_value(state, "completedRuns") * 4
+        + counter_value(state, "tokenSamples") * 3
+    )
+    return clamp(score)
+
+
+def satiety_bin(value: int) -> str:
+    if value < 35:
+        return "hungry"
+    if value >= 70:
+        return "fed"
+    return "ok"
+
+
+def bond_bin(value: int) -> str:
+    if value < 25:
+        return "new"
+    if value < 65:
+        return "warm"
+    return "attached"
+
+
+def alert_bin(state: dict[str, Any]) -> str:
+    for record in state.get("recentEvents", [])[:8]:
+        event = record.get("event") if isinstance(record, dict) else None
+        if event in ALERT_EVENTS:
+            return ALERT_EVENTS[event]
+    return "none"
+
+
+def derive_visual_state(state: dict[str, Any]) -> dict[str, str]:
+    progress = stage_progress(state)
+    energy = stat_value(state, "energy", 82)
+    return {
+        "schema": VISUAL_STATE_SCHEMA,
+        "energy": energy_bin(energy),
+        "energyPercent": str(percent_bucket(energy)),
+        "mess": mess_bin(mess_score(state)),
+        "satiety": satiety_bin(satiety_score(state)),
+        "bond": bond_bin(stat_value(state, "bond", 0)),
+        "health": "weak" if stat_value(state, "health", 100) <= 35 else "ok",
+        "alert": alert_bin(state),
+        "stage": str(progress["stage"]),
+        "level": str(progress["level"]),
+        "xpPercent": str(percent_bucket(xp_display_percent(progress))),
+    }
+
+
+def visual_state_hash(visual_state_or_state: dict[str, Any]) -> str:
+    visual_state = visual_state_or_state
+    if visual_state.get("schema") != VISUAL_STATE_SCHEMA:
+        visual_state = derive_visual_state(visual_state_or_state)
+    payload = json.dumps(visual_state, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()

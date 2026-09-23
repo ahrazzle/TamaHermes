@@ -1,0 +1,21 @@
+{
+  "cell": [
+    192,
+    208
+  ],
+  "screen": {
+    "x": 35,
+    "y": 47,
+    "width": 122,
+    "height": 104,
+    "radius": 11
+  },
+  "pawnSource": [
+    24,
+    26
+  ],
+  "defaultPawnScale": 3,
+  "shapePolicy": "shared symmetric goose-egg machine silhouette",
+  "lcdRuleset": "m6-lcd-screen-integration-v1",
+  "screenMaskPolicy": "compiled Codex atlas clips pawn pixels to this LCD viewport mask"
+}

@@ -1,0 +1,78 @@
+{
+  "id": "toast_teen_focused",
+  "displayName": "Toast Teen Focused",
+  "description": "Toast's focused teen branch.",
+  "lineId": "toast",
+  "lineDisplayName": "Toast",
+  "inspiration": "a compact slice of toast",
+  "stage": "teen",
+  "branch": "focused",
+  "sourceSize": [
+    24,
+    26
+  ],
+  "ink": "#ffe9a8",
+  "palette": {
+    "main": "#ffe9a8",
+    "secondary": "#c9823a",
+    "shade": "#c9823a",
+    "mainShade": "#26372c",
+    "accent": "#4d7ed8",
+    "identityMain": "#ffe9a8",
+    "identitySecondary": "#c9823a",
+    "identityAccent": "#4d7ed8",
+    "policy": "transparent plus M2 identity main/shade inks, dark LCD face ink, and one readable lifecycle accessory accent ink",
+    "lcdRuleset": "m6-lcd-screen-integration-v1",
+    "artDirection": "m6.1-clean-limbed-pawn-v1",
+    "symbolMap": {
+      "#": "main",
+      "+": "secondary",
+      "=": "mainShade",
+      "*": "accent"
+    }
+  },
+  "artDirection": {
+    "id": "m6.1-clean-limbed-pawn-v1",
+    "summary": "Clean 1px mascot silhouettes with visible hands, feet, and sparse intentional linework.",
+    "noisePolicy": "No random dither or speckle fields; secondary/detail pixels must read as outline, limb, prop, or accessory."
+  },
+  "transparent": "#00000000",
+  "poses": [
+    "idle_0",
+    "idle_1",
+    "blink",
+    "squash",
+    "wave_0",
+    "wave_1",
+    "wave_2",
+    "jump_0",
+    "jump_1",
+    "jump_2",
+    "failed_0",
+    "failed_1",
+    "failed_2",
+    "wait_0",
+    "wait_1",
+    "wait_2",
+    "work_0",
+    "work_1",
+    "work_2",
+    "review_0",
+    "review_1",
+    "review_2",
+    "step_right_0",
+    "step_right_1",
+    "step_right_2",
+    "step_left_0",
+    "step_left_1",
+    "step_left_2"
+  ],
+  "atlas": {
+    "path": "poses_atlas.png",
+    "columns": 8,
+    "cell": [
+      24,
+      26
+    ]
+  }
+}

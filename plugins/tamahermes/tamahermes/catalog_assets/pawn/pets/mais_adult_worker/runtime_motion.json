@@ -1,0 +1,333 @@
+{
+  "unit": "source_px",
+  "screen": {
+    "x": 35,
+    "y": 47,
+    "width": 122,
+    "height": 104,
+    "radius": 11
+  },
+  "pawnSource": [
+    24,
+    26
+  ],
+  "defaultPawnScale": 3,
+  "lcdRuleset": "m6-lcd-screen-integration-v1",
+  "artDirection": "m6.1-clean-limbed-pawn-v1",
+  "states": {
+    "idle": [
+      {
+        "pose": "idle_0",
+        "durationMs": 280,
+        "offset": [
+          0,
+          0
+        ]
+      },
+      {
+        "pose": "idle_1",
+        "durationMs": 180,
+        "offset": [
+          0,
+          0
+        ]
+      },
+      {
+        "pose": "blink",
+        "durationMs": 110,
+        "offset": [
+          0,
+          0
+        ]
+      },
+      {
+        "pose": "idle_0",
+        "durationMs": 320,
+        "offset": [
+          0,
+          0
+        ]
+      }
+    ],
+    "work": [
+      {
+        "pose": "work_0",
+        "durationMs": 130,
+        "offset": [
+          0,
+          0
+        ]
+      },
+      {
+        "pose": "work_1",
+        "durationMs": 130,
+        "offset": [
+          0,
+          1
+        ]
+      },
+      {
+        "pose": "work_2",
+        "durationMs": 130,
+        "offset": [
+          0,
+          0
+        ]
+      },
+      {
+        "pose": "work_1",
+        "durationMs": 150,
+        "offset": [
+          0,
+          -1
+        ]
+      }
+    ],
+    "waiting": [
+      {
+        "pose": "wait_0",
+        "durationMs": 220,
+        "offset": [
+          0,
+          0
+        ]
+      },
+      {
+        "pose": "wait_1",
+        "durationMs": 190,
+        "offset": [
+          0,
+          -1
+        ]
+      },
+      {
+        "pose": "wait_2",
+        "durationMs": 190,
+        "offset": [
+          1,
+          -1
+        ]
+      },
+      {
+        "pose": "wait_0",
+        "durationMs": 260,
+        "offset": [
+          0,
+          0
+        ]
+      }
+    ],
+    "review": [
+      {
+        "pose": "review_0",
+        "durationMs": 160,
+        "offset": [
+          0,
+          0
+        ]
+      },
+      {
+        "pose": "review_1",
+        "durationMs": 170,
+        "offset": [
+          0,
+          -1
+        ]
+      },
+      {
+        "pose": "review_2",
+        "durationMs": 130,
+        "offset": [
+          0,
+          -1
+        ]
+      },
+      {
+        "pose": "review_1",
+        "durationMs": 220,
+        "offset": [
+          0,
+          0
+        ]
+      }
+    ],
+    "failed": [
+      {
+        "pose": "failed_0",
+        "durationMs": 160,
+        "offset": [
+          0,
+          1
+        ]
+      },
+      {
+        "pose": "failed_1",
+        "durationMs": 180,
+        "offset": [
+          0,
+          2
+        ]
+      },
+      {
+        "pose": "failed_2",
+        "durationMs": 220,
+        "offset": [
+          0,
+          2
+        ]
+      },
+      {
+        "pose": "failed_1",
+        "durationMs": 180,
+        "offset": [
+          0,
+          1
+        ]
+      }
+    ],
+    "success": [
+      {
+        "pose": "jump_0",
+        "durationMs": 120,
+        "offset": [
+          0,
+          2
+        ]
+      },
+      {
+        "pose": "jump_1",
+        "durationMs": 120,
+        "offset": [
+          0,
+          -2
+        ]
+      },
+      {
+        "pose": "jump_2",
+        "durationMs": 130,
+        "offset": [
+          0,
+          -4
+        ]
+      },
+      {
+        "pose": "jump_1",
+        "durationMs": 130,
+        "offset": [
+          0,
+          -1
+        ]
+      },
+      {
+        "pose": "squash",
+        "durationMs": 220,
+        "offset": [
+          0,
+          2
+        ]
+      }
+    ],
+    "greeting": [
+      {
+        "pose": "wave_0",
+        "durationMs": 180,
+        "offset": [
+          0,
+          0
+        ]
+      },
+      {
+        "pose": "wave_1",
+        "durationMs": 160,
+        "offset": [
+          0,
+          0
+        ]
+      },
+      {
+        "pose": "wave_2",
+        "durationMs": 160,
+        "offset": [
+          0,
+          0
+        ]
+      },
+      {
+        "pose": "wave_1",
+        "durationMs": 220,
+        "offset": [
+          0,
+          0
+        ]
+      }
+    ],
+    "drag_right": [
+      {
+        "pose": "step_right_0",
+        "durationMs": 120,
+        "offset": [
+          0,
+          0
+        ]
+      },
+      {
+        "pose": "step_right_1",
+        "durationMs": 120,
+        "offset": [
+          2,
+          0
+        ]
+      },
+      {
+        "pose": "step_right_2",
+        "durationMs": 140,
+        "offset": [
+          4,
+          1
+        ]
+      },
+      {
+        "pose": "step_right_1",
+        "durationMs": 170,
+        "offset": [
+          2,
+          0
+        ]
+      }
+    ],
+    "drag_left": [
+      {
+        "pose": "step_left_0",
+        "durationMs": 120,
+        "offset": [
+          0,
+          0
+        ]
+      },
+      {
+        "pose": "step_left_1",
+        "durationMs": 120,
+        "offset": [
+          -2,
+          0
+        ]
+      },
+      {
+        "pose": "step_left_2",
+        "durationMs": 140,
+        "offset": [
+          -4,
+          1
+        ]
+      },
+      {
+        "pose": "step_left_1",
+        "durationMs": 170,
+        "offset": [
+          -2,
+          0
+        ]
+      }
+    ]
+  }
+}
