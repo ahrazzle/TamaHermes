@@ -9,7 +9,6 @@ import subprocess
 import sys
 import threading
 import tempfile
-import time
 import unittest
 from pathlib import Path
 
@@ -144,7 +143,10 @@ class HermesHookScriptTests(unittest.TestCase):
         module = load_plugin_module()
         started = threading.Event()
         release = threading.Event()
+        entered_flush = threading.Event()
         persisted: list[str] = []
+        orig_apply = module._apply
+        orig_flush = module._flush_pending
 
         def apply(payloads: list[dict]) -> None:
             if payloads[0]["hook_event_name"] == "post_api_request":
@@ -155,20 +157,69 @@ class HermesHookScriptTests(unittest.TestCase):
             else:
                 persisted.append(payloads[0]["hook_event_name"])
 
-        setattr(module, "_apply", apply)
-        module._on_post_api_request(session_id="s", usage={"total_tokens": 1})
-        self.assertTrue(started.wait(2), "background worker did not start")
+        def spy_flush(timeout: float = 25.0) -> bool:
+            entered_flush.set()
+            return orig_flush(timeout=timeout)
 
-        finished = threading.Event()
-        terminal = threading.Thread(target=lambda: (module._on_session_end(session_id="s", completed=True), finished.set()))
-        terminal.start()
-        time.sleep(0.05)
-        self.assertFalse(finished.is_set(), "session-end callback returned before queued work completed")
+        module._apply = apply  # type: ignore[attr-defined]
+        module._flush_pending = spy_flush  # type: ignore[attr-defined]
+        try:
+            module._on_post_api_request(session_id="s", usage={"total_tokens": 1})
+            self.assertTrue(started.wait(2), "background worker did not start")
 
-        release.set()
-        terminal.join(3)
-        self.assertFalse(terminal.is_alive(), "session-end callback did not finish")
-        self.assertEqual(persisted, ["queued", "on_session_end"])
+            finished = threading.Event()
+            terminal = threading.Thread(target=lambda: (module._on_session_end(session_id="s", completed=True), finished.set()))
+            terminal.start()
+            # Deterministic barrier proof: the terminal callback has entered
+            # _flush_pending (i.e. it is blocked behind queued work), yet has
+            # not returned.
+            self.assertTrue(entered_flush.wait(2), "session-end callback did not reach the flush barrier")
+            self.assertFalse(finished.is_set(), "session-end callback returned before queued work completed")
+
+            release.set()
+            terminal.join(3)
+            self.assertFalse(terminal.is_alive(), "session-end callback did not finish")
+            self.assertEqual(persisted, ["queued", "on_session_end"])
+        finally:
+            release.set()
+            module._apply = orig_apply
+            module._flush_pending = orig_flush
+
+    def test_session_end_skips_terminal_apply_when_flush_times_out(self) -> None:
+        # When queued work outlives the flush timeout, the terminal event is
+        # skipped (dropped), not applied: record(sync=True) returns early on a
+        # False flush instead of running the terminal _apply.
+        module = load_plugin_module()
+        orig_apply = module._apply
+        orig_flush = module._flush_pending
+        applied: list[list[dict]] = []
+
+        # Part 1: a stuck worker makes the real _flush_pending report False.
+        blocker = threading.Event()
+        stuck = threading.Thread(target=lambda: blocker.wait(10), daemon=True)
+        stuck.start()
+        try:
+            with module._queue_lock:
+                saved_worker = module._worker
+                module._worker = stuck
+            try:
+                self.assertFalse(module._flush_pending(timeout=0.05), "stuck worker must time out the flush")
+            finally:
+                with module._queue_lock:
+                    module._worker = saved_worker
+        finally:
+            blocker.set()
+            stuck.join(2)
+
+        # Part 2: on timeout, the terminal _apply is never run.
+        module._apply = lambda payloads: applied.append(payloads)  # type: ignore[attr-defined]
+        module._flush_pending = lambda timeout=25.0: False  # type: ignore[attr-defined]
+        try:
+            module._on_session_end(session_id="s", completed=True)
+        finally:
+            module._apply = orig_apply
+            module._flush_pending = orig_flush
+        self.assertEqual(applied, [], "timed-out flush must skip the terminal apply")
 
     def test_terminal_payload_is_persisted_before_hard_process_exit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
