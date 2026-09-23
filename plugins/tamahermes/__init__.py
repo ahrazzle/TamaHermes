@@ -18,12 +18,13 @@ post_api_request     ``token_usage``
 on_session_end       turn-level ``task_success`` / ``task_failure`` fallback
 ===================  ==========================================================
 
-Hot-path discipline: hook callbacks are observers and must be cheap. Ledger
-writes happen on a single background worker thread, and the expensive part
-(recompiling the annotated atlas and reinstalling the pet package) is coalesced
-so a burst of tool calls triggers one rebuild, not forty. A failed rebuild is
-logged and dropped — a mascot must never break an agent turn. Set
-``TAMAHERMES_SYNC=1`` to run inline instead (used by the test suite).
+Hot-path discipline: ordinary hook callbacks enqueue work on a single
+background worker, and atlas rebuilds are coalesced. The terminal
+``on_session_end`` callback is the exception: it waits briefly for queued work
+and applies its final event inline because Hermes may hard-exit immediately
+after the callback. A failed rebuild is logged and dropped — a mascot must
+never break an agent turn. Set ``TAMAHERMES_SYNC=1`` to run all hooks inline
+(used by the test suite).
 """
 
 from __future__ import annotations
@@ -97,8 +98,21 @@ def _drain() -> None:
             logger.debug("tamahermes: apply failed: %s", exc)
 
 
-def record(hook_event_name: str, **payload: Any) -> None:
-    """Queue one hook payload for ledger application (or apply inline in sync mode)."""
+def _flush_pending(timeout: float = 25.0) -> bool:
+    """Wait briefly for queued hook work before a caller's hard process exit."""
+    with _queue_lock:
+        worker = _worker
+    if worker is None or worker is threading.current_thread():
+        return True
+    worker.join(timeout=max(0.0, timeout))
+    if worker.is_alive():
+        logger.warning("tamahermes: queued hook work did not finish before session end")
+        return False
+    return True
+
+
+def record(hook_event_name: str, *, sync: bool = False, **payload: Any) -> None:
+    """Queue one hook payload, or apply it inline at a durability boundary."""
     if not _ensure_tamahermes_importable():
         global _dropped_warning_emitted
         if not _dropped_warning_emitted:
@@ -109,6 +123,14 @@ def record(hook_event_name: str, **payload: Any) -> None:
             )
         return
     entry = {"hook_event_name": hook_event_name, **payload}
+    if sync:
+        if not _flush_pending():
+            return
+        try:
+            _apply([entry])
+        except Exception as exc:  # noqa: BLE001 - observers never raise into the agent
+            logger.debug("tamahermes: terminal sync apply failed: %s", exc)
+        return
     if _sync_mode():
         try:
             _apply([entry])
@@ -220,6 +242,7 @@ def _on_session_end(
 ) -> None:
     record(
         "on_session_end",
+        sync=True,
         session_id=session_id,
         turn_id=turn_id,
         completed=completed,

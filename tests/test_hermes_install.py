@@ -7,7 +7,9 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -137,6 +139,67 @@ class HermesHookScriptTests(unittest.TestCase):
             self.assertEqual(after["counters"]["completedRuns"], 1)
             self.assertEqual(after["recentEvents"][0]["source"], "hermes-hook")
             self.assertTrue((home / "tamahermes" / "hermes-hook-state.json").is_file())
+
+    def test_session_end_waits_for_queued_work_and_applies_terminal_event(self) -> None:
+        module = load_plugin_module()
+        started = threading.Event()
+        release = threading.Event()
+        persisted: list[str] = []
+
+        def apply(payloads: list[dict]) -> None:
+            if payloads[0]["hook_event_name"] == "post_api_request":
+                started.set()
+                if not release.wait(5):
+                    raise TimeoutError("test worker was not released")
+                persisted.append("queued")
+            else:
+                persisted.append(payloads[0]["hook_event_name"])
+
+        setattr(module, "_apply", apply)
+        module._on_post_api_request(session_id="s", usage={"total_tokens": 1})
+        self.assertTrue(started.wait(2), "background worker did not start")
+
+        finished = threading.Event()
+        terminal = threading.Thread(target=lambda: (module._on_session_end(session_id="s", completed=True), finished.set()))
+        terminal.start()
+        time.sleep(0.05)
+        self.assertFalse(finished.is_set(), "session-end callback returned before queued work completed")
+
+        release.set()
+        terminal.join(3)
+        self.assertFalse(terminal.is_alive(), "session-end callback did not finish")
+        self.assertEqual(persisted, ["queued", "on_session_end"])
+
+    def test_terminal_payload_is_persisted_before_hard_process_exit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            marker = Path(tmp) / "persisted.txt"
+            code = "\n".join(
+                [
+                    "import os, sys",
+                    "from pathlib import Path",
+                    "import plugins.tamahermes as plugin",
+                    "marker = Path(sys.argv[1])",
+                    "def apply(batch):",
+                    "    with marker.open('a', encoding='utf-8') as stream:",
+                    "        stream.write(batch[0]['hook_event_name'] + '\\n')",
+                    "plugin._apply = apply",
+                    "plugin.record('post_api_request', session_id='s', usage={'total_tokens': 1})",
+                    "plugin._on_session_end(session_id='s', completed=True)",
+                    "os._exit(0)",
+                ]
+            )
+            env = os.environ.copy()
+            env.pop("TAMAHERMES_SYNC", None)
+            env["PYTHONPATH"] = str(ROOT)
+            result = subprocess.run(
+                [sys.executable, "-c", code, str(marker)],
+                cwd=ROOT,
+                env=env,
+                capture_output=True,
+                timeout=5,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr.decode(errors="replace"))
+            self.assertEqual(marker.read_text(encoding="utf-8").splitlines(), ["post_api_request", "on_session_end"])
 
     def test_repeated_same_turn_hook_is_idempotent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
