@@ -8,6 +8,7 @@ from pathlib import Path
 from tamahermes import levels
 from tamahermes import state as pet_state
 from tamahermes.evopet_drain import (
+    MAX_PENDING_FOREIGN_STATES,
     TURN_XP,
     classify,
     empty_combined,
@@ -70,6 +71,38 @@ class TurnBoundaryMapping(unittest.TestCase):
         result = classify(events)
         self.assertEqual(result["awarded"], {"task_failure": 1})
         self.assertEqual(result["xp"], TURN_XP["task_failure"])
+
+    def test_sources_with_same_session_id_do_not_share_outcomes(self) -> None:
+        result = classify([
+            event(Path("1-1-1-state.json"), agent_source="codex", session_id="shared", state="jumping"),
+            event(Path("1-1-2-bubble.json"), agent_source="claude-code", session_id="shared", phase="stop"),
+            event(Path("1-1-3-bubble.json"), agent_source="codex", session_id="shared", phase="stop"),
+        ])
+        self.assertEqual(result["awarded"], {"task_success": 1})
+        self.assertEqual(result["xp_by_source"], {"codex": TURN_XP["task_success"]})
+        self.assertEqual(result["unresolved_turns"], 1)
+
+    def test_two_stops_cannot_reuse_one_outcome(self) -> None:
+        result = classify([
+            event(Path("1-1-1-state.json"), agent_source="codex", session_id="s1", state="failed"),
+            event(Path("1-1-2-bubble.json"), agent_source="codex", session_id="s1", phase="stop"),
+            event(Path("1-1-3-bubble.json"), agent_source="codex", session_id="s1", phase="stop",
+                  agent_state="waving"),
+        ])
+        self.assertEqual(result["awarded"], {"task_failure": 1})
+        self.assertEqual(result["unresolved_turns"], 1)
+        self.assertEqual(result["pending_states"], [])
+
+    def test_pending_cursor_is_bounded_and_ignores_malformed_entries(self) -> None:
+        events = [event(Path(f"1-1-{i}-state.json"), agent_source="codex",
+                        session_id=f"s{i}", state="jumping")
+                  for i in range(MAX_PENDING_FOREIGN_STATES + 1)]
+        result = classify(events)
+        self.assertEqual(len(result["pending_states"]), MAX_PENDING_FOREIGN_STATES)
+        first_key = classify(events[:1])["pending_states"][0]["key"]
+        self.assertNotIn(first_key, {entry["key"] for entry in result["pending_states"]})
+        self.assertEqual(classify([], pending_states=[None, {"key": "broken", "state": []}])["pending_states"], [])
+        self.assertEqual(classify([], pending_states={"broken": True})["pending_states"], [])
 
 
 class CombinedLedger(unittest.TestCase):
@@ -155,6 +188,53 @@ class CombinedLedger(unittest.TestCase):
         self.assertEqual(payload["level"], levels.level_for_xp(2038))
         self.assertEqual(payload["levels"]["evolutionGates"], list(levels.DEFAULT_EVOLUTION_GATES))
         self.assertEqual(payload["cursor"]["profiles"]["lugia"]["xp"], 1151)
+
+    def test_state_survives_a_consumed_spool_batch_until_stop(self) -> None:
+        (self.spool / "1-1-1-state.json").write_text(json.dumps({
+            "agent_source": "codex", "session_id": "s1", "state": "jumping",
+        }))
+        first = self._run(apply=True)
+        self.assertEqual(first["foreign"]["xp"], 0)
+        self.assertEqual(len(list(self.consumed.glob("*.json"))), 1)
+        self.assertNotIn('"s1"', self.state_file.read_text())
+
+        (self.spool / "1-2-1-bubble.json").write_text(json.dumps({
+            "agent_source": "codex", "session_id": "s1", "phase": "stop",
+            "agent_state": "waving",
+        }))
+        second = self._run(apply=True)
+        self.assertEqual(second["foreign"]["awarded"], {"task_success": 1})
+        self.assertEqual(second["foreign"]["xp"], TURN_XP["task_success"])
+        self.assertEqual(json.loads(self.state_file.read_text())["cursor"]["pendingForeignStates"], [])
+
+        third = self._run(apply=True)
+        self.assertEqual(third["foreign"]["xp"], 0)
+
+    def test_new_prompt_resets_a_stale_outcome_across_drains(self) -> None:
+        (self.spool / "1-1-1-state.json").write_text(json.dumps({
+            "agent_source": "codex", "session_id": "s1", "state": "jumping",
+        }))
+        self._run(apply=True)
+        (self.spool / "1-2-1-bubble.json").write_text(json.dumps({
+            "agent_source": "codex", "session_id": "s1", "phase": "user-prompt",
+        }))
+        (self.spool / "1-2-2-bubble.json").write_text(json.dumps({
+            "agent_source": "codex", "session_id": "s1", "phase": "stop",
+        }))
+        result = self._run(apply=True)
+        self.assertEqual(result["foreign"]["awarded"], {"prompt_sent": 1})
+        self.assertEqual(result["foreign"]["unresolved_turns"], 1)
+
+    def test_malformed_legacy_cursor_does_not_block_drain(self) -> None:
+        for malformed in (None, [], {"profiles": None, "consumed": None,
+                                    "pendingForeignStates": {"broken": True}}):
+            self.state_file.write_text(json.dumps({**empty_combined(), "cursor": malformed}))
+            (self.spool / "1-1-1-bubble.json").write_text(json.dumps({
+                "agent_source": "codex", "session_id": "s1", "phase": "user-prompt",
+            }))
+            result = self._run(apply=True)
+            self.assertEqual(result["foreign"]["awarded"], {"prompt_sent": 1})
+            self.assertEqual(json.loads(self.state_file.read_text())["cursor"]["pendingForeignStates"], [])
 
 
 if __name__ == "__main__":

@@ -81,6 +81,7 @@ SUCCESS_STATES = {"jumping"}
 FAILURE_STATES = {"failed"}
 # Visual states that are not an outcome; a turn ending on one of these is unresolved, not a success.
 NEUTRAL_STATES = {"idle", "running", "waiting", "waving"}
+MAX_PENDING_FOREIGN_STATES = 500
 
 # --- route C: the native pet menu's care controls -----------------------------------------
 #
@@ -356,8 +357,8 @@ def empty_combined(now: Optional[str] = None) -> Dict[str, Any]:
         "pets": {},
         "levels": curve_block(),
         "attribution": {"profiles": {}, "foreign": {}},
-        "cursor": {"profiles": {}, "consumed": [], "lastRunAt": None},
-        "note": "Attributable numbers only: no prompt text, no paths, no transcripts.",
+        "cursor": {"profiles": {}, "consumed": [], "pendingForeignStates": [], "lastRunAt": None},
+        "note": "Attribution and pending identity digests only: no prompt text, paths, or transcripts.",
     }
 
 
@@ -453,9 +454,35 @@ def _capped(items: List[str], limit: int) -> List[str]:
     return list(dict.fromkeys(items))[-limit:]
 
 
+def _foreign_state_key(source: str, session: str) -> str:
+    """Scope a session to its source without storing the raw identifiers."""
+    identity = json.dumps([source, session], ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(identity.encode("utf-8")).hexdigest()
+
+
+def _pending_foreign_states(raw: Any) -> Dict[str, str]:
+    """Load at most 500 well-formed pending outcomes from an older cursor."""
+    pending: Dict[str, str] = {}
+    if not isinstance(raw, list):
+        return pending
+    for entry in raw[-MAX_PENDING_FOREIGN_STATES:]:
+        if not isinstance(entry, dict):
+            continue
+        key, state = entry.get("key"), entry.get("state")
+        if (not isinstance(key, str) or len(key) != 64
+                or any(char not in "0123456789abcdef" for char in key)
+                or not isinstance(state, str)
+                or state not in SUCCESS_STATES | FAILURE_STATES | NEUTRAL_STATES):
+            continue
+        pending.pop(key, None)
+        pending[key] = state
+    return pending
+
+
 def classify(
     events: Iterable[Tuple[Path, Dict[str, Any]]],
     seen_hashes: Optional[Container[str]] = None,
+    pending_states: Any = None,
 ) -> Dict[str, Any]:
     """Map foreign-agent spool events to pet events at turn boundaries only.
 
@@ -470,6 +497,10 @@ def classify(
     care comes from a single in-process writer, and the consumed-name cursor guarantees
     each spool file awards once. Every skipped event is still listed in ``processed`` so
     the caller prunes it.
+
+    ``pending_states`` carries at most 500 digests of source/session identities and their
+    last visual outcome across drain invocations. Prompt starts clear stale outcomes;
+    turn ends consume them before recording the stop bubble's own visual.
     """
     awarded: Dict[str, int] = {}
     per_source: Dict[str, int] = {}
@@ -479,7 +510,7 @@ def classify(
     unresolved = 0
     processed: List[str] = []
     hashes: List[str] = []
-    last_state: Dict[str, str] = {}
+    last_state = _pending_foreign_states(pending_states)
     seen: Set[str] = set(seen_hashes or ())
 
     for path, event in events:
@@ -524,13 +555,20 @@ def classify(
         # Snapshot the turn's working state BEFORE this event's own visual is recorded:
         # a stop bubble waves goodbye, and resolving the turn against the wave would mark
         # every real turn end unresolved instead of success/failure.
-        key = str(session)
-        turn_state = last_state.get(key)
-        visual = event.get("state") or event.get("agent_state")
-        if visual in SUCCESS_STATES or visual in FAILURE_STATES or visual in NEUTRAL_STATES:
-            last_state[key] = str(visual)
-
+        key = _foreign_state_key(source, str(session))
         phase = event.get("phase")
+        is_turn_end = str(phase) in TURN_END_PHASES and kind != "state"
+        turn_state = last_state.pop(key, None) if is_turn_end else None
+        if phase in ("user-prompt", "session-start"):
+            last_state.pop(key, None)
+        visual = event.get("state") or event.get("agent_state")
+        if (not is_turn_end and isinstance(visual, str)
+                and visual in SUCCESS_STATES | FAILURE_STATES | NEUTRAL_STATES):
+            last_state.pop(key, None)
+            last_state[key] = visual
+            if len(last_state) > MAX_PENDING_FOREIGN_STATES:
+                last_state.pop(next(iter(last_state)))
+
         pet_event: Optional[str] = None
         if kind == "state":
             # motion/visual only: no XP, never a turn boundary
@@ -563,6 +601,9 @@ def classify(
         "unresolved_turns": unresolved,
         "processed": processed,
         "hashes": hashes,
+        "pending_states": [
+            {"key": key, "state": state} for key, state in last_state.items()
+        ],
     }
 
 
@@ -833,13 +874,19 @@ def run(
     previous_total_xp = int(combined.get("xp") or 0)
     combined.setdefault("attribution", {"profiles": {}, "foreign": {}})
     combined.setdefault("cursor", {"profiles": {}, "consumed": [], "lastRunAt": None})
+    cursor = combined["cursor"]
     before = _canonical(combined)
 
     profile_report = absorb_profiles(combined, ledgers)
     merge_stats(combined, ledgers, combined["cursor"]["profiles"])
 
-    events = read_spool(spool, skip_names=set(combined["cursor"].get("consumed") or []))
-    foreign = classify(events, seen_hashes=set(combined["cursor"].get("consumed_hashes") or []))
+    events = read_spool(spool, skip_names=set(cursor.get("consumed") or []))
+    foreign = classify(
+        events,
+        seen_hashes=set(cursor.get("consumed_hashes") or []),
+        pending_states=cursor.get("pendingForeignStates"),
+    )
+    cursor["pendingForeignStates"] = foreign["pending_states"]
 
     # While a clean cooldown is active the pet can neither earn XP nor perform any other
     # action. Fresh foreign-turn XP is refused in that window (it is a new action); the
@@ -964,7 +1011,7 @@ def run(
         "profiles": profile_report["profiles"],
         "profile_xp_absorbed": profile_report["xp"],
         "spool_files": len(events),
-        "foreign": {k: v for k, v in foreign.items() if k not in ("processed", "hashes")},
+        "foreign": {k: v for k, v in foreign.items() if k not in ("processed", "hashes", "pending_states")},
         "care": care_report,
         "refused_xp": refused_xp,
         "refused_events": refused_events,

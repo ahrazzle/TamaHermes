@@ -76,6 +76,8 @@ Each source is counted on exactly one route, and the drain enforces it:
                             anything else -> unresolved, counted and reported, awarded nothing
 
    Rows that earn nothing (`pre`, `post`, `assistant`, `bubble` text) are state/motion only.
+   Keep the last visual state across drain runs in a bounded cursor keyed by a digest of
+   `(agent_source, session_id)`. A new prompt clears the old outcome; a turn end consumes it.
 4. **Prune what has been absorbed.** After absorption the event files are deleted (move through
    `~/.evopet/consumed/` for a bounded window first). The spool is otherwise unbounded, and it is not
    theoretical: 510 files at handoff, 914 files ~40 minutes later, 892 of them Hermes display noise.
@@ -84,8 +86,9 @@ Each source is counted on exactly one route, and the drain enforces it:
 ## What the drain must never carry
 
 The spool's `title` field is the opening line of the user's own prompt and `source_cwd` is a path.
-The combined ledger stores attributable numbers only — never prompt text, never a path, never a
-session transcript. That restriction is checked by test, not by convention.
+The combined ledger stores attributable numbers and digests for pending turn states — never raw
+session IDs, prompt text, paths, or a session transcript. That restriction is checked by test,
+not by convention.
 
 ## Known gap that blocks value, not correctness
 
