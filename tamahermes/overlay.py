@@ -192,7 +192,6 @@ class TamaHermesOverlayApp:
         self.canvas = tk.Canvas(self.window, width=196, height=54, bd=0, highlightthickness=0, bg="#68c6b5")
         self.canvas.pack(fill="both", expand=True)
         self.was_visible = False
-        self.last_codex_event_sync = 0.0
 
     def pointer(self) -> tuple[int, int] | None:
         try:
@@ -294,10 +293,6 @@ class TamaHermesOverlayApp:
             return
 
         try:
-            now = time.monotonic()
-            if now - self.last_codex_event_sync >= 1.0:
-                sync_codex_session_events(self.home, self.catalog, self.state_path)
-                self.last_codex_event_sync = now
             state = load_state(self.state_path, self.catalog)
         except Exception:  # noqa: BLE001
             self.window.after(self.interval_ms, self.tick)
@@ -352,6 +347,8 @@ def codex_events_cursor_path(home: Path) -> Path:
 
 
 def sync_codex_session_events(home: Path, catalog: Any, state_path: Path, sessions_root: Path | None = None, cursor_path: Path | None = None) -> list[dict[str, Any]]:
+    if state_path.resolve() != default_state_path(home).resolve():
+        raise ValueError("Codex rollout events require the dedicated Codex ledger")
     cursor_file = cursor_path or codex_events_cursor_path(home)
     try:
         cursor = load_cursor(cursor_file)
@@ -372,6 +369,10 @@ def refresh_installed_pet_for_records(
     home: Path,
     refresher: Any = None,
 ) -> dict[str, Any] | None:
+    # The HUD may read EvoPet's combined ledger, but the ordinary Codex
+    # installer must never normalize or save it as a pet ledger.
+    if state_path.resolve() != default_state_path(home).resolve():
+        return None
     if not records:
         try:
             if passive_rest_plan(load_state(state_path, catalog))["amount"] <= 0:
@@ -1718,7 +1719,6 @@ def run_native_overlay_loop(
     boot_mode = overlay_config_mode(boot_state)
     write_native_overlay_config(home, visible=False, mode=boot_mode)
     helper = popen([str(binary), str(paths["config"])], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    last_codex_event_sync = 0.0
     last_helper_drift_check = 0.0
     last_hotkey_fault = False
     shutdown_mode = boot_mode
@@ -1788,25 +1788,9 @@ def run_native_overlay_loop(
             # (overlay_should_run keeps `hudHidden` alive there); the loop only
             # needs the derived mode for cadence.
             if selected:
-                # Event sync, audio bookkeeping and the state file keep the same
-                # gate they always had (the selected pet), whatever the panel is
-                # currently drawing: a hidden HUD must still absorb events rather
-                # than replay them when it comes back.
+                # The supervisor owns rollout ingestion even without a surface.
+                # This HUD only reads its display ledger.
                 try:
-                    now = time.monotonic()
-                    if now - last_codex_event_sync >= 1.0:
-                        records = sync_codex_session_events(home, catalog, state_path)
-                        overlay_state["lastCodexEventSyncAt"] = time.time()
-                        overlay_state["lastCodexEventSyncCount"] = len(records)
-                        refresh_report = refresh_installed_pet_for_records(records, catalog, state_path, home)
-                        if refresh_report:
-                            overlay_state["lastInstallRefresh"] = {
-                                "ok": bool(refresh_report.get("ok")),
-                                "refreshed": bool(refresh_report.get("refreshed")),
-                                "error": refresh_report.get("error"),
-                            }
-                        apply_progress_audio_for_records(records, overlay_state, selected=surface_active, player=player)
-                        last_codex_event_sync = now
                     raw_state = read_json_object(state_path)
                     if isinstance(raw_state.get("pets"), dict):
                         from .evopet_drain import desktop_pet_state
@@ -1922,7 +1906,6 @@ def run_headless_audio_loop(home: Path, root: Path, interval: float = 0.8) -> No
     catalog = load_catalog(root)
     state_path = overlay_runtime_state_path(home)
     overlay_file = overlay_state_path(home)
-    last_codex_event_sync = 0.0
     while True:
         global_state = load_global_state(home)
         selected = is_tamahermes_selected(global_state)
@@ -1930,19 +1913,6 @@ def run_headless_audio_loop(home: Path, root: Path, interval: float = 0.8) -> No
         surface_active, _bounds = update_surface_activity(global_state, overlay_state, time.time())
         if selected:
             try:
-                now = time.monotonic()
-                if now - last_codex_event_sync >= 1.0:
-                    records = sync_codex_session_events(home, catalog, state_path)
-                    refresh_report = refresh_installed_pet_for_records(records, catalog, state_path, home)
-                    if refresh_report:
-                        overlay_state["lastInstallRefresh"] = {
-                            "ok": bool(refresh_report.get("ok")),
-                            "refreshed": bool(refresh_report.get("refreshed")),
-                            "error": refresh_report.get("error"),
-                        }
-                    apply_progress_audio_for_records(records, overlay_state, selected=surface_active)
-                    save_overlay_state(overlay_file, overlay_state)
-                    last_codex_event_sync = now
                 state = load_state(state_path, catalog)
             except Exception:  # noqa: BLE001
                 state = None

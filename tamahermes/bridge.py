@@ -187,8 +187,29 @@ def apply_bridge_event(
     line_id: str = "toast",
     machine_id: str = "aurora",
     catalog_dir: str | None = None,
+    codex_rollout_position: tuple[str, int, str] | None = None,
 ) -> dict[str, Any]:
     state = load_state(state_path, catalog, line_id=line_id, machine_id=machine_id)
+    if codex_rollout_position is not None:
+        source, offset, record_id = codex_rollout_position
+        highwater = state.setdefault("codexRolloutHighwater", {})
+        if not isinstance(highwater, dict):
+            raise ValueError("invalid Codex rollout highwater in ledger")
+        previous = highwater.get(source, {})
+        if not isinstance(previous, dict):
+            raise ValueError("invalid Codex rollout position in ledger")
+        previous_offset = previous.get("offset", -1)
+        if not isinstance(previous_offset, int):
+            raise ValueError("invalid Codex rollout offset in ledger")
+        previous_ids = previous.get("ids", [])
+        if not isinstance(previous_ids, list):
+            raise ValueError("invalid Codex rollout IDs in ledger")
+        if offset < previous_offset or (offset == previous_offset and record_id in previous_ids):
+            return {"ok": True, "skipped": True, "event": record.get("event"), "amount": 0}
+        highwater[source] = {
+            "offset": offset,
+            "ids": [*previous_ids, record_id] if offset == previous_offset else [record_id],
+        }
     if catalog_dir:
         state["catalogDir"] = catalog_dir
     rest = apply_passive_rest(state, catalog, at=record.get("at"))
@@ -197,7 +218,7 @@ def apply_bridge_event(
     event = normalize_event(str(record["event"]))
     meta = record.get("meta") if isinstance(record.get("meta"), dict) else {}
     if duplicate_token_usage(state, event, meta):
-        if rest["applied"]:
+        if rest["applied"] or codex_rollout_position is not None:
             save_state(state_path, state, touch=False)
         return {
             "ok": True,

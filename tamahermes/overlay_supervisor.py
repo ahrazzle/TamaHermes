@@ -11,6 +11,8 @@ import traceback
 from pathlib import Path
 from typing import Any, Callable
 
+from .catalog import load_catalog
+from .local_codex_ingestion import poll_local_codex_events
 from .overlay_state import (
     global_state_path,
     is_tamahermes_selected,
@@ -529,6 +531,8 @@ def supervisor_loop(
     state["supervisorPid"] = os.getpid()
     save_overlay_state(overlay_state_path(home), state)
     last_start = 0.0
+    last_ingestion_poll = 0.0
+    catalog = None
     try:
         while True:
             global_state = read_json_object(global_state_path(home))
@@ -540,6 +544,17 @@ def supervisor_loop(
             # fingerprint, so an idle tick costs no write.
             if overlay_state_fingerprint(overlay_state) != before:
                 save_overlay_state(overlay_state_path(home), overlay_state)
+            # Rollout XP belongs to the Codex ledger even when no overlay or
+            # native pet window is visible. The child sidecar never writes it.
+            now_mono = time.monotonic()
+            if now_mono - last_ingestion_poll >= 5.0:
+                last_ingestion_poll = now_mono
+                try:
+                    if catalog is None:
+                        catalog = load_catalog(root or resolve_repo_root())
+                    poll_local_codex_events(home, catalog)
+                except Exception as exc:  # an ingestion fault must not kill the HUD supervisor
+                    log(f"ERROR Codex event ingestion: {exc}")
             app_running = native_pet_process_running()
             # D9.1: the collapsed pill / hidden toggle count as live surfaces; the
             # by-design idle child stop (EvoPet closed) is preserved as-is.

@@ -1071,10 +1071,7 @@ class M10OverlayWriteSuppressionTests(M10OverlayLoopModeTests):
             self.assertEqual(self.writes_to("overlay.html"), [])
             self.assertEqual(self.visible_config_payloads(home), [])
 
-    def test_hidden_ticks_still_absorb_events(self) -> None:
-        # A hidden HUD must keep draining events (suppress-now, never replay on
-        # show): the sync/audio bookkeeping is gated by the selected pet, not by
-        # what the panel is currently drawing.
+    def test_hidden_ticks_leave_event_ingestion_to_supervisor(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp)
             self.write_global_state(home)
@@ -1085,7 +1082,8 @@ class M10OverlayWriteSuppressionTests(M10OverlayLoopModeTests):
             self.run_loop(home, iterations=2)
 
             reloaded = load_overlay_state(overlay_state_path(home))
-            self.assertIsNotNone(reloaded["lastCodexEventSyncAt"])
+            self.assertIsNone(reloaded["lastCodexEventSyncAt"])
+            self.assertFalse((home / "tamahermes" / "codex-events-cursor.json").exists())
             self.assertEqual(self.visible_config_payloads(home), [])
 
     def test_state_is_not_rewritten_on_every_tick(self) -> None:

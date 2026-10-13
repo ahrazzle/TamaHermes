@@ -190,10 +190,23 @@ tamahermes --catalog-dir build/ducky/assets doctor --line ducky --machine pulse
 desktop app can float it, and the installer does it for you with `--petdex`. This is
 opt-in: a run with no Petdex home configured writes nothing outside your Hermes home.
 
-**Codex.** `--target codex` keeps the original integration, unchanged: the `.codex-plugin`
+**Codex.** `--target codex` keeps the original integration: the `.codex-plugin`
 manifest, `hooks.json`, the `PostToolUse` hook, the local session-log adaptation, and the
 supervised macOS sidecar overlay for hover status and 8-bit SFX. The overlay is Codex-only;
 the Hermes pet is pure Python and needs no sidecar.
+
+The existing overlay supervisor also consumes local Codex rollout events while the
+overlay is idle, writing XP only to `<CODEX_HOME>/tamahermes/state.json`. On first
+start it records the ends of existing rollout files in a new supervisor cursor;
+historical events are skipped and the former `codex-events-cursor.json` is left
+untouched. Subsequent real events refresh the local Codex pet package. Once this
+cursor exists, `tamahermes codex-events` is read-only with `--dry-run` so manual
+replay cannot race the supervisor's ledger writer.
+
+The hosted Codex pet's v1 XP bar is baked into its sprite sheet. Local XP and
+local package refreshes do not update hosted cloud artwork; that needs a v2
+package and a separate upload. Progress event audio from the sidecar is paused
+while ingestion belongs to the supervisor.
 
 ```bash
 ./install.sh --line toast --machine aurora     # the Codex target
