@@ -138,7 +138,7 @@ def record_sort_key(record: dict[str, Any]) -> tuple[float, str, int]:
         offset = 0
     return (
         timestamp.timestamp() if timestamp else float("inf"),
-        str(meta.get("rolloutFile") or ""),
+        str(meta.get("rolloutPath") or meta.get("rolloutFile") or ""),
         offset,
     )
 
@@ -148,6 +148,9 @@ def meta_base(payload: dict[str, Any], source_path: Path, offset: int) -> dict[s
         "adapter": CODEX_SESSION_ADAPTER_SCHEMA,
         "codexEventType": payload.get("type"),
         "rolloutFile": source_path.name,
+        # Date folders plus the rollout filename form a stable source identity
+        # without persisting the user's absolute sessions path in the ledger.
+        "rolloutPath": "/".join(source_path.parts[-4:]),
         "offset": offset,
     }
     turn_id = payload.get("turn_id")
@@ -202,6 +205,12 @@ def command_completed(payload: dict[str, Any]) -> bool:
 
 def turn_key(payload: dict[str, Any]) -> str:
     return str(payload.get("turn_id") or "global")
+
+
+def pending_failure_key(source_path: Path, payload: dict[str, Any]) -> str:
+    # Turns with no turn_id are common; the fallback must stay inside one
+    # rollout, or a failure in one session recovers in another session.
+    return f"{'/'.join(source_path.parts[-4:])}:{turn_key(payload)}"
 
 
 def command_meta(payload: dict[str, Any]) -> dict[str, Any]:
@@ -302,7 +311,7 @@ def payload_to_bridge_records(
         ]
 
     if payload_type in {"exec_command_end", "patch_apply_end"}:
-        key = turn_key(payload)
+        key = pending_failure_key(source_path, payload)
         if command_failed(payload):
             pending_failures[key] = True
             return [bridge_record("task_failure", timestamp, source_path, offset, payload, command_meta(payload))]
@@ -332,7 +341,7 @@ def payload_to_bridge_records(
         return [bridge_record("token_usage", timestamp, source_path, offset, payload, meta)]
 
     if payload_type == "task_complete":
-        key = turn_key(payload)
+        key = pending_failure_key(source_path, payload)
         records: list[dict[str, Any]] = []
         if pending_failures.pop(key, False):
             records.append(bridge_record("recovery", timestamp, source_path, offset, payload, {"recoveredAtTaskComplete": True}))
@@ -372,12 +381,15 @@ def line_to_bridge_records(
     return payload_to_bridge_records(payload, raw.get("timestamp"), source_path, offset, pending_failures)
 
 
-def scan_session_logs(paths: list[Path], cursor: dict[str, Any], backfill: bool = False) -> list[dict[str, Any]]:
+def scan_session_logs(paths: list[Path], cursor: dict[str, Any], backfill: bool = False, max_lines: int | None = None) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     files = cursor.setdefault("files", {})
     pending = cursor.setdefault("pendingFailures", {})
+    lines_read = 0
 
     for path in paths:
+        if max_lines is not None and lines_read >= max_lines:
+            break
         key = str(path)
         file_state = files.setdefault(key, {})
         if "offset" in file_state:
@@ -389,15 +401,20 @@ def scan_session_logs(paths: list[Path], cursor: dict[str, Any], backfill: bool 
                 continue
 
         for before, after, line in iter_log_lines(path, offset):
+            lines_read += 1
             parsed = line_to_bridge_records(line, path, before, pending)
             if parsed is None:
                 if not line.endswith("\n"):
                     file_state["offset"] = before
                     break
                 file_state["offset"] = after
+                if max_lines is not None and lines_read >= max_lines:
+                    break
                 continue
             records.extend(parsed)
             file_state["offset"] = after
+            if max_lines is not None and lines_read >= max_lines:
+                break
 
     cursor["pendingFailures"] = {key: value for key, value in pending.items() if value}
     return sorted(records, key=record_sort_key)

@@ -679,6 +679,10 @@ def cmd_hermes_hook(args: argparse.Namespace) -> None:
 
 def cmd_codex_events(args: argparse.Namespace) -> None:
     _root, home, state_path, catalog = context(args)
+    if not args.dry_run:
+        from .local_codex_ingestion import supervisor_cursor_path
+        if supervisor_cursor_path(home).exists():
+            raise SystemExit("Codex rollout writes are owned by the overlay supervisor; use --dry-run to inspect events")
     build_dir = Path(args.build_dir).expanduser().resolve() if args.build_dir else home / "tamahermes" / "build"
     sessions_root = Path(args.sessions_root).expanduser().resolve() if args.sessions_root else home / "sessions"
     cursor_path = Path(args.cursor).expanduser().resolve() if args.cursor else home / "tamahermes" / "codex-events-cursor.json"
