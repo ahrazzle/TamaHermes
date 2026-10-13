@@ -288,6 +288,13 @@ def overlay_state_fingerprint(overlay_state: dict[str, Any]) -> str:
 
 
 def selected_avatar_id(global_state: dict[str, Any]) -> str | None:
+    # The nested atom is Codex's current value; flattened copies can outlive it.
+    persisted = global_state.get("electron-persisted-atom-state")
+    if isinstance(persisted, dict):
+        nested = persisted.get("selected-avatar-id")
+        if isinstance(nested, str) and nested.strip():
+            return nested.strip()
+
     direct = global_state.get("electron-persisted-atom-state.selected-avatar-id")
     if isinstance(direct, str) and direct.strip():
         return direct.strip()
@@ -296,16 +303,40 @@ def selected_avatar_id(global_state: dict[str, Any]) -> str | None:
     if isinstance(direct, str) and direct.strip():
         return direct.strip()
 
-    persisted = global_state.get("electron-persisted-atom-state")
-    if isinstance(persisted, dict):
-        nested = persisted.get("selected-avatar-id")
-        if isinstance(nested, str) and nested.strip():
-            return nested.strip()
     return None
 
 
 def is_tamahermes_selected(global_state: dict[str, Any]) -> bool:
-    return selected_avatar_id(global_state) == TAMAHERMES_AVATAR_ID
+    selected = selected_avatar_id(global_state)
+    if selected == TAMAHERMES_AVATAR_ID:
+        return True
+    if not selected:
+        return False
+
+    persisted = global_state.get("electron-persisted-atom-state")
+    if not isinstance(persisted, dict):
+        return False
+    artwork_cache = persisted.get("cloud-pet-artwork-cache")
+    migrations = persisted.get("migrated-cloud-pet-ids-v1")
+    if not isinstance(artwork_cache, dict) or not isinstance(migrations, dict):
+        return False
+    account_id = artwork_cache.get("accountId")
+    user_id = artwork_cache.get("userId")
+    if not all(isinstance(value, str) and value for value in (account_id, user_id)):
+        return False
+
+    # Migration IDs belong to an account/user pair. A matching ID in another
+    # account's entry must not activate this account's overlay.
+    for scope, pet_ids in migrations.items():
+        if not isinstance(scope, str) or not isinstance(pet_ids, dict):
+            continue
+        try:
+            identity = json.loads(scope)
+        except (TypeError, ValueError):
+            continue
+        if identity == [account_id, user_id]:
+            return pet_ids.get(TAMAHERMES_AVATAR_ID) == selected
+    return False
 
 
 def _int_value(value: Any) -> int | None:
