@@ -190,10 +190,16 @@ tamahermes --catalog-dir build/ducky/assets doctor --line ducky --machine pulse
 desktop app can float it, and the installer does it for you with `--petdex`. This is
 opt-in: a run with no Petdex home configured writes nothing outside your Hermes home.
 
-**Codex.** `--target codex` keeps the original integration, unchanged: the `.codex-plugin`
+**Codex.** `--target codex` keeps the original integration: the `.codex-plugin`
 manifest, `hooks.json`, the `PostToolUse` hook, the local session-log adaptation, and the
 supervised macOS sidecar overlay for hover status and 8-bit SFX. The overlay is Codex-only;
 the Hermes pet is pure Python and needs no sidecar.
+
+The local Codex pet package uses the v1 8×9 sprite sheet (1536×1872 pixels). Its
+compiler does not upload or sync hosted cloud artwork; updating hosted artwork
+requires a v2 package. When Codex migrates a locally installed TamaHermes pet to a
+hosted ID, the overlay recognizes that ID through the migration mapping for the
+active account.
 
 ```bash
 ./install.sh --line toast --machine aurora     # the Codex target

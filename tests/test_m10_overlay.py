@@ -126,6 +126,48 @@ class M10OverlayStateTests(unittest.TestCase):
         self.assertFalse(is_tamahermes_selected({"electron-persisted-atom-state": {"selected-avatar-id": "custom:other"}}))
         self.assertFalse(is_tamahermes_selected({}))
 
+    def test_nested_selection_overrides_stale_flat_selection(self) -> None:
+        self.assertFalse(is_tamahermes_selected({
+            "selected-avatar-id": "custom:tamahermes",
+            "electron-persisted-atom-state": {"selected-avatar-id": "custom:other"},
+        }))
+        self.assertTrue(is_tamahermes_selected({
+            "electron-persisted-atom-state.selected-avatar-id": "custom:other",
+            "electron-persisted-atom-state": {"selected-avatar-id": "custom:tamahermes"},
+        }))
+
+    def test_migrated_cloud_selection_requires_active_account_mapping(self) -> None:
+        active_scope = json.dumps(["account-a", "user-a"], separators=(",", ":"))
+        other_scope = json.dumps(["account-b", "user-b"], separators=(",", ":"))
+        persisted = {
+            "selected-avatar-id": "pet_tamahermes",
+            "cloud-pet-artwork-cache": {"accountId": "account-a", "userId": "user-a", "pets": {}},
+            "migrated-cloud-pet-ids-v1": {
+                active_scope: {"custom:tamahermes": "pet_tamahermes", "custom:other": "pet_other"},
+                other_scope: {"custom:tamahermes": "pet_foreign"},
+            },
+            "last-observed-cloud-pet-selection-v1": {active_scope: "pet_other"},
+        }
+        state = {"electron-persisted-atom-state": persisted}
+        self.assertTrue(is_tamahermes_selected(state))
+        persisted["selected-avatar-id"] = "pet_other"
+        self.assertFalse(is_tamahermes_selected(state))
+        persisted["selected-avatar-id"] = "pet_foreign"
+        self.assertFalse(is_tamahermes_selected(state))
+        persisted["selected-avatar-id"] = "pet_tamahermes"
+        persisted["cloud-pet-artwork-cache"] = {"accountId": "account-b", "userId": "user-b"}
+        self.assertFalse(is_tamahermes_selected(state))
+        persisted.pop("cloud-pet-artwork-cache")
+        self.assertFalse(is_tamahermes_selected(state))
+
+    def test_last_observed_cloud_selection_is_not_current_selection(self) -> None:
+        scope = json.dumps(["account-a", "user-a"], separators=(",", ":"))
+        self.assertFalse(is_tamahermes_selected({"electron-persisted-atom-state": {
+            "cloud-pet-artwork-cache": {"accountId": "account-a", "userId": "user-a"},
+            "migrated-cloud-pet-ids-v1": {scope: {"custom:tamahermes": "pet_tamahermes"}},
+            "last-observed-cloud-pet-selection-v1": {scope: "pet_tamahermes"},
+        }}))
+
     def test_missing_or_corrupt_global_state_is_inactive(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp)
