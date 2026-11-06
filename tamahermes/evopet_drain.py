@@ -527,7 +527,8 @@ def classify(
         key = str(session)
         turn_state = last_state.get(key)
         visual = event.get("state") or event.get("agent_state")
-        if visual in SUCCESS_STATES or visual in FAILURE_STATES or visual in NEUTRAL_STATES:
+        if isinstance(visual, str) and (visual in SUCCESS_STATES or visual in FAILURE_STATES
+                                        or visual in NEUTRAL_STATES):
             last_state[key] = str(visual)
 
         phase = event.get("phase")
@@ -538,9 +539,15 @@ def classify(
         elif phase in PHASE_TO_EVENT:
             pet_event = PHASE_TO_EVENT[str(phase)]
         elif str(phase) in TURN_END_PHASES:
-            if turn_state in SUCCESS_STATES:
+            # New senders make the boundary self-contained: state and bubble can
+            # be consumed by separate drain runs. Older senders still resolve
+            # against their preceding state, including legacy waving bubbles.
+            explicit = event.get("agent_state")
+            outcome = (explicit if isinstance(explicit, str)
+                       and explicit in SUCCESS_STATES | FAILURE_STATES else turn_state)
+            if outcome in SUCCESS_STATES:
                 pet_event = "task_success"
-            elif turn_state in FAILURE_STATES:
+            elif outcome in FAILURE_STATES:
                 pet_event = "task_failure"
             else:
                 unresolved += 1
